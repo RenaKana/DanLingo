@@ -52,6 +52,11 @@ function runtime(phase, patch = {}) {
 
 function liveContentHarness(platform, options = {}) {
   const platformInfo = PLATFORM[platform];
+  const clock = options.clock;
+  const resource = clock ? { ...resourceModule, clockStamp: () => clock.wallNow() } : resourceModule;
+  const Scheduler = clock ? class extends LiveScheduler {
+    constructor(schedulerOptions) { super({ ...schedulerOptions, clock }); }
+  } : LiveScheduler;
   const handlers = new Map();
   const h = {
     platform,
@@ -126,8 +131,8 @@ function liveContentHarness(platform, options = {}) {
     'wxt/utils/define-content-script': { defineContentScript: optionsValue => optionsValue },
     '../src/core/config': configModule,
     '../src/core/model-summary': modelSummaryModule,
-    '../src/core/resource': resourceModule,
-    '../src/core/live-scheduler': { LiveScheduler },
+    '../src/core/resource': resource,
+    '../src/core/live-scheduler': { LiveScheduler: Scheduler },
     '../src/core/live-metrics': metricsModule,
     '../src/core/messages': messageModule,
     '../src/translation/text': textModule,
@@ -141,6 +146,7 @@ function liveContentHarness(platform, options = {}) {
     document,
     window,
     clearInterval: () => {},
+    ...(clock ? { performance: clock.performance } : {}),
   });
   const ctx = {
     setInterval: () => 1,
@@ -154,7 +160,7 @@ function liveContentHarness(platform, options = {}) {
     const snapshot = {
       bridge: 'danlingo-live-v1', from: 'adapter', type: 'snapshot', platform,
       resourceId: platformInfo.resourceId, ...(platformInfo.urlResourceId ? { urlResourceId: platformInfo.urlResourceId } : {}),
-      adapterSession: 'adapter-session', stamp: resourceModule.clockStamp(), connection: 'connected', coverage: 'top',
+      adapterSession: 'adapter-session', stamp: resource.clockStamp(), connection: 'connected', coverage: 'top',
       playback: { paused: false, seeking: false, contentActive: true, atLiveEdge: true },
       ...(platform === 'youtube' || platform === 'bilibili' ? { presentationActive: true } : {}),
     };
@@ -173,10 +179,11 @@ function liveContentHarness(platform, options = {}) {
     await flush();
   };
   h.event = async (sourceId, originalText = 'これはテストです', translatable = true) => {
+    clock?.advance(1);
     handlers.get('message')({ source: window, origin: h.location.origin, data: {
       bridge: 'danlingo-live-v1', from: 'adapter', type: 'events', platform,
       resourceId: platformInfo.resourceId, ...(platformInfo.urlResourceId ? { urlResourceId: platformInfo.urlResourceId } : {}),
-      adapterSession: 'adapter-session', events: [{ sourceId, originalText, receivedAt: resourceModule.clockStamp(), translatable }],
+      adapterSession: 'adapter-session', events: [{ sourceId, originalText, receivedAt: resource.clockStamp(), translatable }],
     } });
     await flush();
   };
@@ -202,6 +209,24 @@ function liveContentHarness(platform, options = {}) {
   return h;
 }
 
+function controlledClock() {
+  const timeOrigin = 1800000000000;
+  let now = 0, nextTimer = 0;
+  const timers = new Map();
+  return {
+    now: () => now,
+    wallNow: () => timeOrigin + now,
+    performance: { now: () => now, timeOrigin },
+    setTimeout: (callback, delayMs) => {
+      const id = ++nextTimer;
+      timers.set(id, { callback, at: now + Math.max(0, delayMs) });
+      return id;
+    },
+    clearTimeout: id => timers.delete(id),
+    advance: ms => { now += ms; },
+  };
+}
+
 async function waitFor(predicate, label, timeoutMs = 1000) {
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
@@ -211,9 +236,10 @@ async function waitFor(predicate, label, timeoutMs = 1000) {
 }
 
 for (const platform of Object.keys(PLATFORM)) test(`local idle re-admits eligible live events on ${platform} across repeated ready/idle cycles`, async t => {
-  const h = liveContentHarness(platform);
+  const h = liveContentHarness(platform, { clock: controlledClock() });
   t.after(() => h.dispose());
   await h.start();
+  await waitFor(() => h.control()?.enabled === true, `${platform} local runtime ready`);
   for (const [index, phase] of ['ready', 'idle', 'ready', 'idle'].entries()) {
     await h.updateRuntime(runtime(phase));
     const sourceId = `eligible-${index}`;
@@ -227,9 +253,10 @@ for (const platform of Object.keys(PLATFORM)) test(`local idle re-admits eligibl
 });
 
 test('idle status says the local model is unloaded and the next eligible event reaches translation', async t => {
-  const h = liveContentHarness('youtube');
+  const h = liveContentHarness('youtube', { clock: controlledClock() });
   t.after(() => h.dispose());
   await h.start();
+  await waitFor(() => h.control()?.enabled === true, 'youtube local runtime ready');
   await h.updateRuntime(runtime('idle'));
   assert.equal(h.control().enabled, true);
   assert.match(h.status().note, /本地模型未加载/);

@@ -13,6 +13,38 @@ const settings = { ...DEFAULT_SETTINGS, enabled: true, displayMode: 'translated'
   targetLanguage: 'zh-Hans', translationStream: false, batchSize: 1, liveMaxBatchWaitMs: 0 };
 const corpus = [{ ordinal: 0, text: 'おはよう', unicodeChars: 4 }, { ordinal: 1, text: 'こんばんは', unicodeChars: 5 }];
 const makeRun = maxRequests => ({ maxRequests, actualPosts: 0, stop: null });
+const eventLoopTurn = () => new Promise(resolve => setImmediate(resolve));
+
+class ControlledClock {
+  time = 0;
+  nextId = 0;
+  timers = new Map();
+  now = () => this.time;
+  wallNow = () => 1800000000000 + this.time;
+  setTimeout = (callback, delayMs) => {
+    const id = ++this.nextId;
+    this.timers.set(id, { at: this.time + Math.max(0, delayMs), callback });
+    return id;
+  };
+  clearTimeout = id => { this.timers.delete(id); };
+
+  async advanceBy(delayMs) {
+    await eventLoopTurn();
+    const target = this.time + delayMs;
+    for (let count = 0; count < 10000; count++) {
+      const next = [...this.timers].sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+      if (!next || next[1].at > target) break;
+      this.timers.delete(next[0]);
+      this.time = next[1].at;
+      next[1].callback();
+      await eventLoopTurn();
+      if (count === 9999) throw new Error('controlled-clock-timer-loop');
+    }
+    this.time = target;
+    await eventLoopTurn();
+  }
+}
+
 const reply = async (_url, init) => {
   const body = JSON.parse(init.body), input = body.messages.find(row => row.role === 'user').content.split('\n').filter(Boolean).map(JSON.parse);
   return Response.json({ choices: [{ message: { content: input.map(row => JSON.stringify([row[0], '你好'])).join('\n') }, finish_reason: 'stop' }],
@@ -204,17 +236,20 @@ test('hard POST guard stops before transport and budget-limited observations can
   assert.equal(chainCompletionStatus(conditions, null), 'INCOMPLETE_CONTROLLED_CHAIN_BENCHMARK');
 });
 
-test('production scheduler/engine accepts per-event results with real timers and fresh per-cell cache', async () => {
+test('production scheduler/engine accepts per-event results with controlled deadlines and fresh per-cell cache', async () => {
   let posts = 0;
   const transport = async (...args) => { posts++; return reply(...args); };
+  const clock = new ControlledClock();
   const run = makeRun(10), options = { corpus: [corpus[0]], settings, apiKey: 'synthetic-never-sent', run, feedMs: 100, rate: 20, transport };
-  const first = await runChainCondition({ ...options, cell: { id: 'first', concurrency: 16, bufferMs: 100, postQuota: 5 } });
+  const first = await runChainCondition({ ...options, clock, pause: ms => clock.advanceBy(ms), cell: { id: 'first', concurrency: 16, bufferMs: 100, postQuota: 5 } });
   assert.equal(first.status, 'COMPLETE_CONTROLLED_CHAIN');
   assert.equal(first.summary.denominator, 2); assert.equal(first.summary.onTimeReadyItems, 2);
   assert.equal(first.summary.localCacheItems, 1); assert.equal(first.actualPosts, 1);
   assert.equal(first.attempts[0].protocol, 'jsonl'); assert.equal(first.attempts[0].usage.promptTokens, 20);
   assert.ok(first.occurrences.every(row => row.readyAt < row.displayAt && row.releasedTranslated));
-  const second = await runChainCondition({ ...options, cell: { id: 'second', scope: 'single-buffer', concurrency: 16, bufferMs: 100, postQuota: 5 } });
+  const secondClock = new ControlledClock();
+  const second = await runChainCondition({ ...options, clock: secondClock, pause: ms => secondClock.advanceBy(ms),
+    cell: { id: 'second', scope: 'single-buffer', concurrency: 16, bufferMs: 100, postQuota: 5 } });
   assert.equal(second.actualPosts, 1); assert.equal(posts, 2);
   assert.equal(second.escalation.eligible, false); assert.equal(second.escalation.nextConcurrency, null);
   const serialized = JSON.stringify([first, second]);
@@ -223,8 +258,10 @@ test('production scheduler/engine accepts per-event results with real timers and
 
 test('unsent budget failures retain raw denominator and only the authorized number of POSTs happen', async () => {
   let posts = 0;
+  const clock = new ControlledClock();
   const result = await runChainCondition({ cell: { id: 'budget', concurrency: 16, bufferMs: 100, postQuota: 1 }, corpus, settings,
-    apiKey: 'synthetic-never-sent', run: makeRun(1), feedMs: 100, rate: 20, transport: async (...args) => { posts++; return reply(...args); } });
+    apiKey: 'synthetic-never-sent', run: makeRun(1), feedMs: 100, rate: 20, clock, pause: ms => clock.advanceBy(ms),
+    transport: async (...args) => { posts++; return reply(...args); } });
   assert.equal(posts, 1); assert.equal(result.actualPosts, 1); assert.equal(result.status, 'INCOMPLETE_POST_BUDGET');
   assert.equal(result.summary.denominator, 2); assert.equal(result.summary.onTimeReadyItems, 1); assert.equal(result.summary.original, 1);
   assert.ok(result.occurrences.every(row => row.outcome !== null)); assert.equal(result.summary.missing, 0);
