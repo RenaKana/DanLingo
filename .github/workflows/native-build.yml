@@ -1,0 +1,76 @@
+name: Native reproducibility
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-rebuild-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+          run_install: false
+      - run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Pull the pinned compiler image
+        run: |
+          image="$(node --input-type=module -e 'import fs from "node:fs"; console.log(JSON.parse(fs.readFileSync("vendor/wllama-3.6.1-webgpu/build-info.json")).buildImage)')"
+          docker pull "$image"
+      - name: Rebuild with verified inputs and offline compilation
+        run: |
+          mkdir -p .artifacts
+          set -o pipefail
+          node scripts/build-local-native.mjs --parallel=2 2>&1 | tee .artifacts/native-rebuild.log
+      - name: Compare all promoted native assets
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { readFile, readdir, writeFile } from 'node:fs/promises';
+          const root = '.artifacts/local-native';
+          const builds = (await readdir(root, { withFileTypes: true }))
+            .filter(entry => entry.isDirectory() && entry.name.startsWith('build-'));
+          if (builds.length !== 1) throw new Error('Expected one fresh native build');
+          const result = `${root}/${builds[0].name}/result`;
+          const manifest = JSON.parse(await readFile('vendor/wllama-3.6.1-webgpu/build-info.json', 'utf8'));
+          const files = {};
+          for (const name of ['wllama.js', 'wllama.wasm', 'source-map.json']) {
+            const bytes = await readFile(`${result}/${name}`);
+            const sha256 = createHash('sha256').update(bytes).digest('hex');
+            const expected = manifest.files[name];
+            files[name] = { bytes: bytes.length, sha256, expected,
+              matches: bytes.length === expected.bytes && sha256 === expected.sha256 };
+          }
+          const matches = Object.values(files).every(file => file.matches);
+          const report = { commit: process.env.GITHUB_SHA, builderImage: manifest.buildImage,
+            status: matches ? 'BYTE_IDENTICAL' : 'MISMATCH', files };
+          await writeFile('.artifacts/native-comparison.json', JSON.stringify(report, null, 2) + '\n');
+          console.log(JSON.stringify(report, null, 2));
+          if (!matches) throw new Error('Rebuilt native assets differ from the promoted bundle');
+          NODE
+      - name: Retain build and comparison evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-rebuild-${{ github.sha }}
+          retention-days: 30
+          include-hidden-files: true
+          if-no-files-found: warn
+          path: |
+            .artifacts/native-rebuild.log
+            .artifacts/native-comparison.json
+            .artifacts/local-native/build-*/build-plan.json
+            .artifacts/local-native/build-*/result/
+            .artifacts/local-native/build-*/source/build/wllama.wasm.map
+            .artifacts/local-native/build-*/source/build/**/*.o.d

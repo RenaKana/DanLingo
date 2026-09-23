@@ -100,10 +100,14 @@ async function sourceFiles(directory, prefix = 'cpp') {
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
-    console.log('Usage: node scripts/build-local-native.mjs [--prepare-only]\nCreates a fresh .artifacts/local-native/build-* directory. Requires Docker already running and the pinned image already installed.\n--prepare-only verifies/copies inputs and caches/downloads archives; writes a build plan without Docker or compilation.\nOutputs stay in the owned directory; vendor files are never installed automatically.');
+    console.log('Usage: node scripts/build-local-native.mjs [--prepare-only] [--parallel=1..8]\nCreates a fresh .artifacts/local-native/build-* directory. Requires Docker already running and the pinned image already installed.\n--prepare-only verifies/copies inputs and caches/downloads archives; writes a build plan without Docker or compilation.\n--parallel controls build jobs and the container CPU limit (default 8); use 2 on a small CI runner.\nOutputs stay in the owned directory; vendor files are never installed automatically.');
     return;
   }
-  if (args.some((arg) => arg !== '--prepare-only')) throw new Error('Unknown argument; use --help');
+  if (args.some((arg) => arg !== '--prepare-only' && !/^--parallel=[1-8]$/.test(arg))) throw new Error('Unknown argument; use --help');
+  const parallelArgs = args.filter((arg) => arg.startsWith('--parallel='));
+  if (parallelArgs.length > 1) throw new Error('Specify --parallel only once');
+  const parallel = Number(parallelArgs[0]?.split('=')[1] ?? 8);
+  const buildCommands = [commands[0], [...commands[1].slice(0, -1), String(parallel)]];
   const provenanceFile = path.join(root, 'vendor/wllama-3.6.1-webgpu/build-info.json');
   const provenanceBytes = await readFile(provenanceFile);
   const provenance = JSON.parse(provenanceBytes);
@@ -160,7 +164,7 @@ async function main() {
   }
   const plan = {
     schemaVersion: 1, ...pins, emscriptenVersion: '4.0.20', nativePolicy: { cacheRamMiB: 0 },
-    provenanceSha256: hash(provenanceBytes), inputHashes, archives, commands,
+    provenanceSha256: hash(provenanceBytes), inputHashes, archives, commands: buildCommands, parallel,
     patch: { file: 'cpp/wllama-context.h', before: patchBefore, after: patchAfter,
       originalSha256: originalHashes['cpp/wllama-context.h'], patchedSha256: await fileHash(contextPath),
       sha256: hash(JSON.stringify({ before: patchBefore, after: patchAfter })) },
@@ -181,7 +185,7 @@ async function main() {
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
   try {
-    await run('docker', ['run', '--rm', '--pull=never', '--name', container, '--cpus=8', '--memory=12g',
+    await run('docker', ['run', '--rm', '--pull=never', '--name', container, `--cpus=${parallel}`, '--memory=12g',
       '--network=none', '--mount', `type=bind,source=${owned},target=/work`,
       // Match the reviewed build's __FILE__ strings and linked data addresses.
       '--mount', `type=bind,source=${path.join(owned, 'source')},target=/source`,
