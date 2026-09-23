@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { lstat, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { resolve, relative, extname, basename } from 'node:path';
 import { readAuthorizedLiveConfig } from './authorized-live-config.mjs';
+import { getProjectReleaseInfo } from './project-version.mjs';
 
 const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== '--config-file') throw new Error('Usage: node --experimental-strip-types scripts/verify-credential-safety.mjs --config-file PATH');
@@ -38,8 +39,7 @@ try {
   await visit(workspace);
   const ignore = (await readFile(resolve(workspace, '.gitignore'), 'utf8')).split(/\r?\n/);
   report.exactIgnoreRules = ['/测试用.txt', '/默认测试用.txt'].every(rule => ignore.includes(rule));
-  const archive = resolve('.output/danlingo-0.2.0-chrome.zip');
-  report.candidateArchiveSha256 = createHash('sha256').update(await readFile(archive)).digest('hex');
+  report.candidateArchiveSha256 = createHash('sha256').update(await readFile(getProjectReleaseInfo(workspace).archivePath)).digest('hex');
   report.status = !report.matches.length && !report.failures.length && report.exactIgnoreRules ? 'PASS_EXACT_CREDENTIAL_SCAN' : 'INCOMPLETE_CREDENTIAL_SCAN';
 } catch { report.status = 'INCOMPLETE_CREDENTIAL_SCAN'; report.failures.push({ error: 'scan-or-candidate-unavailable' }); }
 finally { config.apiKey = ''; for (const needle of needles) needle.fill(0); }

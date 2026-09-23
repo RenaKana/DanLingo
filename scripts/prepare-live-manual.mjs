@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { cp, lstat, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getProjectReleaseInfo } from './project-version.mjs';
 
 const project = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
@@ -41,7 +42,8 @@ const manualChecks = () => ({ manualLoaded: 'pending', permissions: 'pending', r
   browserVersion: null, extensionId: null, settingsRetained: 'pending', sameExtensionIdAfterUpgrade: 'pending' });
 
 export async function prepareManualPackage() {
-  const current = await sourceSnapshot(resolve(project, '.output/chrome-mv3'), '0.2.0', resolve(project, '.output/danlingo-0.2.0-chrome.zip'));
+  const release = getProjectReleaseInfo(project);
+  const current = await sourceSnapshot(resolve(project, '.output/chrome-mv3'), release.version, release.archivePath);
   const previous = await sourceSnapshot(resolve(project, '.output/danlingo-0.1.0-chrome'), '0.1.0', resolve(project, '.output/danlingo-0.1.0-chrome.zip'));
   const base = resolve(project, '.artifacts/live/manual-acceptance');
   await mkdir(base, { recursive: true });
@@ -89,7 +91,8 @@ export async function prepareManualPackage() {
 
 export async function main(args) {
   if (args.length === 1 && args[0] === '--help') {
-    console.log('node scripts/prepare-live-manual.mjs\nOffline: create a unique .artifacts/live/manual-acceptance/package-* directory with separate Chrome/Edge fresh-extension (0.2.0), upgrade-extension (0.1.0), and current-candidate (0.2.0) copies. Verify every copied file SHA256 and record source/ZIP hashes. No arguments, network, browser or credential access. Manual checks stay pending. Existing packages are preserved.');
+    const release = getProjectReleaseInfo(project);
+    console.log(`node scripts/prepare-live-manual.mjs\nOffline: create a unique .artifacts/live/manual-acceptance/package-* directory with separate Chrome/Edge fresh-extension (${release.version}), upgrade-extension (0.1.0), and current-candidate (${release.version}) copies. Verify every copied file SHA256 and record source/ZIP hashes. No arguments, network, browser or credential access. Manual checks stay pending. Existing packages are preserved.`);
     return;
   }
   assert.equal(args.length, 0, 'Only --help or no arguments are supported');

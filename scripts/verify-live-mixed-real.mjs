@@ -11,8 +11,10 @@ import { protectText } from '../src/translation/text.ts';
 import { installObserver, attachNativeObserver } from './niconico-live-observer.mjs';
 import { observeMixedRequestMetadata, summarizeMixedRequests } from './live-mixed-real-evidence.mjs';
 import { auditMediaProgress } from './live-observation-health.mjs';
+import { getProjectReleaseInfo } from './project-version.mjs';
 
 const hash = value => createHash('sha256').update(value).digest('hex');
+const packageVersion = getProjectReleaseInfo().version;
 const delay = ms => new Promise(done => setTimeout(done, ms));
 const eventId = row => JSON.stringify([row.resourceId, row.adapterSession, row.sourceId]);
 async function fingerprint(directory, prefix = '') {
@@ -127,8 +129,8 @@ export async function run(settings, apiKey, { room, video = 'sm1715919', browser
   try {
     const build = resolve('.output/chrome-mv3'), extension = resolve(runDir, 'test-extension');
     const rawManifest = await readFile(resolve(build, 'manifest.json')), manifest = JSON.parse(rawManifest);
-    assert.equal(manifest.version, '0.2.0');
-    assert.deepEqual([...manifest.host_permissions].sort(), ['https://www.nicovideo.jp/*', 'https://live.nicovideo.jp/watch/*', 'https://www.youtube.com/*'].sort());
+    assert.equal(manifest.version, packageVersion);
+    assert.deepEqual([...manifest.host_permissions].sort(), ['https://www.nicovideo.jp/*', 'https://live.nicovideo.jp/watch/*', 'https://www.youtube.com/*', 'https://www.bilibili.com/*', 'https://live.bilibili.com/*'].sort());
     report.build = { path: build, version: manifest.version, rawManifestSha256: hash(rawManifest), files: await fingerprint(build) };
     await cp(build, extension, { recursive: true });
     const endpointUrl = new URL(config.endpoint), hostPattern = `${endpointUrl.protocol}//${endpointUrl.hostname}/*`;
@@ -308,6 +310,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
 No credential file/environment Key is read. Parent supplies the session test Key in memory.
 Requires explicit concurrency=2, liveBufferMs=2000, translationScope='all'; preserves model/thinking.
 Real pages and Provider only; 30s receipt + 6s drain, at most 120 POSTs plus already in-flight concurrency, 180s total.
-Uses an isolated headed profile and traceable 0.2.0 copy with Provider host pregrant; no native installation/consent claim.`);
+Uses an isolated headed profile and traceable ${packageVersion} copy with Provider host pregrant; no native installation/consent claim.`);
   else { console.error('This entry is parent-invoked only. Use --help; never pass credentials on the command line.'); process.exitCode = 1; }
 }

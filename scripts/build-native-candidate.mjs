@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { resolve, relative } from 'node:path';
+import { getProjectReleaseInfo } from './project-version.mjs';
 
 const project = resolve('.');
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -43,9 +44,10 @@ assert.equal(code, 0, 'Build failed; see build.log');
 const after = await sourceFingerprint();
 await writeFile(resolve(runDir, 'source-after.json'), JSON.stringify(after, null, 2));
 assert.deepEqual(after, before, 'Sources changed while building; candidate is not frozen');
-const build = resolve('.output/chrome-mv3'), zip = resolve('.output/danlingo-0.2.0-chrome.zip');
+const release = getProjectReleaseInfo(project);
+const build = resolve('.output/chrome-mv3'), zip = release.archivePath;
 await cp(build, resolve(runDir, 'extension'), { recursive: true, force: false, errorOnExist: true });
-await cp(zip, resolve(runDir, 'danlingo-0.2.0-youtube-native.zip'), { force: false, errorOnExist: true });
+await cp(zip, resolve(runDir, `${release.name}-${release.version}-youtube-native.zip`), { force: false, errorOnExist: true });
 const report = { capturedAt: new Date().toISOString(), status: 'BUILT_NOT_ACCEPTED', runDir,
   sourcesUnchangedDuringBuild: true, sourceFingerprint: digest(JSON.stringify(before)), sourceFiles: before,
   build, buildFiles: await fingerprint(build), archive: zip, archiveSha256: digest(await readFile(zip)),

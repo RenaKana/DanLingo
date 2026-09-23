@@ -8,7 +8,7 @@ export default defineConfig({
   manifest: {
     name: 'DanLingo · 弹幕翻译',
     description: '在 Niconico、YouTube 与 Bilibili 原生页面翻译弹幕和直播聊天。',
-    version: '0.2.0',
+    version: '0.3.0',
     minimum_chrome_version: '120',
     commands: {
       [TRANSLATION_SHORTCUT_COMMAND]: {

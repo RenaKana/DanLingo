@@ -1,14 +1,20 @@
 param(
   [string]$Build = '.output/chrome-mv3',
-  [string]$Archive = '.output/danlingo-0.2.0-chrome.zip',
+  [string]$Archive = '',
   [string[]]$TestCopies = @(),
   [string[]]$AllowedTestProviderOrigins = @(),
   [string]$Report = '.artifacts/live/package-verification.json'
 )
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+$projectRoot = Split-Path -Parent $PSScriptRoot
+$package = Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($package.name) -or [string]::IsNullOrWhiteSpace($package.version)) { throw 'Project package.json must define a name and version' }
+$archiveInput = if ([string]::IsNullOrWhiteSpace($Archive)) {
+  Join-Path (Join-Path $projectRoot '.output') "$($package.name)-$($package.version)-chrome.zip"
+} else { $Archive }
 $buildPath = (Resolve-Path -LiteralPath $Build).Path
-$archivePath = (Resolve-Path -LiteralPath $Archive).Path
+$archivePath = (Resolve-Path -LiteralPath $archiveInput).Path
 $files = @(Get-ChildItem -LiteralPath $buildPath -File -Recurse | Sort-Object FullName)
 $hashes = [ordered]@{}
 foreach ($file in $files) {
@@ -16,9 +22,9 @@ foreach ($file in $files) {
   $hashes[$name] = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 $manifest = Get-Content -LiteralPath (Join-Path $buildPath 'manifest.json') -Raw | ConvertFrom-Json
-if ($manifest.version -ne '0.2.0') { throw 'Expected version 0.2.0' }
+if ($manifest.version -ne $package.version) { throw "Expected project version $($package.version)" }
 if (@($manifest.content_scripts | Where-Object all_frames).Count) { throw 'Unexpected all_frames grant' }
-$expectedHosts = @('https://www.nicovideo.jp/*', 'https://live.nicovideo.jp/watch/*', 'https://www.youtube.com/*')
+$expectedHosts = @('https://www.nicovideo.jp/*', 'https://live.nicovideo.jp/watch/*', 'https://www.youtube.com/*', 'https://www.bilibili.com/*', 'https://live.bilibili.com/*')
 if (Compare-Object @($manifest.host_permissions | Sort-Object) @($expectedHosts | Sort-Object)) { throw 'Unexpected release host permissions' }
 $zip = [IO.Compression.ZipFile]::OpenRead($archivePath)
 $zipHashes = [ordered]@{}

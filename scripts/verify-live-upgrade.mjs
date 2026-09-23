@@ -6,8 +6,10 @@ import { access, cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/pro
 import { createHash, randomUUID } from 'node:crypto';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { getProjectReleaseInfo } from './project-version.mjs';
 
 const args = process.argv.slice(2);
+const packageVersion = getProjectReleaseInfo().version;
 function option(name, fallback) {
   const index = args.indexOf(name);
   if (index < 0) return fallback;
@@ -200,7 +202,7 @@ async function verifyBrowser(browserName) {
     const freshExtension = resolve(base, 'fresh-extension');
     await copyExtension(sourceNew, freshExtension);
     session = await launch(browserName, resolve(base, 'fresh-profile'), freshExtension, evidence.fresh);
-    assert.equal(evidence.fresh.loadedVersion, '0.2.0');
+    assert.equal(evidence.fresh.loadedVersion, packageVersion);
     const fresh = await session.rpc({ type: 'overview' });
     assert.equal(fresh.ok, true); assertDefaults(fresh.settings);
     assert.equal(fresh.hasKey, false); assert.equal(fresh.remembered, false); assert.equal(fresh.cache.entries, 0);
@@ -240,7 +242,7 @@ async function verifyBrowser(browserName) {
     await copyExtension(sourceNew, extension, true);
     evidence.upgrade.current = {};
     session = await launch(browserName, profile, extension, evidence.upgrade.current);
-    assert.equal(evidence.upgrade.current.loadedVersion, '0.2.0');
+    assert.equal(evidence.upgrade.current.loadedVersion, packageVersion);
     assert.equal(session.extensionId, originalId, 'Unpacked extension ID must stay stable across replacement');
     await reloadExtension(session, evidence.upgrade.current);
     // --load-extension on a subsequent launch enables the updated unpacked build
@@ -250,7 +252,7 @@ async function verifyBrowser(browserName) {
     evidence.upgrade.afterReloadRestart = {};
     session = await launch(browserName, profile, extension, evidence.upgrade.afterReloadRestart);
     assert.equal(session.extensionId, originalId);
-    assert.equal(evidence.upgrade.afterReloadRestart.loadedVersion, '0.2.0');
+    assert.equal(evidence.upgrade.afterReloadRestart.loadedVersion, packageVersion);
     const upgraded = await session.rpc({ type: 'overview' });
     assert.equal(upgraded.ok, true); assertPreserved(saved.settings, upgraded.settings);
     assert.equal(upgraded.hasKey, true); assert.equal(upgraded.remembered, true);
@@ -288,7 +290,7 @@ async function verifyBrowser(browserName) {
 
 try {
   report.builds = { old: await describeBuild(sourceOld), current: await describeBuild(sourceNew) };
-  assert.equal(report.builds.old.version, '0.1.0'); assert.equal(report.builds.current.version, '0.2.0');
+  assert.equal(report.builds.old.version, '0.1.0'); assert.equal(report.builds.current.version, packageVersion);
 
   ({ chromium } = await loadPlaywright());
   for (const browserName of browsers) await verifyBrowser(browserName);

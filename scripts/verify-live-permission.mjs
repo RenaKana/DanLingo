@@ -1,16 +1,18 @@
 import { browserExecutablePath, browserLaunchOptions, loadPlaywright } from "./browser-runtime.mjs";
-// Exact 0.2.0 unpacked payload; no Key, Provider call, or automatic native consent.
+// Current-version unpacked payload; no Key, Provider call, or automatic native consent.
 import { settingsSection } from './settings-navigation.mjs';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { access, mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { getProjectReleaseInfo } from './project-version.mjs';
 
 const args = process.argv.slice(2);
+const packageVersion = getProjectReleaseInfo().version;
 if (args.length === 1 && args[0] === '--help') {
   console.log(`Usage: node scripts/verify-live-permission.mjs --browser chromium|edge
-Loads the unchanged .output/chrome-mv3 0.2.0 payload in a new headed,
+Loads the unchanged .output/chrome-mv3 ${packageVersion} payload in a new headed,
 offline, isolated browser. No Key or Provider request is used.
 Clicks options Save with enabled=false, then waits at most 120 seconds for
 native host consent. The operator handles the browser's real permission UI.
@@ -29,7 +31,7 @@ assert.ok(['chromium', 'edge'].includes(browserName), 'Unknown browser');
 const endpoint = 'http://192.168.31.137:8080/v1/chat/completions';
 const origin = new URL(endpoint).origin;
 const extension = resolve('.output/chrome-mv3');
-const expectedHosts = ['https://www.nicovideo.jp/*', 'https://live.nicovideo.jp/watch/*', 'https://www.youtube.com/*'];
+const expectedHosts = ['https://www.nicovideo.jp/*', 'https://live.nicovideo.jp/watch/*', 'https://www.youtube.com/*', 'https://www.bilibili.com/*', 'https://live.bilibili.com/*'];
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const delay = ms => new Promise(done => setTimeout(done, ms));
 async function bounded(promise, ms, label) {
@@ -92,7 +94,7 @@ async function snapshot(timeout = 4000) {
 try {
   const rawManifest = await readFile(resolve(extension, 'manifest.json'));
   const manifest = JSON.parse(rawManifest);
-  assert.equal(manifest.version, '0.2.0');
+  assert.equal(manifest.version, packageVersion);
   assert.deepEqual([...manifest.host_permissions].sort(), [...expectedHosts].sort());
   report.payload = { version: manifest.version, rawManifestSha256: sha256(rawManifest),
     hostPermissions: manifest.host_permissions, files: await describePayload(extension) };
@@ -133,7 +135,7 @@ try {
   await options.bringToFront();
   await options.waitForFunction(() => !!document.getElementById('key-state')?.textContent);
   report.loadedVersion = await options.evaluate(() => chrome.runtime.getManifest().version);
-  assert.equal(report.loadedVersion, '0.2.0');
+  assert.equal(report.loadedVersion, packageVersion);
   report.before = await snapshot();
   assert.equal(report.before.granted, false, 'Fresh isolated profile must not already grant the Provider origin');
   assert.equal(report.before.configurationOk, true);

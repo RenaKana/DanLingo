@@ -5,15 +5,17 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { getProjectReleaseInfo } from './project-version.mjs';
 
 if (process.argv.length !== 3 || !/^lv\d+$/.test(process.argv[2])) throw new Error('Usage: node scripts/verify-nico-status-layout.mjs lvID');
 const room = process.argv[2], build = resolve('.output/chrome-mv3');
+const packageVersion = getProjectReleaseInfo().version;
 await mkdir('.artifacts/live/ui-layout', { recursive: true });
 const folder = await mkdtemp(resolve('.artifacts/live/ui-layout/status-'));
 const report = { capturedAt: new Date().toISOString(), room, status: 'RUNNING', checks: {}, layouts: [], errors: [],
   providerRequests: 0, limitations: ['Real page layout only. No Key, translation performance, native installation or permission consent is tested.'] };
 const manifest = JSON.parse(await readFile(resolve(build, 'manifest.json')));
-assert.equal(manifest.version, '0.2.0');
+assert.equal(manifest.version, packageVersion);
 report.liveScriptSha256 = createHash('sha256').update(await readFile(resolve(build, 'content-scripts/live.js'))).digest('hex');
 let context;
 const timer = setTimeout(() => { report.errors.push('70-second run budget'); void context?.close(); }, 70000);

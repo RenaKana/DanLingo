@@ -1,6 +1,6 @@
 # 安全问题报告
 
-当前 0.2.0 是开发候选，尚无正式维护版本或修复时限承诺。
+本文件适用于 0.3.0；项目不承诺安全修复时限。
 
 公开 GitHub 仓库后，维护者应先启用 Private vulnerability reporting。报告者可在 Security → Advisories → Report a vulnerability 私下提供复现步骤。渠道未启用时，不公开发布凭据、可直接利用的敏感细节或个人数据，先请求维护者提供私密渠道。当前没有预设安全邮箱。
 

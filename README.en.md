@@ -4,7 +4,7 @@
 
 Translate danmaku and live chat directly on Niconico, YouTube and Bilibili. Connect your own Chat Completions service or load a local GGUF model in the extension.
 
-This is a development candidate. The planned first stable release is **v0.3.0**, distributed as source and a ZIP for manual installation in Chrome and Edge. No stable release or browser-store listing is available yet. See the [release validation matrix](docs/RELEASE_VALIDATION.md) for exact coverage and outstanding checks.
+**Version: 0.3.0.** The maintainer confirmed completion of real-world acceptance on 2026-09-23. Distribution uses source and a ZIP for manual installation in Chrome and Edge, with no browser-store listing. Check [GitHub Releases](https://github.com/dabao12123/DanLingo/releases) for publication status and downloads, and the [release validation record](docs/RELEASE_VALIDATION.md) for the maintainer confirmation and compatibility limits.
 
 ## Build and install
 
