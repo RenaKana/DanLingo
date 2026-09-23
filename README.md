@@ -4,7 +4,7 @@
 
 在 Niconico、YouTube、Bilibili 的原生页面翻译弹幕与直播聊天。支持自行配置兼容 Chat Completions 的服务，或在扩展内加载本地 GGUF 模型。
 
-**版本：0.3.0。** 维护者已于 2026-09-23 确认完成真实验收。分发形式为源码和 Chrome／Edge 手动加载 ZIP，不包含商店上架；发布状态与安装包以 [GitHub Releases](https://github.com/dabao12123/DanLingo/releases) 为准。验收记录与兼容性边界见[首发验收表](docs/RELEASE_VALIDATION.md)。
+**版本：0.3.0。** 提供源码和 Chrome／Edge 手动加载 ZIP，安装包见 [GitHub Releases](https://github.com/dabao12123/DanLingo/releases)。
 
 获取 ZIP 后按[安装说明](docs/USAGE.md#安装-zip)解压并加载扩展；也可按下文从源码构建。
 
@@ -45,8 +45,6 @@ pnpm run build
 - [隐私与权限](docs/PRIVACY.md)：发送哪些数据、Key 与缓存存在哪里。
 - [项目结构](docs/ARCHITECTURE.md)：入口、调度、平台适配和本地推理边界。
 - [开发与验证](docs/DEVELOPMENT.md)：离线测试、浏览器检查和构建步骤。
-- [GitHub 发布准备](docs/GITHUB_RELEASE.md)：源码范围、已知限制与发布前决定。
-- [首发兼容性与验收表](docs/RELEASE_VALIDATION.md)：浏览器、平台、后端及维护者验收记录。
 - [贡献说明](CONTRIBUTING.md) · [安全报告](SECURITY.md) · [文档索引](docs/README.md)
 
 ## 许可与依赖
