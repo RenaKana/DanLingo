@@ -1,0 +1,24 @@
+{
+  "evidenceLevel": "synthetic-only",
+  "origin": "Hand-authored protobuf payloads for offline decoder regression; not captured from a server.",
+  "samples": [
+    {
+      "name": "synthetic ordinary text cue",
+      "expected": [{ "id": "1", "idStr": "1", "progress": 1200, "mode": 1, "fontsize": 25, "color": 16777215, "content": "Synthetic cue A" }],
+      "protobufBase64": "CiIIARCwCRgBIBko////BzoPU3ludGhldGljIGN1ZSBBYgEx",
+      "sha256": "cf05dea91d79a07321311e87f111284b587f9dc86759d1f3c4fa48d659f6e24a"
+    },
+    {
+      "name": "synthetic explicit zero fields",
+      "expected": [{ "id": "2", "progress": 0, "mode": 5, "color": 0, "content": "Synthetic cue B" }],
+      "protobufBase64": "ChkIAhAAGAUoADoPU3ludGhldGljIGN1ZSBC",
+      "sha256": "e3665dd9d4f68ad427ef16e509128c0bd2f119955ba114819be929b4ba3f0b3a"
+    },
+    {
+      "name": "synthetic signed weight and UTF-8 text",
+      "expected": [{ "progress": 25000, "mode": 4, "fontsize": 18, "color": 255, "pool": 1, "weight": -10, "content": "合成用の字幕C" }],
+      "protobufBase64": "Ci0QqMMBGAQgEij/AToT5ZCI5oiQ55So44Gu5a2X5bmVQ0j2//////////8BWAE=",
+      "sha256": "57914af3a58a8ea1b31159b13e3f3c379358751e36fca9d6c57a61b2f8ca9fb5"
+    }
+  ]
+}

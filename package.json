@@ -1,0 +1,58 @@
+{
+  "name": "danlingo",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Translate danmaku and live chat on Niconico, YouTube and Bilibili with online services or local GGUF models.",
+  "license": "MIT",
+  "author": "Rena",
+  "repository": { "type": "git", "url": "https://github.com/dabao12123/DanLingo.git" },
+  "homepage": "https://github.com/dabao12123/DanLingo#readme",
+  "bugs": { "url": "https://github.com/dabao12123/DanLingo/issues" },
+  "type": "module",
+  "engines": {
+    "node": ">=22.14"
+  },
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "dev": "node node_modules/wxt/bin/wxt.mjs",
+    "prepare": "node node_modules/wxt/bin/wxt.mjs prepare",
+    "build": "node node_modules/wxt/bin/wxt.mjs build",
+    "zip": "node node_modules/wxt/bin/wxt.mjs zip",
+    "typecheck": "node node_modules/typescript/bin/tsc --noEmit",
+    "test:local-model": "node --experimental-strip-types --test test/translation/local-model.test.mjs test/translation/local-config.test.mjs test/translation/local-generation.test.mjs test/translation/local-policy.test.mjs test/translation/local-engine-capacity.test.mjs test/translation/local-benchmark.test.mjs test/translation/local-benchmark-runner.test.mjs test/translation/gpu-meter.test.mjs test/translation/local-native-bundle.test.mjs test/translation/translation-profile.test.mjs",
+    "benchmark:local-model": "node --experimental-strip-types scripts/benchmark-local-model.mjs",
+    "verify:local:settings": "node --experimental-strip-types scripts/verify-local-settings.mjs",
+    "verify:local-model": "node scripts/verify-local-runtime.mjs",
+    "test:directory-model": "node --experimental-strip-types --test test/translation/directory-manager.test.mjs test/translation/directory-runtime.test.mjs test/translation/directory-model.test.mjs test/core/navigation.test.mjs",
+    "test:local-lifecycle": "node --experimental-strip-types --test test/translation/local-idle-unload.test.mjs test/translation/local-auto-load.test.mjs test/translation/directory-runtime.test.mjs test/core/navigation.test.mjs test/ui/popup-main.test.mjs",
+    "test:upgrade": "node --experimental-strip-types --test test/core/connection.test.mjs test/translation/connection-discovery.test.mjs test/translation/upgrade-engine.test.mjs test/translation/performance-test.test.mjs test/translation/local-model.test.mjs",
+    "verify:upgrade:settings": "node --experimental-strip-types scripts/verify-upgrade-settings.mjs",
+    "verify:upgrade:chat": "node --experimental-strip-types scripts/verify-youtube-repairs.mjs",
+    "verify:upgrade:recent": "node scripts/verify-live-recent-repairs.mjs",
+    "test": "node scripts/test.mjs",
+    "verify:translation-cost": "node --experimental-strip-types scripts/replay-translation-cost.mjs",
+    "measure:translation-protocol": "node --experimental-strip-types scripts/measure-translation-protocol.mjs",
+    "verify:live": "node --experimental-strip-types scripts/verify-youtube-native.mjs",
+    "verify:live:overlay-legacy": "node --experimental-strip-types scripts/verify-live.mjs",
+    "verify:live:youtube-native": "node --experimental-strip-types scripts/verify-youtube-native.mjs",
+    "verify:live:niconico": "node --experimental-strip-types scripts/verify-niconico-live.mjs",
+    "verify:live:mixed": "node scripts/verify-live-mixed.mjs",
+    "verify:live:upgrade": "node scripts/verify-live-upgrade.mjs",
+    "test:live-adapters": "node --experimental-strip-types --test scripts/probes/youtube-live-parser.test.mjs scripts/probes/youtube-live-lifecycle.test.mjs scripts/probes/niconico-live-native.test.mjs",
+    "test:indexeddb": "node scripts/test.mjs --browser",
+    "verify:extension": "node --experimental-strip-types scripts/verify-extension.mjs",
+    "verify:vod": "node --experimental-strip-types scripts/verify-vod.mjs",
+    "verify:navigation": "node --experimental-strip-types scripts/verify-navigation.mjs",
+    "verify:thinking": "node --experimental-strip-types scripts/verify-long-thinking.mjs",
+    "test:bilibili-probe": "node --test scripts/probes/bilibili-probe.test.mjs",
+    "check:source": "node scripts/source-release.mjs",
+    "prepare:github": "node scripts/source-release.mjs --stage"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "wxt": "0.21.4"
+  },
+  "dependencies": {
+    "@wllama/wllama": "3.6.1"
+  }
+}

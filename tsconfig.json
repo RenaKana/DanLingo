@@ -1,0 +1,10 @@
+{
+  "extends": "./.wxt/tsconfig.json",
+  "compilerOptions": {
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "allowImportingTsExtensions": true,
+    "noEmit": true
+  },
+  "exclude": ["node_modules", ".artifacts", ".output", "probes", "scripts", "test"]
+}

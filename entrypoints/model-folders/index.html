@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>添加本地模型 · DanLingo</title></head>
+<body><main class="folder-auth">
+  <p class="folder-eyebrow">DanLingo · 本地模型</p><h1>添加模型来源</h1>
+  <p id="folder-description">模型保留在原文件夹，只登记只读访问权限，不复制到浏览器。</p>
+  <p class="subtle">可选择文件夹（包含子文件夹），也可直接选择 GGUF 文件；分片模型请一次选齐。选择后读取一次，之后仅手动刷新。</p>
+  <div class="row"><button id="folder-authorize" type="button">选择文件夹</button><button id="file-authorize" type="button">选择模型文件</button><button id="folder-close" type="button">关闭</button></div>
+  <p id="folder-auth-status" class="status" role="status" aria-live="polite"></p>
+</main><script type="module" src="./main.ts"></script></body></html>

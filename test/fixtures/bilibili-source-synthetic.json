@@ -1,0 +1,17 @@
+{
+  "evidenceLevel": "synthetic-only",
+  "origin": "Hand-authored pseudocode for offline assertions; no website source or resource identifiers copied.",
+  "sources": [
+    { "label": "synthetic-page", "url": "https://example.invalid/watch/fixture", "sha256": "0000000000000000000000000000000000000000000000000000000000000000" },
+    { "label": "synthetic-core", "url": "https://example.invalid/assets/player.js", "sha256": "1111111111111111111111111111111111111111111111111111111111111111" }
+  ],
+  "quotations": [
+    {
+      "source": "synthetic-core",
+      "name": "before-render notification precedes model construction",
+      "excerpt": "function insertForTest(models) {\n  notify('beforeRender', models);\n  return buildTestModels(models);\n}"
+    }
+  ],
+  "runtimeVerified": false,
+  "safeRemeasureVerified": false
+}

@@ -1,0 +1,18 @@
+{
+  "evidence": "synthetic-only",
+  "origin": "Hand-authored offline fixture; no live recording or user content.",
+  "capturedAt": null,
+  "watchId": "fixture-video-001",
+  "sourceUrl": "https://example.invalid/watch/fixture-video-001",
+  "endpoint": "https://example.invalid/v1/threads",
+  "durationSeconds": 60,
+  "threads": [
+    { "id": "fixture-thread", "fork": "main", "reportedCommentCount": 2, "received": 2, "minVposMs": 1000, "maxVposMs": 42000 }
+  ],
+  "sampling": "Synthetic messages for offline structure checks only.",
+  "totalReturned": 2,
+  "messages": [
+    { "threadId": "fixture-thread", "fork": "main", "id": "fixture-message-1", "no": 1, "body": "こんにちは、合成サンプルです", "vposMs": 1000, "postedAt": "synthetic", "commands": ["naka"], "source": "fixture" },
+    { "threadId": "fixture-thread", "fork": "main", "id": "fixture-message-2", "no": 2, "body": "もう一つの合成コメントです", "vposMs": 42000, "postedAt": "synthetic", "commands": ["small"], "source": "fixture" }
+  ]
+}

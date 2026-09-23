@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="manifest.open_in_tab" content="true"><title>DanLingo 设置</title></head>
+<body><main class="options">
+  <header><div class="brand"><span class="mark">译</span><h1>DanLingo</h1><span class="badge">视频与直播</span></div><p class="subtle">在弹幕中看懂另一种语言。</p></header>
+  <form id="settings-form">
+    <section class="card"><h2>翻译服务</h2><div class="grid">
+      <label>后端<select id="backend"><option value="online">在线服务</option><option value="local">本地模型（GGUF）</option></select></label>
+      <label class="span">服务地址<input id="endpoint" type="text" inputmode="url" required autocomplete="off" spellcheck="false" placeholder="https://api.example.com"></label>
+      <div id="connection-status" class="subtle span" role="status" aria-live="polite">服务地址与协议：正在读取…</div>
+      <div class="model-control"><label for="model">在线模型</label><input id="model" required autocomplete="off" spellcheck="false" placeholder="选择或输入模型名称"></div>
+      <label>思考强度<select id="thinking-effort"><option value="default">服务默认</option><option value="off" selected>关闭思考</option></select></label>
+      <label class="span">API Key<input id="api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="输入 Key；同域名可留空"></label>
+      <label class="check"><input id="remember" type="checkbox">在此浏览器记住 Key</label><span id="key-state" class="subtle"></span>
+      <label class="check span"><input id="local-http" type="checkbox">允许本机或私有 IPv4 局域网 HTTP 服务</label>
+      <div id="local-settings" class="span" hidden>
+        <div class="grid local-grid">
+          <div class="span local-folder-section"><div class="row local-folder-heading"><strong>模型来源</strong><button id="local-folder-add" type="button">添加文件夹</button><button id="local-file-add" type="button">添加文件</button><button id="local-folder-refresh" type="button">手动刷新</button><button id="local-scan-cancel" type="button" hidden>取消扫描</button></div><p class="subtle">更换模型文件后，点击“手动刷新”。</p><div id="local-directories"></div></div>
+          <div id="local-scan-status" class="status span" role="status" aria-live="polite"></div>
+          <details id="local-scan-issues" class="span" hidden></details>
+          <details id="local-model-manager" class="span" hidden><summary id="local-model-manager-summary">管理模型</summary><p class="subtle">移除不会删除原文件。需要重新添加时，请使用“添加文件”。</p><div id="local-model-entries"></div></details>
+          <label class="span local-model-field" for="local-model">选用模型<select id="local-model"><option value="">请选择模型</option></select></label>
+          <div class="row span local-model-actions"><button id="local-delete" type="button" title="删除旧版扩展内模型副本" aria-label="删除旧版扩展内模型副本">删除旧副本</button></div>
+          <div id="local-delete-confirm" class="confirm span" hidden><p id="local-delete-description"></p><div class="row"><button id="local-delete-accept" type="button">删除副本</button><button id="local-delete-dismiss" type="button">取消</button></div></div>
+          <div id="local-model-meta" class="subtle span"></div>
+          <div id="local-vram" class="subtle span" role="status"></div>
+          <div class="row span"><button id="local-load" type="button">加载选中模型</button><button id="local-stop" type="button">卸载模型</button></div>
+          <label class="check span"><input id="local-preload-entry" type="checkbox">进入直播间或视频时预加载本地模型</label>
+          <p class="subtle span">空闲约 5 分钟后自动卸载。关闭预加载时，首次翻译才加载；手动卸载会暂停自动加载。</p>
+          <div id="local-state" class="status span" role="status" aria-live="polite"></div>
+          <div id="local-result" class="status span" role="status" aria-live="polite"></div>
+          <p id="local-support" class="subtle span"></p>
+        </div>
+      </div>
+      <details class="span"><summary>高级连接与 Super Chat</summary><div class="grid">
+        <label>思考配置<select id="profile"><option value="auto">自动识别</option><option value="minimax">MiniMax</option><option value="deepseek">DeepSeek</option><option value="gemini">Gemini（OpenAI 兼容接口）</option><option value="chat-completions">Chat Completions</option></select></label>
+        <label>路径解释<select id="endpoint-mode"><option value="auto">自动识别</option><option value="base">把地址当作 API 基础路径</option><option value="completion">把地址当作完整接口</option></select></label>
+        <label>请求协议<select id="protocol-override"><option value="auto">自动（Chat Completions）</option><option value="chat-completions">手动：Chat Completions</option></select></label>
+        <label>Super Chat 思考<select id="superchat-thinking"><option value="inherit">跟随普通弹幕</option></select></label>
+        <label>Super Chat 超时（毫秒）<input id="superchat-timeout" type="number" min="1000" max="120000" value="15000" required></label>
+      </div><p class="subtle">Super Chat 使用独立的思考与超时设置。</p></details>
+      <div id="model-catalog-row" data-backend="online" class="row span service-action"><button id="get-models" type="button">获取模型</button><span id="models-cache" class="subtle"></span><span id="models-result" class="status" role="status" aria-live="polite"></span></div>
+      <div class="row span service-action"><button id="test-model" type="button">测试模型</button><span id="test-result" class="status" role="status" aria-live="polite"></span></div>
+      <label class="span">测试原文（可选）<textarea id="model-test-text" maxlength="1000" rows="2" placeholder="留空使用跨语言样句；也可粘贴实际出错的弹幕"></textarea></label>
+      <label>本地测试场景<select id="model-test-context"><option value="live">直播</option><option value="video">普通视频</option></select></label>
+      <span class="subtle span">测试使用当前填写的设置，不会保存。</span>
+      <label class="span">在线每日请求上限<input id="online-request-limit" type="number" min="1" max="9007199254740991" step="1" required></label>
+      <p id="online-budget-status" class="subtle span" role="status" aria-live="polite">正在读取在线请求计数…</p>
+      <p class="subtle span">所有标签页与服务共享，按本机自然日计数；重试、补翻和测试也计入。这是次数限制，金额上限请在服务方设置。</p>
+    </div><p class="subtle">在线翻译会将文字发送至所选服务，并可能产生费用。</p></section>
+    <section class="card"><h2>观看</h2><div class="grid">
+      <label>目标语言<input id="target-language" required value="zh-Hans" autocomplete="off" placeholder="选择或输入语言"></label>
+      <label>源语言<select id="source-language"><option value="auto">自动判断</option><option value="zh">中文</option><option value="ja">日语</option><option value="en">英语</option><option value="ko">韩语</option></select></label>
+      <label class="check"><input id="enabled" type="checkbox">启用翻译</label>
+      <div class="span row"><span>翻译快捷键：<span id="translation-shortcut">正在读取…</span></span><button id="customize-shortcut" type="button">自定义快捷键</button><span id="shortcut-result" class="subtle" role="status"></span></div>
+      <label>显示<select id="display-mode"><option value="translated">译文；未准备好时显示原文</option><option value="original">原文</option></select></label>
+      <label>翻译范围<select id="translation-scope"><option value="all">全量后台翻译</option><option value="window">仅未来 N 秒</option></select></label>
+      <label id="prefetch-field" hidden style="display:none">未来 N 秒（视频时间）<input id="prefetch" type="number" min="5" max="3600" required disabled></label>
+    </div></section>
+    <section class="card"><h2>直播聊天翻译</h2><div class="grid live-settings">
+      <label>翻译最大等待（毫秒）<input id="live-buffer" type="number" min="1" max="2147483647" step="1" value="2000" list="live-buffer-presets"><datalist id="live-buffer-presets"><option value="500"><option value="1000"><option value="2000"><option value="5000"><option value="10000"></datalist></label>
+      <p class="muted">从到达开始计时，含排队与生成。超时显示原文。</p>
+      <label>直播源语言<select id="live-source-language"><option value="auto">自动判断</option><option value="ja">日语</option><option value="en">英语</option><option value="ko">韩语</option><option value="zh">中文</option></select></label>
+      <label class="check span"><input id="live-adaptive" type="checkbox">实验性自适应直播并发（默认关闭）</label>
+      <label class="check span"><input id="bilibili-timeout-retry" type="checkbox">Bilibili 超时弹幕自动补翻一次（默认关闭）</label>
+      <label>二次翻译额外等待（毫秒）<input id="bilibili-timeout-retry-extra" type="number" min="0" max="30000" step="1" value="1000" aria-describedby="bilibili-timeout-budget" required disabled></label>
+      <label>超时弹幕处理<select id="bilibili-timeout-retry-mode" disabled><option value="hold">继续扣留，等二次翻译完成</option><option value="release">立即显示原文，译文到达后切换聊天区</option></select></label>
+      <p id="bilibili-timeout-budget" class="subtle span">第二轮预算=首轮最大等待+额外等待，含排队和请求；再次超时不重试。</p>
+      <p class="subtle span">仅用于 Bilibili 普通弹幕。显示原文后，聊天区仍可更新；屏幕弹幕不重发。可能增加请求。</p>
+      <label class="check span"><input id="youtube-timeout-retry" type="checkbox">YouTube 超时弹幕自动补翻一次（默认关闭）</label>
+      <label>二次翻译额外等待（毫秒）<input id="youtube-timeout-retry-extra" type="number" min="0" max="30000" step="1" value="1000" required disabled></label>
+      <label>超时弹幕处理<select id="youtube-timeout-retry-mode" disabled><option value="hold">继续等待二次翻译</option><option value="release">先显示原文，更新仍有效的聊天行</option></select></label>
+      <label class="check span"><input id="niconico-timeout-retry" type="checkbox">Niconico 超时弹幕自动补翻一次（默认关闭）</label>
+      <label>二次翻译额外等待（毫秒）<input id="niconico-timeout-retry-extra" type="number" min="0" max="30000" step="1" value="1000" required disabled></label>
+      <label>超时弹幕处理<select id="niconico-timeout-retry-mode" disabled><option value="hold">继续等待二次翻译</option><option value="release">先显示原文，迟到译文进入最近弹幕</option></select></label>
+      <p class="subtle span">两站仅补翻首轮超时的普通消息一次，不含 Super Chat；第二轮含排队和推理，不重发屏幕弹幕。</p>
+    </div><p class="subtle">Niconico 按缓冲时间释放；YouTube 按到达顺序释放。超时仍显示原文。</p></section>
+    <section class="card"><details><summary>请求与预取参数</summary><div class="grid">
+      <label>近期优先（视频秒，默认 5）<input id="urgent" type="number" min="1" max="30" required></label>
+      <label>每批最多消息<input id="batch-size" type="number" min="1" max="200" required></label>
+      <label>每批最多字符<input id="batch-chars" type="number" min="500" max="24000" required></label>
+      <label>并发请求上限<input id="concurrency" type="number" min="1" max="64" required></label>
+      <label>关闭思考超时（毫秒）<input id="timeout" type="number" min="1000" max="120000" required></label>
+      <label>思考／服务默认超时（毫秒）<input id="thinking-timeout" type="number" min="1000" max="120000" required></label>
+      <label>缓存条数<input id="cache-size" type="number" min="100" max="20000" required></label>
+      <label>缓存保留（天）<input id="cache-days" type="number" min="1" max="90" required></label>
+    </div></details></section>
+    <div class="actions"><button class="primary" id="save" type="submit">保存并授权服务</button><span id="result" class="status" role="status" aria-live="polite"></span></div>
+  </form>
+  <section class="card" style="margin-top:26px"><h2>本地数据</h2><div class="row"><button id="clear-cache" type="button">清空译文缓存</button><button id="delete-key" type="button">删除 API Key</button><span id="cache-state" class="subtle"></span></div></section>
+  <p class="notice">支持文字弹幕；复杂装饰保留原样。真实效果取决于配置的服务。</p>
+  <details><summary>运行诊断</summary><div class="row"><button id="export-diagnostics" type="button">导出安全诊断 JSON</button><span id="diagnostics-result" class="status" role="status" aria-live="polite"></span></div><p id="local-engine-diagnostics" class="subtle"></p><pre id="diagnostics"></pre></details>
+</main><script type="module" src="./main.ts"></script></body></html>

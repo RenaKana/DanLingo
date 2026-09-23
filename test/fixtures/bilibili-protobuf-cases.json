@@ -1,0 +1,25 @@
+{
+  "evidenceLevel": "hand-authored protocol cases, not queried comments",
+  "cases": [
+    {
+      "name": "UTF-8 content, progress milliseconds, RGB and font size",
+      "hex": "0a1410e8071801201928ffffff073a06e4bda0e5a5bd",
+      "expected": {"elems":[{"progress":1000,"mode":1,"fontsize":25,"color":16777215,"content":"你好"}],"unknownFieldNumbers":[]}
+    },
+    {
+      "name": "int64 above Number.MAX_SAFE_INTEGER",
+      "hex": "0a09088180808080808010",
+      "expected": {"elems":[{"id":"9007199254740993"}],"unknownFieldNumbers":[]}
+    },
+    {
+      "name": "omitted scalar presence is distinct from explicit zero",
+      "hex": "0a000a021000",
+      "expected": {"elems":[{},{"progress":0}],"unknownFieldNumbers":[]}
+    },
+    {
+      "name": "unknown future envelope fields are skipped",
+      "hex": "0a00980607",
+      "expected": {"elems":[{}],"unknownFieldNumbers":[99]}
+    }
+  ]
+}

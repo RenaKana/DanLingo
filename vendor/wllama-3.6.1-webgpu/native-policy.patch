@@ -1,0 +1,12 @@
+--- a/cpp/wllama-context.h
++++ b/cpp/wllama-context.h
+@@ -593,6 +593,9 @@
+     // init threadpool
+     ggml_threadpool_params_default(params.cpuparams.n_threads);
+ 
++    // Host prompt snapshots stall all active WebGPU sequences during state readback.
++    params.cache_ram_mib = 0;
++
+     // load model
+     llama_backend_init();
+     llama_numa_init(params.numa);
