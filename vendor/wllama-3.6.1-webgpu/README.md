@@ -14,6 +14,10 @@ script and compares all three output hashes and sizes with the promoted manifest
 It uses `--parallel=2` to limit compile jobs and container CPUs on a small runner;
 the local script accepts 1-8 jobs and defaults to 8. This changes scheduling,
 not the pinned compiler inputs or native policy.
+The rebuild fixes Binaryen's optimizer worker count at one, independently of
+CMake compile jobs. It also fixes the symbol map's gzip OS header to the promoted
+map's NTFS marker (10), so Linux and Windows emit the same compressed map without
+changing its symbol contents. Both settings are recorded in the build plan.
 It retains build logs, dependency records and comparison results as a 30-day
 artifact. It does not update vendor files or publish a release.
 

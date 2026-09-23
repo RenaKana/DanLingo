@@ -5,6 +5,38 @@ import { DEFAULT_SETTINGS, normalizeSettings } from '../src/core/config.ts';
 import { REQUESTED_PLAN, uniqueBurstCorpus, requestedBudget, readOfficialStdinConfig } from './benchmark-live-requested-concurrency.mjs';
 import { runChainCondition } from './benchmark-live-chain.mjs';
 
+const eventLoopTurn = () => new Promise(resolve => setImmediate(resolve));
+
+class ControlledClock {
+  time = 0;
+  nextId = 0;
+  timers = new Map();
+  now = () => this.time;
+  wallNow = () => 1800000000000 + this.time;
+  setTimeout = (callback, delayMs) => {
+    const id = ++this.nextId;
+    this.timers.set(id, { at: this.time + Math.max(0, delayMs), callback });
+    return id;
+  };
+  clearTimeout = id => { this.timers.delete(id); };
+
+  async advanceBy(delayMs) {
+    await eventLoopTurn();
+    const target = this.time + delayMs;
+    for (let count = 0; count < 10000; count++) {
+      const next = [...this.timers].sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+      if (!next || next[1].at > target) break;
+      this.timers.delete(next[0]);
+      this.time = next[1].at;
+      next[1].callback();
+      await eventLoopTurn();
+      if (count === 9999) throw new Error('controlled-clock-timer-loop');
+    }
+    this.time = target;
+    await eventLoopTurn();
+  }
+}
+
 test('official stdin binds destination and restores terminal mode without echoing input', async () => {
   const input = new PassThrough(), modes = [];
   input.isTTY = true; input.isRaw = false; input.setRawMode = value => modes.push(value);
@@ -43,15 +75,16 @@ test('explicit 2500ms cell remains valid without changing the default, uniquenes
 
 for (const concurrency of [32, 64]) test(`isolated 2500ms burst actually fills ${concurrency} mock slots and retains all deadlines`, async () => {
   const corpus = uniqueBurstCorpus([{ text: 'おはようございます' }]);
+  const clock = new ControlledClock();
   const settings = { ...DEFAULT_SETTINGS, enabled: true, displayMode: 'translated', model: 'deepseek-v4-flash', profile: 'deepseek',
     thinkingEffort: 'off', sourceLanguage: 'auto', liveSourceLanguage: 'auto', targetLanguage: 'zh-Hans',
     endpoint: 'https://synthetic.invalid/v1/chat/completions', translationStream: false, batchSize: 10 };
   const result = await runChainCondition({ cell: { id: `mock${concurrency}`, concurrency, bufferMs: 2500, postQuota: 120 },
     corpus, settings, apiKey: 'synthetic-not-sent', run: { actualPosts: 0, maxRequests: 120, stop: null },
-    feedMs: 1000, rate: 1000, burst: true,
+    feedMs: 1000, rate: 1000, burst: true, clock, pause: ms => clock.advanceBy(ms),
     transport: async (_url, init) => {
       const rows = JSON.parse(init.body).messages.find(row => row.role === 'user').content.split('\n').map(JSON.parse);
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise(resolve => clock.setTimeout(resolve, 100));
       return Response.json({ choices: [{ message: { content: rows.map(([id]) => JSON.stringify([id, '早上好'])).join('\n') } }] });
     } });
   assert.equal(result.status, 'COMPLETE_CONTROLLED_CHAIN');

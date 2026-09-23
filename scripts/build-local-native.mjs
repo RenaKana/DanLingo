@@ -97,6 +97,23 @@ async function sourceFiles(directory, prefix = 'cpp') {
   return files.sort();
 }
 
+export function serializeNativeSourceMap(mapText) {
+  const mapBody = mapText.match(/export const WASM_SOURCE_MAP: Record<string, string> = (\{[\s\S]*\});\s*$/)?.[1];
+  if (!mapBody) throw new Error('Unexpected pinned source-map output');
+  const map = JSON.parse(mapBody);
+  for (const [name, encoded] of Object.entries(map)) {
+    const gzip = Buffer.from(encoded, 'base64');
+    if (gzip.length < 18 || gzip.readUInt32LE(0) !== 0x00088b1f) {
+      throw new Error('Unexpected source-map gzip header');
+    }
+    // gzip records the host OS. Retain the promoted map's legacy NTFS marker
+    // on every host; this changes neither compressed symbols nor their checksum.
+    gzip[9] = 10;
+    map[name] = gzip.toString('base64');
+  }
+  return JSON.stringify(map) + '\n';
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help')) {
@@ -165,6 +182,7 @@ async function main() {
   const plan = {
     schemaVersion: 1, ...pins, emscriptenVersion: '4.0.20', nativePolicy: { cacheRamMiB: 0 },
     provenanceSha256: hash(provenanceBytes), inputHashes, archives, commands: buildCommands, parallel,
+    buildEnvironment: { BINARYEN_CORES: '1' }, sourceMapGzipOs: 10,
     patch: { file: 'cpp/wllama-context.h', before: patchBefore, after: patchAfter,
       originalSha256: originalHashes['cpp/wllama-context.h'], patchedSha256: await fileHash(contextPath),
       sha256: hash(JSON.stringify({ before: patchBefore, after: patchAfter })) },
@@ -186,7 +204,7 @@ async function main() {
   process.once('SIGTERM', stop);
   try {
     await run('docker', ['run', '--rm', '--pull=never', '--name', container, `--cpus=${parallel}`, '--memory=12g',
-      '--network=none', '--mount', `type=bind,source=${owned},target=/work`,
+      '--network=none', '--env', 'BINARYEN_CORES=1', '--mount', `type=bind,source=${owned},target=/work`,
       // Match the reviewed build's __FILE__ strings and linked data addresses.
       '--mount', `type=bind,source=${path.join(owned, 'source')},target=/source`,
       '--workdir', '/work', pins.buildImage, 'python3', '/work/prepare.py']);
@@ -204,10 +222,8 @@ async function main() {
   // The package parser splits --input on ':', so never pass a Windows absolute path here.
   await run(process.execPath, [mapScript, '--input', 'default:source/build', '--output', 'result/source-map.ts'], owned);
   const mapText = await readFile(path.join(result, 'source-map.ts'), 'utf8');
-  const mapBody = mapText.match(/export const WASM_SOURCE_MAP: Record<string, string> = (\{[\s\S]*\});\s*$/)?.[1];
-  if (!mapBody) throw new Error('Unexpected pinned source-map output');
   // The reviewed vendor source map uses compact JSON and one trailing LF.
-  await writeFile(path.join(result, 'source-map.json'), JSON.stringify(JSON.parse(mapBody)) + '\n', { flag: 'wx' });
+  await writeFile(path.join(result, 'source-map.json'), serializeNativeSourceMap(mapText), { flag: 'wx' });
   const files = {};
   for (const name of ['wllama.js', 'wllama.wasm', 'source-map.json']) {
     files[name] = { sha256: await fileHash(path.join(result, name)), bytes: (await lstat(path.join(result, name))).size };
@@ -219,4 +235,6 @@ async function main() {
   console.log(`Built and hashed; review before promotion: ${result}`);
 }
 
-main().catch((error) => { console.error(error.message); process.exitCode = 1; });
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => { console.error(error.message); process.exitCode = 1; });
+}
