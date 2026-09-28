@@ -1,4 +1,4 @@
-import { formatNumber, getLocale, onLocaleChange } from '../i18n/text.ts';
+import { formatNumber, onLocaleChange, t } from '../i18n/text.ts';
 
 export interface UserFilterStatusView {
   connected: boolean;
@@ -10,92 +10,89 @@ export interface UserFilterStatusView {
   readFailed?: boolean;
 }
 
-const en = {
-  title: 'Bilibili block rules', source: 'Video', tab: 'Tab', selectTab: 'Video tab', chooseTab: 'Select a video tab', disconnected: 'No video tab connected',
-  stale: 'Rule status expired', readFailed: 'Could not read rule status', featureOff: 'Feature off',
-  reading: 'Reading rules', nativeOff: 'Bilibili native block rules off', nativeUnknown: 'Native switch unknown',
-  all: 'All declared categories covered', partial: 'Declared categories partly covered',
-  unknown: 'Coverage unconfirmed', readComplete: 'Rule list read', readPartial: 'Rule list incomplete',
-  readUnknown: 'Read status unknown', keyword: 'Keywords', regexp: 'Regular expressions',
-  sender: 'Senders', account: 'Accounts', enabled: 'enabled', supported: 'supported',
-  unsupported: 'unsupported', degraded: 'degraded', ready: 'covered', disabled: 'off',
-  partly: 'partial', unconfirmed: 'unknown', count: '{enabled} enabled · {supported} supported',
-  regexpCount: '{enabled} enabled · {supported} supported · {unsupported} unsupported · {degraded} degraded',
-  accountUnknown: 'Unknown: account blacklist is not the danmaku sender list',
-  samples: 'Candidate sampled hits', sampleCounts: 'keyword {keyword} · regexp {regexp} · sender {sender}',
-  samplesUnknown: 'No sample count yet', nativeBranch: 'Observed native rule branch: {count}',
-  details: 'Regular expression details', noDetails: 'No rule details available', omitted: '{count} more entries not shown',
-  supportedRule: 'supported', unsupportedRule: 'unsupported', previous: 'Previous classification: {reason}',
-  reasonUnknown: 'Reason unavailable', reasonOther: 'Unsupported or unverified rule',
-  uncovered: 'Uncovered or temporarily unknown rules do not exclude translation work. Bilibili still controls display, so extra pretranslation may occur.',
-  'source-unavailable': 'Rule source unavailable', 'account-blacklist-is-not-danmaku-sender-list': 'Account blacklist is separate from sender rules',
-  'unsafe-or-invalid-regexp': 'Regex unsupported or invalid', 'rule-size-limit': 'Rule exceeds size limit',
-  'pattern-size-limit': 'Pattern exceeds size limit', 'invalid-native-regexp': 'Invalid native regex',
-  backreference: 'Backreference is unsupported', lookaround: 'Lookaround is unsupported',
-  group: 'Group is unsupported', alternation: 'Alternation is unsupported',
-  quantifier: 'Quantifier is unsupported', 'unsupported-escape': 'Escape is unsupported',
-  'work-limit': 'Work limit reached', 'unsupported-flags': 'Flags are unsupported',
-  'unsupported-feature': 'Regex feature is unsupported', 'native-invalid': 'Native regex is invalid',
-  'nested-variable-repetition': 'Nested variable repetition has no reliable synchronous work bound',
-  'ambiguous-repeated-group': 'A repeated group contains alternatives that can multiply backtracking',
-  'zero-width-repetition': 'A repeated group is empty or contains an assertion',
-  'repetition-size-limit': 'Repetition count exceeds the bounded matcher limit',
-  'syntax-complexity-limit': 'Pattern has too many syntax nodes, alternatives or repeated parts',
-  'group-depth-limit': 'Group nesting exceeds the supported depth',
-  'lookaround-or-named-group': 'Lookaround or named group is outside the current subset',
-  'unsupported-character-class': 'Character class syntax could not be verified',
-  'unsupported-quantifier-syntax': 'Quantifier syntax could not be verified',
-} as const;
-
-const zh: Record<keyof typeof en, string> = {
-  title: 'Bilibili 屏蔽规则', source: '视频', tab: '标签页', selectTab: '视频标签页', chooseTab: '选择视频标签页', disconnected: '未连接视频标签页',
-  stale: '规则状态已过期', readFailed: '规则状态读取失败', featureOff: '功能已关闭',
-  reading: '正在读取规则', nativeOff: 'Bilibili 原生屏蔽已关闭', nativeUnknown: '原生开关未知',
-  all: '已声明类别全部覆盖', partial: '已声明类别部分覆盖', unknown: '覆盖待确认',
-  readComplete: '规则列表已读取', readPartial: '规则列表不完整', readUnknown: '读取状态未知',
-  keyword: '关键词', regexp: '正则', sender: '发送者', account: '账号',
-  enabled: '已启用', supported: '可支持', unsupported: '不支持', degraded: '降级',
-  ready: '已覆盖', disabled: '已关闭', partly: '部分覆盖', unconfirmed: '未知',
-  count: '已启用 {enabled} · 可支持 {supported}',
-  regexpCount: '已启用 {enabled} · 可支持 {supported} · 不支持 {unsupported} · 降级 {degraded}',
-  accountUnknown: '未知：账号黑名单不是弹幕发送者名单',
-  samples: '当前候选采样命中', sampleCounts: '关键词 {keyword} · 正则 {regexp} · 发送者 {sender}',
-  samplesUnknown: '暂无采样计数', nativeBranch: '观察到原生规则分支 {count} 次',
-  details: '正则条目', noDetails: '暂无规则明细', omitted: '另有 {count} 条未展示',
-  supportedRule: '支持', unsupportedRule: '不支持', previous: '原分类：{reason}',
-  reasonUnknown: '原因未知', reasonOther: '规则不支持或未确认',
-  uncovered: '未覆盖或暂时无法判断的规则不参与前置排除；Bilibili 仍按自身规则显示弹幕，因此可能有额外预译。',
-  'source-unavailable': '规则来源不可用', 'account-blacklist-is-not-danmaku-sender-list': '账号黑名单与发送者规则不同',
-  'unsafe-or-invalid-regexp': '正则不支持或无效', 'rule-size-limit': '规则超过长度限制',
-  'pattern-size-limit': '表达式超过长度限制', 'invalid-native-regexp': '原生正则无效',
-  backreference: '暂不支持反向引用', lookaround: '暂不支持环视', group: '暂不支持分组',
-  alternation: '暂不支持分支', quantifier: '暂不支持量词', 'unsupported-escape': '暂不支持该转义',
-  'work-limit': '匹配工作量超过限制', 'unsupported-flags': '暂不支持该标志',
-  'unsupported-feature': '暂不支持该正则特性', 'native-invalid': '原生正则无效',
-  'nested-variable-repetition': '可变量词嵌套，当前同步匹配无法可靠约束工作量',
-  'ambiguous-repeated-group': '重复分组内含分支，回溯可能成倍增加',
-  'zero-width-repetition': '重复分组可为空或含断言，暂未覆盖',
-  'repetition-size-limit': '重复次数超过当前匹配器上限',
-  'syntax-complexity-limit': '语法节点、分支或重复段数量超过上限',
-  'group-depth-limit': '分组嵌套超过支持深度',
-  'lookaround-or-named-group': '当前范围不含环视或具名分组',
-  'unsupported-character-class': '字符类语法尚未核实',
-  'unsupported-quantifier-syntax': '量词语法尚未核实',
-};
-
-type Label = keyof typeof en;
-const label = (key: Label, values: Record<string, string | number> = {}) => {
-  const dictionary = getLocale().startsWith('zh') ? zh : en;
-  return dictionary[key].replace(/\{([a-z]+)\}/g, (match, name) =>
-    values[name] === undefined ? match : String(values[name]));
-};
+const labels = [
+  "title",
+  "source",
+  "tab",
+  "selectTab",
+  "chooseTab",
+  "disconnected",
+  "stale",
+  "readFailed",
+  "featureOff",
+  "reading",
+  "nativeOff",
+  "nativeUnknown",
+  "all",
+  "partial",
+  "unknown",
+  "readComplete",
+  "readPartial",
+  "readUnknown",
+  "keyword",
+  "regexp",
+  "sender",
+  "account",
+  "enabled",
+  "supported",
+  "unsupported",
+  "degraded",
+  "ready",
+  "disabled",
+  "partly",
+  "unconfirmed",
+  "count",
+  "regexpCount",
+  "accountUnknown",
+  "samples",
+  "sampleCounts",
+  "samplesUnknown",
+  "nativeBranch",
+  "details",
+  "noDetails",
+  "omitted",
+  "supportedRule",
+  "unsupportedRule",
+  "previous",
+  "reasonUnknown",
+  "reasonOther",
+  "uncovered",
+  "source-unavailable",
+  "account-blacklist-is-not-danmaku-sender-list",
+  "unsafe-or-invalid-regexp",
+  "rule-size-limit",
+  "pattern-size-limit",
+  "invalid-native-regexp",
+  "backreference",
+  "lookaround",
+  "group",
+  "alternation",
+  "quantifier",
+  "unsupported-escape",
+  "work-limit",
+  "unsupported-flags",
+  "unsupported-feature",
+  "native-invalid",
+  "nested-variable-repetition",
+  "ambiguous-repeated-group",
+  "zero-width-repetition",
+  "repetition-size-limit",
+  "syntax-complexity-limit",
+  "group-depth-limit",
+  "lookaround-or-named-group",
+  "unsupported-character-class",
+  "unsupported-quantifier-syntax"
+] as const;
+type Label = typeof labels[number];
+const labelSet = new Set<string>(labels);
+const label = (key: Label, values: Record<string, string | number> = {}) => t('userFilter.' + key, values);
 const number = (value: unknown): string => Number.isSafeInteger(value) && (value as number) >= 0
   ? formatNumber(value as number) : '—';
 const code = (value: unknown): string => typeof value === 'string' && /^[a-z][a-z0-9-]{0,80}$/.test(value) ? value : '';
 const reason = (value: unknown): string => {
   const safe = code(value);
   if (!safe) return label('reasonUnknown');
-  return label(safe in en ? safe as Label : 'reasonOther');
+  return label(labelSet.has(safe) ? safe as Label : 'reasonOther');
 };
 
 export function userFilterSourceLabel(resourceId?: string, tabId?: number): string {

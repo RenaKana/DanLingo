@@ -22,6 +22,7 @@ test('credential scanning catches known UTF8/UTF16LE and common tokens without r
   const synthetic = 'not-a-real-' + 'credential-fixture';
   for (const encoding of ['utf8', 'utf16le']) assert.deepEqual(findSensitiveContent(Buffer.from(synthetic, encoding), [synthetic]), ['known-local-credential']);
   assert.deepEqual(findSensitiveContent(Buffer.from('sk-' + 'a'.repeat(40))), ['provider-key']);
+  assert.deepEqual(findSensitiveContent(Buffer.from('amux-' + 'a'.repeat(32))), ['provider-key']);
   assert.deepEqual(findSensitiveContent(Buffer.from('ghp_' + 'a'.repeat(36))), ['github-token']);
   assert.deepEqual(findSensitiveContent(Buffer.from('-----BEGIN ' + 'PRIVATE KEY-----')), ['private-key']);
   assert.deepEqual(findSensitiveContent(Buffer.from('https://' + 'user:password@example.invalid')), ['url-password']);

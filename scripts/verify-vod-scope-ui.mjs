@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { build as buildExtension } from 'wxt';
 import { loadPlaywright, browserLaunchOptions } from './browser-runtime.mjs';
 import { settingsSection } from './settings-navigation.mjs';
+import { catalogs } from '../src/i18n/catalogs.ts';
 
 const root = resolve('.artifacts/vod-scope-ui'); await mkdir(root, { recursive: true });
 const run = await mkdtemp(resolve(root, 'run-'));
@@ -153,12 +154,25 @@ try {
     assert.match(await host.locator('#native-stage').innerText(), /2/);
     assert.equal(await host.locator('#window-seconds').inputValue(), '5');
     assert.equal(await host.locator('#native-supply-host').isVisible(), true);
-    assert.match(await host.locator('#native-supply-host').innerText(), /未来 5 秒规划运行中/);
+    assert.equal(await host.locator('#native-supply-reason').innerText(), catalogs[code]['m_0b8707b8d4ba']);
     assert.equal(await host.locator('#hybrid-details').isVisible(), true);
     assert.equal(await host.locator('#hybrid-details details').count(), 0, 'Planning statistics share the outer progress disclosure');
     assert.equal((await host.locator('#hybrid-local-requests').innerText()).trim(), '4');
     assert.equal((await host.locator('#hybrid-online-requests').innerText()).trim(), '2');
     await screenshot(host, 'progress-' + code);
+    if (code === 'en') {
+      const before = await widget.evaluate(() => window.__vodFixture.state());
+      for (const language of ['de', 'ja', 'ar', 'zh-TW', 'en']) {
+        await page.evaluate(language => chrome.storage.local.set({ 'ui.locale.v1': language }), language);
+        await widget.waitForFunction(language => document.querySelector('#danlingo-progress').lang === language, language);
+        assert.equal(await host.locator('#native-supply-reason').innerText(), catalogs[language]['m_0b8707b8d4ba']);
+        assert.equal(await details.evaluate(el => el.open), true);
+        assert.deepEqual(await widget.evaluate(() => window.__vodFixture.state()), before);
+        assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true, language);
+        await screenshot(host, 'progress-localized-' + language);
+      }
+      report.checks.push('advance-plan-status-switches-language-without-reinitialization');
+    }
     if (code === 'zh-CN') {
       await widget.setViewportSize({ width: 390, height: 850 });
       assert.equal(await host.evaluate(el => el.scrollWidth <= el.clientWidth + 1), true,

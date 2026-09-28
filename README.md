@@ -4,7 +4,7 @@
 
 在 Niconico、YouTube、Bilibili 的原生页面翻译弹幕与直播聊天。支持自行配置兼容 Chat Completions 的服务，或在扩展内加载本地 GGUF 模型。
 
-**正式版本：0.5.0，可通过 [GitHub Releases](https://github.com/RenaKana/DanLingo/releases) 下载并手动加载。** Edge Add-ons 尚未上架；0.4.0 审核未通过，0.5.0 暂未提交。Chrome 商店上架暂缓。
+**正式版本：0.5.1，可通过 [GitHub Releases](https://github.com/RenaKana/DanLingo/releases) 下载并手动加载。** 本版补齐新设置、性能测试与弹幕状态的 20 种界面语言。Edge Add-ons 尚未公开上架，提交审核与 GitHub 发布分别进行；审核中不代表已通过。Chrome 商店上架暂缓。
 
 获取 ZIP 后按[安装说明](docs/USAGE.md#安装-zip)解压并加载扩展；也可按下文从源码构建。
 

@@ -51,7 +51,7 @@ export function findSensitiveContent(data, knownSecrets = [], approvedUrlHashes 
   for (const [name, pattern] of [
     ['private-key', /-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/],
     ['github-token', /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})\b/],
-    ['provider-key', /\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{32,}\b/],
+    ['provider-key', /\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{32,}|amux-[A-Za-z0-9_-]{24,})\b/],
     ['aws-access-key', /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/],
   ]) if (pattern.test(text)) findings.push(name);
   const credentialUrls = [...text.matchAll(/https?:\/\/[^\s/:"'<>]+:[^\s/@"'<>]+@[^\s"'<>]+/g)];

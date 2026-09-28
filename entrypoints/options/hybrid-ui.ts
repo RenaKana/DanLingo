@@ -1,4 +1,5 @@
 import type { Settings } from '../../src/core/types';
+import { localize, onLocaleChange, t } from '../../src/i18n';
 
 interface CapacityProfile {
   identity: string;
@@ -25,15 +26,16 @@ export function mountHybridUI(options: {
   reveal: (field: HTMLElement) => void;
 }) {
   const root = options.container;
-  root.innerHTML = `<label class="check"><input id="bilibili-hybrid" type="checkbox" aria-controls="hybrid-controls"><span>B站本地限量 + 在线分流</span></label>
+  root.innerHTML = `<label class="check"><input id="bilibili-hybrid" type="checkbox" aria-controls="hybrid-controls"><span data-i18n="hybrid.label">B站本地限量 + 在线分流</span></label>
     <div id="hybrid-controls" hidden>
       <div class="hybrid-fields">
-        <label><span>每5秒本地新输入条数</span><input id="hybrid-max-items" type="number" min="1" max="1000" step="1" inputmode="numeric"></label>
-        <label><span>每5秒本地新输入字符（UTF-16）</span><input id="hybrid-max-chars" type="number" min="1" max="60000" step="1" inputmode="numeric"></label>
+        <label><span data-i18n="hybrid.maxItems">每5秒本地新输入条数</span><input id="hybrid-max-items" type="number" min="1" max="1000" step="1" inputmode="numeric"></label>
+        <label><span data-i18n="hybrid.maxChars">每5秒本地新输入字符（UTF-16）</span><input id="hybrid-max-chars" type="number" min="1" max="60000" step="1" inputmode="numeric"></label>
       </div>
-      <div class="hybrid-actions"><button id="hybrid-apply" type="button" disabled>应用建议</button><span id="hybrid-status" class="subtle" role="status" aria-live="polite"></span></div>
-      <p class="subtle">需启用上方5秒规划并配置两端；本地超额、忙满或未就绪时使用在线服务，沿用在线每日请求上限（0 不限）。</p>
+      <div class="hybrid-actions"><button id="hybrid-apply" type="button" data-i18n="hybrid.apply" disabled>应用建议</button><span id="hybrid-status" class="subtle" role="status" aria-live="polite"></span></div>
+      <p class="subtle" data-i18n="hybrid.note">需启用上方5秒规划并配置两端；本地超额、忙满或未就绪时使用在线服务，沿用在线每日请求上限（0 不限）。</p>
     </div>`;
+  localize(root);
   const enabled = root.querySelector<HTMLInputElement>('#bilibili-hybrid')!;
   const controls = root.querySelector<HTMLElement>('#hybrid-controls')!;
   const items = root.querySelector<HTMLInputElement>('#hybrid-max-items')!;
@@ -41,7 +43,7 @@ export function mountHybridUI(options: {
   const apply = root.querySelector<HTMLButtonElement>('#hybrid-apply')!;
   const status = root.querySelector<HTMLElement>('#hybrid-status')!;
   let profiles: CapacityProfile[] = [];
-  let identity = '', recommendation: CapacityProfile | undefined, revision = 0, error = '';
+  let identity = '', recommendation: CapacityProfile | undefined, revision = 0, errorKey = '';
   let pending: Promise<void> | undefined;
 
   function valid() {
@@ -63,12 +65,13 @@ export function mountHybridUI(options: {
     for (const field of [items, chars]) field.disabled = enabled.checked && !!pending;
     apply.disabled = !enabled.checked || !!pending || !recommendation || !identity;
     if (!enabled.checked) { status.textContent = ''; return; }
-    if (pending) { status.textContent = '正在核对当前配置…'; return; }
-    if (error) { status.textContent = error; return; }
-    if (!identity) { status.textContent = '当前配置尚无容量身份'; return; }
+    if (pending) { status.textContent = t('hybrid.pending'); return; }
+    if (errorKey) { status.textContent = t(errorKey); return; }
+    if (!identity) { status.textContent = t('hybrid.noIdentity'); return; }
     const current = matched();
-    const suggestion = recommendation ? `建议 ${recommendation.maxItems} 条 / ${recommendation.maxChars} 字符` : '暂无测试建议，请手填上限或主动运行现有性能测试';
-    status.textContent = current ? `${current.manual ? '手动上限' : '已应用上限'} · ${suggestion}` : `尚未应用上限 · ${suggestion}`;
+    const suggestion = recommendation ? t('hybrid.suggestion', { items: recommendation.maxItems, chars: recommendation.maxChars }) : t('hybrid.noSuggestion');
+    const state = current ? t(current.manual ? 'hybrid.manualLimit' : 'hybrid.appliedLimit') : t('hybrid.notApplied');
+    status.textContent = t('hybrid.status', { state, suggestion });
   }
   const read = (): HybridDraft => ({ enabled: enabled.checked, profiles: [...profiles] });
   function saveProfile(profile: CapacityProfile) {
@@ -84,7 +87,7 @@ export function mountHybridUI(options: {
   }
   enabled.addEventListener('change', () => {
     options.changed(); options.enabledChanged();
-    if (enabled.checked) void refresh(); else { revision++; identity = ''; recommendation = undefined; pending = undefined; error = ''; render(); }
+    if (enabled.checked) void refresh(); else { revision++; identity = ''; recommendation = undefined; pending = undefined; errorKey = ''; render(); }
   });
   for (const input of [items, chars]) input.addEventListener('input', manualEdit);
   apply.addEventListener('click', () => {
@@ -94,12 +97,12 @@ export function mountHybridUI(options: {
 
   async function refresh(): Promise<void> {
     const ticket = ++revision;
-    if (!enabled.checked) { identity = ''; recommendation = undefined; pending = undefined; error = ''; render(); return; }
-    error = '';
+    if (!enabled.checked) { identity = ''; recommendation = undefined; pending = undefined; errorKey = ''; render(); return; }
+    errorKey = '';
     const request = (async () => {
       let draft: Settings;
       try { draft = options.readSettings(); }
-      catch { if (ticket === revision) { identity = ''; recommendation = undefined; error = '请先修正当前配置'; } return; }
+      catch { if (ticket === revision) { identity = ''; recommendation = undefined; errorKey = 'hybrid.fixConfig'; } return; }
       try {
         const reply = await options.requestCapacity(draft);
         if (ticket !== revision || !enabled.checked) return;
@@ -112,7 +115,7 @@ export function mountHybridUI(options: {
         if (changed) setFields(current ?? recommendation);
         render();
       } catch {
-        if (ticket === revision) { identity = ''; recommendation = undefined; error = '容量读取失败，请重试'; }
+        if (ticket === revision) { identity = ''; recommendation = undefined; errorKey = 'hybrid.capacityFailed'; }
       }
     })();
     pending = request;
@@ -121,7 +124,7 @@ export function mountHybridUI(options: {
     if (ticket === revision) { pending = undefined; render(); }
   }
   function fill(next?: HybridDraft) {
-    ++revision; pending = undefined; identity = ''; recommendation = undefined; error = '';
+    ++revision; pending = undefined; identity = ''; recommendation = undefined; errorKey = '';
     enabled.checked = next?.enabled === true;
     profiles = Array.isArray(next?.profiles) ? retainProfiles(next.profiles) : [];
     setFields(); render();
@@ -137,5 +140,7 @@ export function mountHybridUI(options: {
     }
     if (!valid()) { options.reveal(items.validity.valid ? chars : items); throw new Error('HYBRID_CAPACITY_INVALID'); }
   }
+  const unsubscribe = onLocaleChange(() => { localize(root); render(); });
+  window.addEventListener('pagehide', unsubscribe, { once: true });
   return { read, fill, refresh, ensureSelected, enabled: () => enabled.checked };
 }

@@ -33,6 +33,36 @@ test('all twenty offline catalogs have identical nonempty keys and interpolation
   }
 });
 
+test('every source message is included in all packaged catalogs, including new named UI keys', async () => {
+  const directory = new URL('../../src/i18n/', import.meta.url);
+  for (const file of (await readdir(directory)).filter(name => name.endsWith('-messages.json'))) {
+    const messages = JSON.parse(await readFile(new URL(file, directory), 'utf8'));
+    for (const [key, value] of Object.entries(messages)) {
+      assert.equal(catalogs['zh-CN'][key], value, `${file}:${key} source catalog must be regenerated`);
+      for (const { code } of LOCALES) assert.ok(catalogs[code][key]?.trim(), `${code}:${key}`);
+    }
+  }
+});
+
+test('new feature descriptions are translated rather than copied wholesale from English', () => {
+  const keys = ['performance.historyNote', 'performance.windowNote', 'performance.draftNote',
+    'progress.supply.hybridScope', 'hybrid.note', 'userFilter.uncovered',
+    'performance.controls.onlineNote', 'settings.bilibiliOwnedReleaseHint'];
+  for (const { code } of LOCALES.filter(item => item.code !== 'en')) {
+    for (const key of keys) {
+      assert.ok(catalogs[code][key]?.trim(), `${code}:${key}`);
+      assert.notEqual(catalogs[code][key], catalogs.en[key], `${code}:${key}`);
+    }
+    if (!['zh-CN', 'zh-TW', 'ja'].includes(code)) {
+      for (const [key, value] of Object.entries(catalogs[code])) {
+        if (/^(?:performance\.|hybrid\.|userFilter\.|progress\.supply\.)/.test(key)) {
+          assert.doesNotMatch(value, /\p{Script=Han}/u, `${code}:${key} contains untranslated Chinese`);
+        }
+      }
+    }
+  }
+});
+
 test('video preparation labels stay localized with distinct candidate, scope and native-stage counts', () => {
   for (const key of ['settings.videoScopeAuto', 'settings.videoScopeNote', 'settings.videoBatchSize', 'settings.sharedBatchSize',
     'progress.prepared', 'progress.coverage', 'progress.filtered', 'progress.nativeStage', 'progress.hidden', 'progress.autoWindow']) {
@@ -51,7 +81,11 @@ test('every UI message reference has an offline catalog entry', async () => {
       const path = new URL(entry.name + (entry.isDirectory() ? '/' : ''), directory);
       if (entry.isDirectory()) await inspect(path);
       else if (/\.(ts|html)$/.test(entry.name)) {
-        for (const match of (await readFile(path, 'utf8')).matchAll(/\bm_[a-f0-9]{12}\b/g)) assert.ok(Object.hasOwn(catalogs.en, match[0]), path.pathname + ':' + match[0]);
+        const source = await readFile(path, 'utf8');
+        const keys = [...source.matchAll(/\bm_[a-f0-9]{12}\b/g)].map(match => match[0]);
+        for (const match of source.matchAll(/\bt\(\s*['"]([^'"\n]+)['"]\s*[,)]/g)) keys.push(match[1]);
+        for (const match of source.matchAll(/data-i18n(?:-title|-placeholder|-aria-label)?=['"]([^'"${}\n]+)['"]/g)) keys.push(match[1]);
+        for (const key of keys) assert.ok(Object.hasOwn(catalogs.en, key), path.pathname + ':' + key);
       }
     }
   }

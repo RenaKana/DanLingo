@@ -3,12 +3,13 @@ import { createProgress } from '../src/ui/progress';
 import { DEFAULT_SETTINGS } from '../src/core/config';
 import type { SchedulerStats } from '../src/core/scheduler';
 import type { Settings } from '../src/core/types';
+import { localizeMessage } from '../src/i18n/text';
 
 const settings = { ...DEFAULT_SETTINGS, enabled: true, displayMode: 'translated' as const, prefetchSeconds: 5 };
 const saves: Array<{ scope: Settings['translationScope']; seconds: number }> = [];
 let retries = 0;
 let progress: ReturnType<typeof createProgress>;
-const nativeSupply = { visible: true, planned: true, state: 'running', status: '未来 5 秒规划运行中',
+const nativeSupply = { visible: true, planned: true, state: 'running', status: () => localizeMessage('缺译跳过，视频播放不受影响'),
   actionText: '', actionHidden: true, actionDisabled: true, candidates: 12, selected: 8,
   submitted: 6, cacheHits: 2, adopted: 4, skipped: 1,
   hybrid: {

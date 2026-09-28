@@ -75,6 +75,7 @@ export function mountPerformanceHistoryUI(container: HTMLElement) {
     const details = document.createElement('details');
     details.open = expandedIds.has(record.id);
     details.addEventListener('toggle', () => {
+      if (!details.isConnected) return;
       if (details.open) expandedIds.add(record.id);
       else expandedIds.delete(record.id);
     });
@@ -85,12 +86,12 @@ export function mountPerformanceHistoryUI(container: HTMLElement) {
     });
     const summaryLine = document.createElement('span'); summaryLine.className = 'history-summary-line';
     const model = document.createElement('span'); model.className = 'history-model'; model.textContent = record.model;
-    const state = document.createElement('span'); state.className = 'history-state'; state.textContent = record.state === 'stopped' ? '已停止' : '已完成';
+    const state = document.createElement('span'); state.className = 'history-state'; state.textContent = t(record.state === 'stopped' ? 'm_f006455e3baf' : 'm_f28461bb49c8');
     const time = document.createElement('span'); time.className = 'history-time'; time.textContent = formatDate(record.wallStartedAt);
     const remove = document.createElement('button'); remove.className = 'history-delete'; remove.type = 'button';
-    remove.textContent = deleting.has(record.id) ? '删除中…' : '删除';
-    remove.setAttribute('aria-label', `删除测试记录：${record.model}`);
-    remove.title = '删除此记录'; remove.disabled = deleting.has(record.id);
+    remove.textContent = t(deleting.has(record.id) ? 'performance.history.deleting' : 'performance.history.delete');
+    remove.setAttribute('aria-label', t('performance.history.deleteAria', { model: record.model }));
+    remove.title = t('performance.history.deleteTitle'); remove.disabled = deleting.has(record.id);
     remove.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
@@ -104,49 +105,50 @@ export function mountPerformanceHistoryUI(container: HTMLElement) {
 
     const metrics = document.createElement('div'); metrics.className = 'history-metrics';
     metrics.append(
-      item('测试并发', number(record.config.concurrency)),
-      item('首条合格译文', ms(record.timing.firstValidMs)),
-      item('1 / 2 秒内合格', `${number(record.timing.readyWithin1s)} / ${number(record.timing.readyWithin2s)}`),
-      item('5 秒内 / 计划', `${record.timing.readyWithin5s} / ${record.timing.plannedItems}`),
-      item('请求平均', ms(record.meanMs)),
-      item('请求 P95', ms(record.p95Ms)),
-      item('合格条 / 秒', number(record.timing.itemsPerSecond)),
+      item(t('performance.history.concurrency'), number(record.config.concurrency)),
+      item(t('performance.firstValid'), ms(record.timing.firstValidMs)),
+      item(t('performance.history.within2'), `${number(record.timing.readyWithin1s)} / ${number(record.timing.readyWithin2s)}`),
+      item(t('performance.within5'), `${number(record.timing.readyWithin5s)} / ${number(record.timing.plannedItems)}`),
+      item(t('performance.mean'), ms(record.meanMs)),
+      item(t('performance.p95'), ms(record.p95Ms)),
+      item(t('performance.history.itemsPerSecond'), number(record.timing.itemsPerSecond)),
     );
 
     const c = record.config, m = record.measurement, runtime = m.localRuntime;
-    const mode = c.mode === 'load' ? '负载回放' : '基础延迟';
-    const strategy = c.strategy === 'superchat' ? 'Super Chat' : '普通弹幕';
+    const mode = t(c.mode === 'load' ? 'm_00e8b7044637' : 'm_b72f1335a2cd');
+    const strategy = c.strategy === 'superchat' ? 'Super Chat' : t('m_03287b455f2d');
     const batch = c.mode === 'latency' ? 1 : Math.min(c.batchSize, m.batchSize);
     const conditions = document.createElement('div'); conditions.className = 'history-conditions';
     const language = m.sourceLanguage === 'auto'
-      ? `自动（样本 ${m.sampleLanguage}） → ${m.targetLanguage}`
+      ? `${t('performance.history.autoSample', { sample: m.sampleLanguage })} → ${m.targetLanguage}`
       : `${m.sourceLanguage} → ${m.targetLanguage}`;
-    const prompt = runtime?.promptMode === 'hy-mt' ? 'HY-MT' : runtime?.promptMode === 'json' ? '结构化提示' : runtime ? '自动' : '—';
+    const prompt = runtime?.promptMode === 'hy-mt' ? 'HY-MT' : runtime?.promptMode === 'json' ? t('performance.history.structuredPrompt') : runtime ? t('performance.option.auto') : '—';
     const localTemplate = m.localTranslationProfile === 'seed-x' ? 'Seed-X'
       : m.localTranslationProfile === 'translategemma' ? 'TranslateGemma' : prompt;
-    const profile = ({ deepseek: 'DeepSeek', minimax: 'MiniMax', gemini: 'Gemini', 'chat-completions': '兼容接口' } as Record<string, string>)[m.profile] ?? m.profile;
-    const thinking = ({ default: '默认', off: '关闭', on: '开启', minimal: '最少', low: '低', medium: '中', high: '高', max: '最大', xhigh: '超高' } as Record<string, string>)[m.thinkingEffort] ?? m.thinkingEffort;
+    const profile = ({ deepseek: 'DeepSeek', minimax: 'MiniMax', gemini: 'Gemini', 'chat-completions': t('performance.history.compatibleProfile') } as Record<string, string>)[m.profile] ?? m.profile;
+    const thinkingKey = ({ default: 'default', off: 'off', on: 'on', minimal: 'minimal', low: 'low', medium: 'medium', high: 'high', max: 'max', xhigh: 'xhigh' } as Record<string, string>)[m.thinkingEffort];
+    const thinking = thinkingKey ? t('performance.history.thinking.' + thinkingKey) : m.thinkingEffort;
     conditions.append(
-      item('语言', language), item('模式', `${mode} · ${strategy}`), item('任务数', number(c.count)),
-      item('每任务批量', number(batch)), item('到达间隔', c.mode === 'load' ? `${number(c.arrivalIntervalMs)} ms` : '不适用'),
-      item('请求超时', `${number(m.requestTimeoutMs)} ms`), item('成功时限', `${number(m.budgetMs)} ms`),
-      item('配置 / 思考', `${profile} / ${thinking}`),
+      item(t('performance.history.language'), language), item(t('performance.history.mode'), `${mode} · ${strategy}`), item(t('performance.history.tasks'), number(c.count)),
+      item(t('performance.history.batch'), number(batch)), item(t('performance.history.arrival'), c.mode === 'load' ? `${number(c.arrivalIntervalMs)} ms` : t('performance.history.notApplicable')),
+      item(t('performance.history.timeout'), `${number(m.requestTimeoutMs)} ms`), item(t('performance.history.budget'), `${number(m.budgetMs)} ms`),
+      item(t('performance.history.profileThinking'), `${profile} / ${thinking}`),
     );
     if (record.backend === 'local') {
       conditions.append(
-        item('本地实际并行', runtime ? number(runtime.parallel) : m.localCapacity === undefined ? '未记录' : number(m.localCapacity)),
-        item('本地上下文', runtime ? number(runtime.contextTokens) : m.localContextTokens === undefined ? '未记录' : number(m.localContextTokens)),
-        item('本地模板', localTemplate),
+        item(t('performance.history.localParallel'), runtime ? number(runtime.parallel) : m.localCapacity === undefined ? t('performance.history.unrecorded') : number(m.localCapacity)),
+        item(t('performance.history.localContext'), runtime ? number(runtime.contextTokens) : m.localContextTokens === undefined ? t('performance.history.unrecorded') : number(m.localContextTokens)),
+        item(t('performance.history.localTemplate'), localTemplate),
       );
     }
     const sample = document.createElement('div'); sample.className = 'history-sample';
-    sample.textContent = `固定样本 v1 · ${record.backend === 'local' ? '本地模型' : '在线模型'}`;
+    sample.textContent = t('performance.history.fixedSample', { backend: t(record.backend === 'local' ? 'performance.controls.localModel' : 'performance.controls.onlineModel') });
 
     const outcomes = document.createElement('div'); outcomes.className = 'history-outcomes';
     outcomes.append(
-      item('成功请求 / 实际请求', `${number(record.successRequests)} / ${number(record.actualRequests)}`),
-      item('失败', number(record.failed)), item('超时', number(record.timeout)),
-      item('取消', number(record.cancelled)), item('未发送任务', number(record.unsent)),
+      item(t('performance.history.successRequests'), `${number(record.successRequests)} / ${number(record.actualRequests)}`),
+      item(t('performance.history.failed'), number(record.failed)), item(t('performance.history.timeoutCount'), number(record.timeout)),
+      item(t('performance.history.cancelled'), number(record.cancelled)), item(t('performance.history.unsent'), number(record.unsent)),
     );
     body.append(expandedHeader, metrics, conditions, sample, outcomes);
     details.append(summary, body);
@@ -158,9 +160,9 @@ export function mountPerformanceHistoryUI(container: HTMLElement) {
     rows.replaceChildren();
     records = records.filter(record => !deletedIds.has(record.id));
     for (const record of records) rows.append(renderRecord(record));
-    status.textContent = loadFailed ? t('performance.historyFailed') : records.length ? `已保存 ${records.length} 条测试` : t('performance.empty');
+    status.textContent = loadFailed ? t('performance.historyFailed') : records.length ? t('performance.loadSaved', { count: records.length }) : t('performance.empty');
     status.className = loadFailed ? 'status error' : 'subtle';
-    actionStatus.textContent = actionFailed ? '操作失败，请重试。' : '';
+    actionStatus.textContent = actionFailed ? t('performance.history.actionFailed') : '';
     actionStatus.className = actionFailed ? 'status error' : 'status';
 
     const terminal = current && current.state !== 'running';
@@ -217,7 +219,7 @@ export function mountPerformanceHistoryUI(container: HTMLElement) {
     section.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   });
 
-  const unsubscribe = onLocaleChange(render);
+  const unsubscribe = onLocaleChange(() => { localize(section); render(); });
   window.addEventListener('pagehide', () => { disposed = true; unsubscribe(); }, { once: true });
   render();
   return {

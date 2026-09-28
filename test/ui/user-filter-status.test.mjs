@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { setLocale } from '../../src/i18n/text.ts';
+import { setLocale, t } from '../../src/i18n/text.ts';
+import { LOCALES } from '../../src/i18n/locale.ts';
 import { userFilterSourceLabel, userFilterStatusText } from '../../src/ui/user-filter-status.ts';
 
 const categories = () => ({
@@ -49,16 +50,29 @@ test('disabled, disconnected, stale, failed reads and incomplete coverage are di
     readEvidence: { listComplete: false } } }).read, '规则列表不完整');
 });
 
-test('unknown locale falls back to English and untrusted source/rule fields do not render', () => {
+test('localized rule details keep untrusted source and rule fields private', () => {
   setLocale('de');
   const result = userFilterStatusText({ connected: true, stale: false, featureEnabled: true,
     resourceId: '<private video text>', summary: { nativeEnabled: true, readEvidence: { listComplete: false },
       categories: { ...categories(), regexp: { ...categories().regexp,
         details: [{ id: '<script>', supported: false, reason: 'unexpected private rule body',
           oldReason: 'private comment', features: ['private body'], flags: 'private', nativeValid: false }] } } } });
-  assert.equal(result.source, 'Video');
-  assert.equal(result.state, 'Coverage unconfirmed');
-  assert.match(result.details[0], /R\?.*Reason unavailable/);
+  assert.equal(result.source, t('userFilter.source'));
+  assert.equal(result.state, t('userFilter.unknown'));
+  assert.ok(result.details[0].startsWith('R?'));
+  assert.ok(result.details[0].includes(t('userFilter.reasonUnknown')));
   assert.doesNotMatch(JSON.stringify(result), /<script>|private body|private comment|unexpected private rule body/);
-  assert.equal(userFilterSourceLabel('av1:cid2', 3), 'av1 · cid2 · Tab 3');
+  assert.equal(userFilterSourceLabel('av1:cid2', 3), 'av1 · cid2 · ' + t('userFilter.tab') + ' 3');
+});
+
+test('all supported locales render rule status from the shared catalog', () => {
+  for (const { code } of LOCALES) {
+    setLocale(code);
+    const view = userFilterStatusText({ connected: false, stale: false, featureEnabled: true });
+    assert.equal(view.title, t('userFilter.title'));
+    assert.equal(view.state, t('userFilter.disconnected'));
+    assert.equal(view.rows[0].label, t('userFilter.keyword'));
+    assert.doesNotMatch(JSON.stringify(view), /userFilter\./);
+  }
+  setLocale('zh-CN');
 });

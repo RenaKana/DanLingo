@@ -1,6 +1,13 @@
 // Rebuild packaged browser metadata and apply reviewed wording without network access.
 import { readFile, readdir, mkdir, writeFile } from 'node:fs/promises';
 const source = JSON.parse(await readFile('src/i18n/locales/zh-CN.json', 'utf8'));
+// A stale source catalog used to let newly added UI messages bypass release checks.
+for (const file of (await readdir('src/i18n')).filter(name => name.endsWith('-messages.json'))) {
+  const messages = JSON.parse(await readFile('src/i18n/' + file, 'utf8'));
+  for (const [key, value] of Object.entries(messages)) {
+    if (source[key] !== value) throw new Error('Stale source catalog: ' + file + ':' + key + '; run i18n-catalog.mjs first');
+  }
+}
 const keys = Object.keys(source).sort();
 const parameters = value => [...value.matchAll(/\{([A-Za-z][A-Za-z0-9_]*)\}/g)].map(match => match[1]).sort().join(',');
 for (const file of (await readdir('src/i18n/locales')).filter(name => name.endsWith('.json'))) {

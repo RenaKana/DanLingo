@@ -13,7 +13,7 @@ import { adapterDiagnostic, adapterDiagnosticText, diagnosticCandidate, DIAGNOST
 import { BUILD_ID } from '../src/core/build-identity';
 import { createProgress } from '../src/ui/progress';
 import { mountBilibiliFullscreenToggle } from '../src/ui/bilibili-fullscreen-toggle';
-import { t } from '../src/i18n/text.ts';
+import { formatNumber, getLocale, localizeMessage, t } from '../src/i18n/text.ts';
 import { bindLocalizedText } from '../src/ui/localized-text';
 import { messageFromSource } from '../src/i18n/wire.ts';
 import { BilibiliExperimentWatch, parseExperimentFilter, validExperimentRange, type ExperimentRange } from '../src/diagnostics/bilibili-experiment-watch';
@@ -478,10 +478,10 @@ export default defineContentScript({
         };
         const reasons = Object.entries(plannedListReport.rejected ?? {})
           .filter((entry): entry is [string, number] => typeof entry[1] === 'number' && entry[1] > 0)
-          .sort((a, b) => b[1] - a[1]).slice(0, 2)
-          .map(([reason, count]) => `${labels[reason] ?? reason} ${count}`);
+          .sort((a, b) => b[1] - a[1]).slice(0, 2);
         if (reasons.length) return { state: 'running', reason: 'no-selected-candidates',
-          text: `尚无入选；累计未入选：${reasons.join('、')}` };
+          text: () => `尚无入选；累计未入选：${new Intl.ListFormat(getLocale(), { style: 'narrow', type: 'conjunction' }).format(
+            reasons.map(([reason, count]) => `${labels[reason] ? localizeMessage(labels[reason]) : reason} ${formatNumber(count)}`))}` };
       }
       return { state: 'running', reason: '', text: '缺译跳过，视频播放不受影响' };
     }
@@ -491,16 +491,24 @@ export default defineContentScript({
         const counts = plannedReport?.counts ?? {};
         const stats = scheduler.getStats();
         const status = plannedStatus();
-        progress.updateNativeSupply({ visible, planned: true, state: status.state, status: status.text, actionText: '', actionHidden: true, actionDisabled: true,
+        progress.updateNativeSupply({ visible, planned: true, state: status.state,
+          status: () => localizeMessage(typeof status.text === 'function' ? status.text() : status.text),
+          actionText: '', actionHidden: true, actionDisabled: true,
           candidates: stats.candidates, selected: plannedListReport?.totals?.selected ?? plannedListReport?.selected ?? 0,
           submitted: plannedInputs, cacheHits: stats.cacheHits, adopted: counts.adopted ?? 0, skipped: counts.ownedSuppressed ?? 0,
           hybrid: settings.bilibiliHybrid?.enabled ? hybridStats ?? null : null });
         return;
       }
       const stateLabel = { disabled: '未启动', waiting: '待启动', armed: '已准备', running: '运行中', paused: '已暂停', draining: '收尾中' };
-      progress.updateNativeSupply({ visible, planned: false, state: nativeSupply?.active ? nativeSupply.state : 'disabled',
-        status: nativeSupply?.active ? `${stateLabel[nativeSupply.state]} ${nativeSupply.displayReason}` : '未启动',
-        actionText: nativeSupply?.grant ? '结束实验' : '启动0–45秒实验', actionHidden: false, actionDisabled: nativeUiBusy });
+      const supplyActive = !!nativeSupply?.active;
+      const supplyState = supplyActive ? nativeSupply!.state : 'disabled';
+      const displayReason = supplyActive ? nativeSupply!.displayReason : '';
+      const hasGrant = !!nativeSupply?.grant;
+      progress.updateNativeSupply({ visible, planned: false, state: supplyState,
+        status: () => supplyActive
+          ? `${localizeMessage(stateLabel[supplyState])} ${messageFromSource(displayReason) ? localizeMessage(displayReason) : displayReason}`.trim()
+          : localizeMessage('未启动'),
+        actionText: () => localizeMessage(hasGrant ? '结束实验' : '启动0–45秒实验'), actionHidden: false, actionDisabled: nativeUiBusy });
       nativeSupplyButton.title = '';
     }
     if (nativeSupplyButton) nativeSupplyButton.onclick = async () => {

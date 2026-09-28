@@ -10,8 +10,8 @@ type NativeSupplyProgressView = {
   visible: boolean;
   planned: boolean;
   state: string;
-  status: string;
-  actionText: string;
+  status: string | (() => string);
+  actionText: string | (() => string);
   actionHidden: boolean;
   actionDisabled: boolean;
   candidates?: unknown;
@@ -48,7 +48,7 @@ export function createProgress(onChange: (scope: Settings['translationScope'], s
     <label><span data-i18n="m_84fe6685eb01">预译范围</span><select id="scope"><option value="auto" data-i18n="settings.videoScopeAuto">自动选择</option><option value="all" data-i18n="m_b99a7b08598a">整个评论池</option><option value="window" data-i18n="m_1927c994bd3f">提前 N 秒</option></select></label>
     <div id="window-row" hidden><label><span data-i18n="m_728e91804a2f">提前</span><input id="window-seconds" type="number" min="5" max="3600" step="1" aria-label="提前翻译秒数" data-i18n-aria-label="m_26c37c49fbd5"><span data-i18n="m_9dcdc2b289b9">秒</span></label><button id="apply-window" type="button" data-i18n="m_63c73c4730f4">应用</button></div>
     <p id="note" role="status" hidden></p><button id="retry" type="button" hidden data-i18n="m_70b1aaf12ba1">重试失败项</button></div>
-    <section id="native-supply-host" hidden aria-label="提前供给状态">
+    <section id="native-supply-host" hidden aria-label="提前供给状态" data-i18n-aria-label="progress.supply.label">
       <div class="supply-head"><div class="supply-heading"><strong id="native-supply-title"></strong><span id="native-supply-status" class="supply-status"></span></div>
         <button id="native-supply-action" type="button" hidden></button><p id="native-supply-reason" class="supply-reason" role="status"></p></div>
       <dl class="supply-grid" id="supply-metrics">
@@ -135,8 +135,8 @@ export function createProgress(onChange: (scope: Settings['translationScope'], s
       nativeSupplyHost.hidden = !view.visible;
       bindLocalizedText($('native-supply-title'), () => t(view.planned ? 'progress.supply.plannedTitle' : 'progress.supply.strictTitle'));
       bindLocalizedText($('native-supply-status'), () => t('progress.supply.state.' + view.state));
-      bindLocalizedText($('native-supply-reason'), () => view.status);
-      nativeSupplyButton.textContent = view.actionText;
+      bindLocalizedText($('native-supply-reason'), () => typeof view.status === 'function' ? view.status() : view.status);
+      bindLocalizedText(nativeSupplyButton, () => typeof view.actionText === 'function' ? view.actionText() : view.actionText);
       nativeSupplyButton.hidden = view.actionHidden;
       nativeSupplyButton.disabled = view.actionDisabled;
       const formatCount = (value: unknown) => typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
