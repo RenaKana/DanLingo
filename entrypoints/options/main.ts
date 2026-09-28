@@ -202,10 +202,10 @@ function localErrorMessage(error: unknown, fallback = t('m_ddc0d10923e8')): stri
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof ConnectionError) return localizeMessage(connectionErrorMessage(error));
   const hybridErrors: Record<string, string> = {
-    HYBRID_PLAN_REQUIRED: '请先启用上方的 B站5秒弹幕规划。',
-    HYBRID_KEY_REQUIRED: '请配置在线服务 API Key。',
-    HYBRID_CAPACITY_REQUIRED: '请先填写本地上限，或应用当前配置的测试建议。',
-    HYBRID_CAPACITY_INVALID: '请填写有效的本地上限。',
+    HYBRID_PLAN_REQUIRED: t('hybrid.error.HYBRID_PLAN_REQUIRED'),
+    HYBRID_KEY_REQUIRED: t('hybrid.error.HYBRID_KEY_REQUIRED'),
+    HYBRID_CAPACITY_REQUIRED: t('hybrid.error.HYBRID_CAPACITY_REQUIRED'),
+    HYBRID_CAPACITY_INVALID: t('hybrid.error.HYBRID_CAPACITY_INVALID'),
   };
   if (error instanceof Error) { const label = hybridErrors[error.message]; if (label) return label; }
   if (error instanceof Error && error.message === 'unsupported-thinking-effort') return t('m_35f6bd1f62ce');

@@ -10,7 +10,7 @@ const root = resolve('.artifacts/edge-store', version);
 await mkdir(root, { recursive: true });
 const run = await mkdtemp(resolve(root, 'browser-'));
 const extension = resolve(run, 'extension');
-const build = resolve('.output/chrome-mv3');
+const build = resolve(process.env.DANLINGO_TEST_EXTENSION || '.output/chrome-mv3');
 const baseline = process.env.DANLINGO_UPGRADE_BASELINE;
 await cp(baseline ? resolve(baseline) : build, extension, { recursive: true });
 const report = { status: 'RUNNING', version, evidence: 'INSTALLED_EDGE_ISOLATED_UNPACKED_EXTENSION', checks: [], screenshots: [], errors: [],

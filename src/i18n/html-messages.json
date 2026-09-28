@@ -1,10 +1,10 @@
 {
-  "settings.bilibiliOwnedRelease": "zh-CN",
+  "settings.bilibiliOwnedRelease": "B站5秒弹幕规划",
   "settings.bilibiliOwnedReleaseHint": "提前5秒规划普通弹幕，减少翻译量；缺译跳过。沿用当前翻译服务、原生屏蔽、轨道与速度设置，不控制视频播放。",
   "settings.bilibiliNativeTranslationOnly": "B站仅显示合格译文（实验）",
   "settings.bilibiliNativeTranslationOnlyHint": "普通文字缺译则隐藏；已识别的目标语和表情保留。需启动有预算的本地实验；兼容失效时暂停视频。",
   "settings.bilibiliShadowScheduler": "Bilibili 5 秒弹幕预测预译（实验）",
-  "settings.bilibiliUserFilters": "zh-CN",
+  "settings.bilibiliUserFilters": "Bilibili 用户屏蔽规则前置过滤",
   "m_007bad84520c": "服务地址与协议：正在读取…",
   "m_00c1d49d7e67": "正在读取在线请求计数…",
   "m_02739d1bae8b": "服务地址",

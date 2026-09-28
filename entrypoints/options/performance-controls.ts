@@ -4,6 +4,7 @@ import { normalizeLocalConfig, resolveLocalConfig } from '../../src/local/config
 import type { PerformanceConfig } from '../../src/translation/performance-test';
 import { TARGET_LANGUAGES } from '../../src/ui/languages';
 import { localize, t, UiError } from '../../src/i18n';
+import { bindLocalizedText } from '../../src/ui/localized-text';
 
 /** Test-only drafts: never write the saved translation configuration. */
 export function mountPerformanceControls(panel: HTMLElement, configureOnline: () => void) {
@@ -15,12 +16,12 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
     .performance-controls fieldset{border:0;padding:0;margin:0 0 12px;min-width:0}
     .performance-preset{display:flex;gap:8px;align-items:center;margin:10px 0}.performance-controls .subtle{margin:6px 0 12px}
   </style>
-  <div class="grid" style="margin-bottom:12px"><label><span>测试类型</span><select id="performance-backend"><option value="local">本地模型</option><option value="online">在线模型</option></select></label></div>
+  <div class="grid" style="margin-bottom:12px"><label><span data-i18n="performance.controls.testType">测试类型</span><select id="performance-backend"><option value="local" data-i18n="performance.controls.localModel">本地模型</option><option value="online" data-i18n="performance.controls.onlineModel">在线模型</option></select></label></div>
   <fieldset id="performance-online-field" hidden>
-    <label><span>在线模型</span><input id="performance-online-model" type="text" list="performance-online-models" placeholder="选择或填写模型名称" autocomplete="off" maxlength="200" required></label>
+    <label><span data-i18n="performance.controls.onlineModel">在线模型</span><input id="performance-online-model" type="text" list="performance-online-models" placeholder="选择或填写模型名称" data-i18n-placeholder="performance.controls.onlineModelPlaceholder" autocomplete="off" maxlength="200" required></label>
     <datalist id="performance-online-models"></datalist>
-    <div class="row" style="margin-top:8px"><span id="performance-online-service" class="subtle"></span><button id="performance-online-configure" type="button">配置在线服务</button></div>
-    <p class="subtle">沿用翻译服务中的地址、密钥和思考设置。测试可能产生费用，结果会自动保存。</p>
+    <div class="row" style="margin-top:8px"><span id="performance-online-service" class="subtle"></span><button id="performance-online-configure" type="button" data-i18n="performance.controls.configureOnline">配置在线服务</button></div>
+    <p class="subtle" data-i18n="performance.controls.onlineNote">沿用翻译服务中的地址、密钥和思考设置。测试可能产生费用，结果会自动保存。</p>
   </fieldset>
   <fieldset id="performance-model-field" hidden><legend data-i18n="performance.models"></legend>
     <div id="performance-models" class="performance-models"></div><div id="performance-models-note" class="subtle"></div>
@@ -30,14 +31,14 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
     <label><span data-i18n="m_315ac7f2fde9"></span><select id="performance-mode"><option value="latency" data-i18n="m_b72f1335a2cd"></option><option value="load" data-i18n="m_00e8b7044637"></option></select></label>
     <label><span data-i18n="performance.requestConcurrency"></span><input id="performance-concurrency" type="number" min="1" max="64" step="1" value="1" required></label>
     <label><span data-i18n="m_020e1166edf8"></span><select id="performance-strategy"><option value="normal" data-i18n="m_03287b455f2d"></option><option value="superchat">Super Chat</option></select></label>
-    <label><span data-i18n="performance.sourceLanguage"></span><select id="performance-source"><option value="auto">自动</option><option value="zh">中文</option><option value="ja">日本語</option><option value="en">English</option><option value="ko">한국어</option></select></label>
+    <label><span data-i18n="performance.sourceLanguage"></span><select id="performance-source"><option value="auto" data-i18n="performance.option.auto">自动</option><option value="zh" data-i18n="m_72726d8818f6">中文</option><option value="ja" data-i18n="m_3a944ddb3868">日本語</option><option value="en" data-i18n="m_d1648bacbc16">English</option><option value="ko" data-i18n="m_259cdcf75199">한국어</option></select></label>
     <label><span data-i18n="performance.targetLanguage"></span><select id="performance-target"></select></label>
     <label data-load-only hidden><span data-i18n="m_bff00d8a22bf"></span><input id="performance-batch-size" type="number" min="1" max="200" step="1" value="2" required></label>
     <label data-load-only hidden><span data-i18n="m_7dd1a3c96092"></span><input id="performance-arrival" type="number" min="0" max="5000" step="1" value="100" required></label>
     <label data-load-only hidden><span data-i18n="performance.budget"></span><input id="performance-budget" type="number" min="100" max="120000" step="1" value="5000" required></label>
     <label data-test-local hidden><span data-i18n="performance.localParallel"></span><input id="performance-parallel" type="number" min="1" max="64" step="1" value="4" required></label>
     <label data-test-local hidden><span data-i18n="performance.contextTokens"></span><input id="performance-context" type="number" min="0" step="1" value="0" required></label>
-    <label data-test-local hidden><span data-i18n="performance.promptMode"></span><select id="performance-prompt"><option value="auto">自动</option><option value="hy-mt">HY-MT</option><option value="json">JSON</option></select></label>
+    <label data-test-local hidden><span data-i18n="performance.promptMode"></span><select id="performance-prompt"><option value="auto" data-i18n="performance.option.auto">自动</option><option value="hy-mt">HY-MT</option><option value="json">JSON</option></select></label>
   </div>
   <label class="performance-preset"><input id="performance-burst" type="checkbox"><span data-i18n="performance.burst"></span></label>
   <p class="subtle" data-i18n="performance.burstExplanation"></p>
@@ -48,6 +49,13 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
   const models = field('models'), modelNote = field('models-note');
   let initialized = false, busy = false, local = false, modelSelectionTouched = false, modelSignature = '';
   let backendTouched = false, onlineModelTouched = false, endpoint = '';
+  const onlineService = field('online-service');
+  const serviceLabel = () => {
+    let origin = '';
+    try { origin = new URL(endpoint).origin; } catch { /* Empty or invalid service gets the configuration hint. */ }
+    return origin ? t('performance.controls.currentService', { origin }) : t('performance.controls.noService');
+  };
+  bindLocalizedText(onlineService, serviceLabel);
   const selected = new Set<string>();
   const presetKeys = ['mode', 'batch-size', 'arrival', 'budget', 'strategy'] as const;
   let beforePreset: Record<string, string> | null = null;
@@ -81,7 +89,8 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
       const row = document.createElement('label'), check = document.createElement('input'), name = document.createElement('span');
       check.type = 'checkbox'; check.value = model.id; check.checked = selected.has(model.id); check.dataset.modelId = model.id;
       check.dataset.unavailable = String(!availableIds.has(model.id)); check.disabled = busy || !availableIds.has(model.id);
-      check.setAttribute('form', 'performance-controls'); name.textContent = model.name + (availableIds.has(model.id) ? '' : ' · ' + t('performance.modelUnavailable'));
+      check.setAttribute('form', 'performance-controls');
+      bindLocalizedText(name, () => model.name + (availableIds.has(model.id) ? '' : ' · ' + t('performance.modelUnavailable')));
       check.addEventListener('change', () => {
         modelSelectionTouched = true; if (check.checked) selected.add(model.id); else selected.delete(model.id);
         modelSignature = ''; renderModelNote(list.length);
@@ -91,7 +100,7 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
     renderModelNote(list.length);
   }
   function renderModelNote(total: number) {
-    modelNote.textContent = total ? t('performance.modelQueueNote', { count: selected.size }) : t('performance.noModels');
+    bindLocalizedText(modelNote, () => total ? t('performance.modelQueueNote', { count: selected.size }) : t('performance.noModels'));
   }
   field('burst').addEventListener('change', () => {
     if (field('burst').checked) {
@@ -115,9 +124,7 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
       if (endpoint !== settings.endpoint) { endpoint = settings.endpoint; onlineModelTouched = false; }
       if (!onlineModelTouched) field('online-model').value = settings.model;
       field('online-models').replaceChildren(...[...new Set([settings.model, ...onlineModels].filter(Boolean))].map(model => new Option(model, model)));
-      let origin = '';
-      try { origin = new URL(endpoint).origin; } catch { /* Empty or invalid service gets the configuration hint. */ }
-      field('online-service').textContent = origin ? `当前服务：${origin}` : '尚未配置在线服务地址';
+      bindLocalizedText(onlineService, serviceLabel);
       if (!initialized) {
         const requested = normalizeLocalConfig(settings.localPerformance), runtime = resolveLocalConfig(requested, settings.localModelId);
         setChoice('source', settings.liveSourceLanguage); setChoice('target', settings.targetLanguage);

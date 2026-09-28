@@ -7,6 +7,7 @@ values and matching content are never included in reports.
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -43,7 +44,7 @@ def main():
             known = re.findall(r'\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{16,}\b', content)
         require(bool(known), 'Cannot read exact credential exclusion input')
         del content
-    build = ROOT / '.output/chrome-mv3'
+    build = Path(os.environ.get('DANLINGO_TEST_EXTENSION', str(ROOT / '.output/chrome-mv3'))).resolve()
     package = read_json(ROOT / 'package.json')
     version = package['version']
     manifest = read_json(build / 'manifest.json')
@@ -92,7 +93,7 @@ def main():
     patterns = {
         'private-key': rb'-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----',
         'github-token': rb'\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})\b',
-        'provider-key': rb'\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{32,}\b',
+        'provider-key': rb'\b(?:sk-(?:proj-|ant-)?[A-Za-z0-9_-]{32,}|amux-[A-Za-z0-9_-]{24,})\b',
         'aws-access-key': rb'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b',
         'google-api-key': rb'\bAIza[A-Za-z0-9_-]{35}\b',
     }

@@ -24,7 +24,8 @@ test corpora, or translated user content.
 
 After changing source text, run `node scripts/i18n-catalog.mjs`, supply translations
 for every locale, then run `node scripts/i18n-build.mjs`. The latter applies reviewed
-overrides, validates catalogs, and generates Chrome `_locales` metadata. These
+overrides, rejects source catalogs that omit or differ from any `*-messages.json`
+entry, validates every locale and placeholder, and generates Chrome `_locales` metadata. These
 commands are offline; no translation service or developer credential is needed
 to build or run the extension.
 

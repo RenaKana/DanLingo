@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { browserLaunchOptions, loadPlaywright } from './browser-runtime.mjs';
 import { settingsSection } from './settings-navigation.mjs';
+import { catalogs } from '../src/i18n/catalogs.ts';
 
 const sourceFixture = process.argv.includes('--source-fixture');
 const extensionSource = resolve('D:/Tool/DanLingo-Workspace/testing/current/extension');
@@ -180,7 +181,8 @@ ui.fill({ enabled: false, profiles: [] });`);
     await page.evaluate(() => { window.__hybridTrace.noSuggestion = true; });
     await settingsSection(page, 'advanced');
     const concurrency = page.locator('#local-concurrency');
-    await concurrency.locator('xpath=ancestor::details[1]').locator(':scope > summary').click();
+    const requestDetails = concurrency.locator('xpath=ancestor::details[1]');
+    if (!await requestDetails.evaluate(el => el.open)) await requestDetails.locator(':scope > summary').click();
     await concurrency.fill('3');
     await settingsSection(page, 'watching');
     await page.waitForFunction(() => document.querySelector('#hybrid-status')?.textContent?.includes('主动运行现有性能测试'));
@@ -219,6 +221,25 @@ ui.fill({ enabled: false, profiles: [] });`);
     assert.deepEqual(await page.evaluate(() => window.__hybridTrace.permissionRequests), [
       { origins: ['https://fixture.invalid/*'] }, { origins: ['https://fixture.invalid/*'] }]);
     report.checks.push('local-global-backend-kept-online-origin-permission-and-budget-reused');
+    await settingsSection(page, 'watching');
+    await page.locator('#hybrid-max-items').focus();
+    const localeBaseline = await page.evaluate(() => ({ capacity: __hybridTrace.capacity.length,
+      saves: __hybridTrace.saves.length, tests: __hybridTrace.testMessages }));
+    for (const code of ['en', 'de', 'ja', 'ar', 'zh-TW', 'zh-CN']) {
+      await page.evaluate(code => chrome.storage.local.set({ 'ui.locale.v1': code }), code);
+      await page.waitForFunction(code => document.documentElement.lang === code, code);
+      assert.equal(await page.locator('[data-i18n="hybrid.label"]').textContent(), catalogs[code]['hybrid.label']);
+      assert.equal(await page.locator('#hybrid-max-items').inputValue(), '2');
+      assert.equal(await page.locator('#hybrid-max-chars').inputValue(), '900');
+      assert.equal(await page.locator('#bilibili-hybrid').isChecked(), true);
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'hybrid-max-items');
+      assert.ok((await page.locator('#hybrid-status').innerText()).includes(catalogs[code]['hybrid.manualLimit']));
+      assert.deepEqual(await page.evaluate(() => ({ capacity: __hybridTrace.capacity.length,
+        saves: __hybridTrace.saves.length, tests: __hybridTrace.testMessages })), localeBaseline);
+      const path = resolve(directory, 'hybrid-' + code + '.png');
+      await page.locator('#hybrid-host').screenshot({ path }); report.screenshots.push(path);
+    }
+    report.checks.push('locale-switch-retains-hybrid-draft-focus-and-status-without-requests');
     const width = async () => page.evaluate(() => ({ viewport: innerWidth, document: document.documentElement.scrollWidth }));
     await page.setViewportSize({ width: 390, height: 780 });
     await settingsSection(page, 'watching');

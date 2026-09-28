@@ -1,10 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="440" height="280" viewBox="0 0 440 280" role="img" aria-label="DanLingo: Translate danmaku and live chat">
-<rect width="440" height="280" fill="#f1f6f2"/>
-<circle cx="433" cy="20" r="128" fill="#e3ede6"/>
-<g transform="translate(28 30) scale(.45)"><rect width="128" height="128" rx="29" fill="#28634c"/><path fill="#ffffff" transform="translate(17.7615 96.9247) scale(0.359833 -0.359833)" d="M95 184V202Q113 201 133 201H226Q213 179 203.5 166.5Q194 154 178 138Q203 126 247 125Q240 113 238 102Q191 108 162 127Q145 117 129.5 110.5Q114 104 89 98Q85 109 76 120Q97 121 113.5 125.0Q130 129 144 137Q120 160 111 185ZM155 80Q155 92 154 104H175Q174 91 174 80H190Q208 80 223 81V63Q207 64 191 64H174V36H200Q222 36 239 37V17Q222 19 201 19H174V0Q174 -14 175 -28H154Q155 -14 155 0V19H137Q115 19 101 17V37Q115 36 137 36H155V64H138Q122 64 108 63V81Q122 80 138 80ZM61 137Q60 115 60 92V33Q73 46 85 63Q89 53 96 43Q77 23 64.5 9.5Q52 -4 48 -11Q37 -1 32 5Q41 13 41 25V122H35Q26 122 10 120V138Q24 137 32 137ZM192 186H131Q144 158 162 148Q186 173 192 186ZM30 199Q36 204 46 211Q65 187 76 172Q64 166 57 158Q41 187 30 199Z"/></g>
-<g font-family="Segoe UI,Arial,sans-serif" fill="#203b2c"><text x="99" y="68" font-size="29" font-weight="650">DanLingo</text>
+<rect width="440" height="280" fill="#f8f9fb"/>
+<circle cx="433" cy="20" r="128" fill="#edf0f4"/>
+<g transform="translate(28 30) scale(.45)"><rect width="128" height="128" rx="29" fill="#3564b8"/><path fill="#ffffff" transform="translate(17.7615 96.9247) scale(0.359833 -0.359833)" d="M95 184V202Q113 201 133 201H226Q213 179 203.5 166.5Q194 154 178 138Q203 126 247 125Q240 113 238 102Q191 108 162 127Q145 117 129.5 110.5Q114 104 89 98Q85 109 76 120Q97 121 113.5 125.0Q130 129 144 137Q120 160 111 185ZM155 80Q155 92 154 104H175Q174 91 174 80H190Q208 80 223 81V63Q207 64 191 64H174V36H200Q222 36 239 37V17Q222 19 201 19H174V0Q174 -14 175 -28H154Q155 -14 155 0V19H137Q115 19 101 17V37Q115 36 137 36H155V64H138Q122 64 108 63V81Q122 80 138 80ZM61 137Q60 115 60 92V33Q73 46 85 63Q89 53 96 43Q77 23 64.5 9.5Q52 -4 48 -11Q37 -1 32 5Q41 13 41 25V122H35Q26 122 10 120V138Q24 137 32 137ZM192 186H131Q144 158 162 148Q186 173 192 186ZM30 199Q36 204 46 211Q65 187 76 172Q64 166 57 158Q41 187 30 199Z"/></g>
+<g font-family="Segoe UI,Arial,sans-serif" fill="#27313f"><text x="99" y="68" font-size="29" font-weight="650">DanLingo</text>
 <text x="28" y="135" font-size="31" font-weight="650">Across languages.</text>
 <text x="28" y="174" font-size="31" font-weight="650">Into the conversation.</text>
-<text x="28" y="212" font-size="15" fill="#476153">Translate danmaku and live chat</text>
-<text x="28" y="247" font-size="12" fill="#476153">Your translation service · Your local model</text></g>
+<text x="28" y="212" font-size="15" fill="#596579">Translate danmaku and live chat</text>
+<text x="28" y="247" font-size="12" fill="#596579">Your translation service · Your local model</text></g>
 </svg>

@@ -21,6 +21,7 @@ import * as userFilterWire from '../../src/platforms/bilibili/user-filter-wire.t
 import { createBilibiliShadowRules } from '../../src/platforms/bilibili/shadow-rules.ts';
 import { USER_FILTER_NATIVE_CALLBACK, USER_FILTER_NATIVE_FUNCTIONS } from '../../src/platforms/bilibili/user-filter-contract.ts';
 import * as i18nWire from '../../src/i18n/wire.ts';
+import * as i18nText from '../../src/i18n/text.ts';
 import * as translation from '../../src/translation/index.ts';
 import * as provider from '../../src/translation/provider.ts';
 import * as modelTest from '../../src/translation/model-test.ts';
@@ -439,11 +440,13 @@ function installNativePipeline(h) {
     '../src/core/video-policy': videoPolicy, '../src/platforms/niconico/native': { BRIDGE: 'danlingo.native.v1' },
     '../src/core/resource': resource, '../src/core/adapter-diagnostic': diagnostics,
     '../src/core/build-identity': { BUILD_ID },
-    '../src/i18n/text.ts': { t: id => id === 'watch.enableTranslation' ? '请启用翻译' : id },
+    '../src/i18n/text.ts': i18nText,
     '../src/ui/localized-text': { bindLocalizedText: (node, render) => { node.textContent = render(); } },
     '../src/ui/bilibili-fullscreen-toggle': { mountBilibiliFullscreenToggle: () => ({ update() {}, dispose() {} }) },
     '../src/ui/progress': { createProgress: () => (h.progress = {
-      nativeSupplyButton: {}, updateNativeSupply(view) { this.nativeSupplyView = view; },
+      nativeSupplyButton: {}, updateNativeSupply(view) { this.nativeSupplyView = { ...view,
+        status: typeof view.status === 'function' ? view.status() : view.status,
+        actionText: typeof view.actionText === 'function' ? view.actionText() : view.actionText }; },
       nativeSupplyHost: { style: {}, children: [], append(...children) { this.children.push(...children); } },
       attach() {}, update(...args) { this.message = args[2]; }, dispose() {} }) },
     '../src/ui/render-preview': { mountRenderPreview() { throw Error('render preview outside owned test'); } },

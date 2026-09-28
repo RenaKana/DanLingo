@@ -1,0 +1,20 @@
+{
+  "m_73a1c1b593fe": "普通文字 · 全池预译",
+  "localSource.enumerating": "枚举目录",
+  "localSource.readingFiles": "获取文件",
+  "localSource.readingHeader": "识别模型头部",
+  "localSource.registering": "登记模型",
+  "localSource.confirming": "确认加载权限",
+  "localSource.scanTimings": "目录 {enumeration} 毫秒 · 文件 {files} 毫秒 · 头部 {headers} 毫秒 · 登记 {registration} 毫秒",
+  "localSource.loadTimings": "文件检查 {files} 毫秒 · 头部 {headers} 毫秒 · 引擎初始化 {initialization} 毫秒 · 权重加载 {weights} 毫秒",
+  "modelManager.load": "加载模型",
+  "modelManager.file": "文件",
+  "modelManager.directory": "文件夹",
+  "modelManager.selected": "当前选择",
+  "modelManager.loaded": "已加载",
+  "modelManager.empty": "尚未添加模型",
+  "modelManager.choose": "请在管理模型中加载一个可用模型",
+  "modelManager.registered": "已登记 {count} 个模型，请从列表中加载。",
+  "online.unconfigured": "尚未配置在线服务",
+  "online.endpointRequired": "请先填写服务地址"
+}

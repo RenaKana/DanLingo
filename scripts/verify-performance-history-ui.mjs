@@ -8,6 +8,8 @@ import { PERFORMANCE_HISTORY_KEY, performanceRecord } from '../src/translation/p
 import { PerformanceTest } from '../src/translation/performance-test.ts';
 import { browserLaunchOptions, loadPlaywright } from './browser-runtime.mjs';
 import { settingsSection } from './settings-navigation.mjs';
+import { catalogs } from '../src/i18n/catalogs.ts';
+import { LOCALES } from '../src/i18n/locale.ts';
 
 const extensionDir = resolve('D:/Tool/DanLingo-Workspace/testing/current/extension');
 const outputRoot = resolve('.artifacts/performance-history-ui');
@@ -404,6 +406,33 @@ try {
     }
     report.desktopDimensions = size;
     await captureHistory(page, 'desktop-history-record-blocks');
+  });
+
+  await check('all-locales-translate-history-and-controls-without-changing-drafts-or-starting-tests', async () => {
+    const count = await page.locator('#performance-count').inputValue();
+    const selected = await page.locator('#performance-models input:checked').evaluateAll(nodes => nodes.map(el => el.dataset.modelId));
+    const before = await page.evaluate(() => ({ starts: __performanceHistoryUiTrace.startMessages,
+      deletes: __performanceHistoryUiTrace.historyDeletePayloads.length }));
+    await page.locator('#performance-count').focus();
+    for (const { code } of LOCALES) {
+      await page.evaluate(code => chrome.storage.local.set({ 'ui.locale.v1': code }), code);
+      await page.waitForFunction(code => document.documentElement.lang === code, code);
+      assert.equal(await page.locator('.history-heading-title').textContent(), catalogs[code]['performance.history']);
+      assert.equal(await page.locator('.history-delete').first().textContent(), catalogs[code]['performance.history.delete']);
+      assert.ok((await page.locator('.history-conditions').first().textContent()).includes(catalogs[code]['performance.history.language']));
+      assert.equal(await page.locator('#performance-history-rows details[open]').count(), 1);
+      assert.equal(await page.locator('#performance-history-disclosure').evaluate(el => el.open), true);
+      assert.equal(await page.locator('#performance-count').inputValue(), count);
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'performance-count');
+      assert.deepEqual(await page.locator('#performance-models input:checked').evaluateAll(nodes => nodes.map(el => el.dataset.modelId)), selected);
+      assert.deepEqual(await page.evaluate(() => ({ starts: __performanceHistoryUiTrace.startMessages,
+        deletes: __performanceHistoryUiTrace.historyDeletePayloads.length })), before);
+      const size = await dimensions(page);
+      assert.ok(size.document <= size.viewport + 1 && size.historyScroll <= size.historyClient + 1, code);
+      if (['en', 'de', 'ja', 'ar', 'zh-TW'].includes(code)) await captureHistory(page, 'history-' + code);
+    }
+    await page.evaluate(() => chrome.storage.local.set({ 'ui.locale.v1': 'zh-CN' }));
+    await page.waitForFunction(() => document.documentElement.lang === 'zh-CN');
   });
 
   await check('history-persists-after-reopening-options-page', async () => {

@@ -2,13 +2,13 @@
 
 ## 范围与状态
 
-- 2026-09-28 实际查询：已提交的 0.4.0 审核未通过（`Review failed`）。报告项为 `1.3.1 Product is Testable`，要求在审核备注中提供测试账号/API Key 或无法提供的合理说明。0.5.0 的 GitHub 发布不代表 Edge 已通过或已提交；本次未向 Edge 提交新包，也未提供服务凭据。
+- 0.4.0 因 `1.3.1 Product is Testable` 未通过，审核要求可用的测试配置。2026-09-29 已核实 0.5.0 为 `In review`；受限测试配置已通过私密审核备注提供。本轮准备 0.5.1 本地化修订，GitHub 发布、提交审核、审核通过和公开上架分别记录，不混用状态。公开材料不含测试凭据。
 
 - 本次只准备 Microsoft Edge Add-ons；Chrome Web Store 延后单独处理。
-- 候选版本为 `0.4.0`。发布前核对 manifest、商店包、列表内容和校验和中的版本一致。
+- 本轮版本为 `0.5.1`。发布前核对 manifest、商店包、列表内容和校验和中的版本一致。
 - `docs/edge-listings.json` 提供 20 个界面语言的名称和列表文案。界面语言数量与可选翻译源语言／目标语言无关。
 - 修订后的隐私政策位于 [docs/PRIVACY.md](PRIVACY.md)。公开商店政策链接为 `https://github.com/RenaKana/DanLingo/blob/main/docs/PRIVACY.md`；本次修订需先发布到公开仓库，才能提交该链接。
-- 本地候选包与验收证据放在 `.artifacts/edge-store/0.4.0/`；`submission-materials/` 汇总可供上传的图片、逐语言介绍和审核说明。候选包不代表已提审或已通过上线验收。
+- 本地 0.5.1 验收与提交证据分别保存在 `.artifacts/release-0.5.1/`、`.artifacts/edge-store/0.5.1/` 和 `.artifacts/edge-review-0.5.1/`；这些目录不进入公开源码。候选包不代表审核通过或已上架。
 
 ## Partner Center 与列表
 
