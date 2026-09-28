@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "{count} görev",
+  "count.tasks.one": "{count} görev",
+  "count.tasks.two": "{count} görev",
+  "count.tasks.few": "{count} görev",
+  "count.tasks.many": "{count} görev",
+  "count.tasks.other": "{count} görev"
+}

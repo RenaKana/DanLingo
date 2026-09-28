@@ -35,7 +35,7 @@ export function authorizedTestOverrides(settings, overrides = {}) {
   if (overrides.concurrency !== undefined) {
     const concurrency = Number(overrides.concurrency);
     if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > MAX_CONCURRENCY) throw new Error(`Test concurrency must be 1..${MAX_CONCURRENCY}`);
-    values.concurrency = concurrency;
+    values.onlineConcurrency = concurrency;
   }
   if (overrides.batchSize !== undefined) {
     const batchSize = Number(overrides.batchSize);

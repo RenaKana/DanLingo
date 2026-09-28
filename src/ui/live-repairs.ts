@@ -1,4 +1,6 @@
 import type { TranslationOutput } from '../core/types.ts';
+import { initLocale, t } from '../i18n';
+import { bindLocalizedAttribute, bindLocalizedText } from './localized-text.ts';
 
 export type LiveRepairState = 'unprocessed' | 'queued' | 'translating' | 'translated' | 'failed' | 'expired' | 'unneeded';
 export type LiveRepairApplication = 'generated' | 'native-updated' | 'recent-only';
@@ -94,9 +96,9 @@ interface BatchState {
   snapshot: Map<string, Entry>;
 }
 
-const labels: Record<LiveRepairState, string> = {
-  unprocessed: '未处理', queued: '排队中', translating: '翻译中', translated: '已翻译',
-  failed: '失败', expired: '超时', unneeded: '无需翻译',
+const labelKeys: Record<LiveRepairState, string> = {
+  unprocessed: 'm_83fbf42f9e87', queued: 'm_d6f766f2adf5', translating: 'm_aeda1aa78563', translated: 'm_fe87640f656c',
+  failed: 'm_28384d7afd2e', expired: 'm_e512cf016f96', unneeded: 'm_d7a08d8864bb',
 };
 const TTL_MS = 300000;
 const MAX_RECORDS = 300;
@@ -189,17 +191,27 @@ export function createLiveRepairs(options: {
   const host = document.createElement('span'); host.id = 'danlingo-live-repairs';
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>
-    :host{font:12px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;color:inherit}*{box-sizing:border-box}
-    details{position:relative}summary{cursor:pointer;display:flex;align-items:center;gap:8px;list-style-position:outside;user-select:none}
-    summary::-webkit-details-marker{margin-right:2px}.summary-title{flex:0 0 auto}.summary-quick{font-size:11px;padding:1px 5px}
-    button{font:inherit;color:inherit;border:1px solid #8a9b8e;border-radius:3px;background:transparent;padding:1px 5px;cursor:pointer}button:disabled{opacity:.5;cursor:default}
-    .menu{position:fixed;inset:auto;margin:0;width:min(420px,84vw);max-height:min(430px,calc(100vh - 16px));display:flex;flex-direction:column;overflow:hidden;background:#f3f7f3;color:#243f30;border:1px solid #a4b8a9;border-radius:5px;padding:8px;box-shadow:0 4px 12px #0002}.menu:not(:popover-open){display:none}
-    .toolbar{flex:0 0 auto;display:flex;flex-direction:column;gap:5px}.actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.actions button{white-space:nowrap}
-    .note{font-size:11px;color:#526c5a;margin:2px 0}.progress{min-height:16px}.list{flex:1 1 auto;min-height:36px;max-height:330px;overflow:auto;overflow-anchor:none;overscroll-behavior:contain;scroll-behavior:auto;padding-right:3px}
-    .entry{padding:7px 0;border-top:1px solid #d1ded4;overflow-wrap:anywhere;contain:layout style}.entry:first-child{border-top:0}.entry[data-tombstone="true"]{opacity:.7}
-    .source{font-size:11px;color:#526c5a;white-space:pre-wrap}.line{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:22px}.line-left{display:flex;gap:6px;align-items:baseline;min-width:0}.state{font-weight:600}.application{font-size:10px;color:#67806e}.line-actions{display:flex;align-items:center;gap:1px;flex:0 0 auto}.entry .line-actions button{width:max(18px,1.3em);height:max(18px,1.3em);padding:0;border:0;border-radius:6px 0 0 6px;display:grid;place-items:center;line-height:1;text-align:center;white-space:nowrap;opacity:.68}.entry .line-actions button+button{border-left:1px solid color-mix(in srgb,currentColor 26%,transparent);border-radius:0 6px 6px 0}.entry .line-actions button:is(:hover,[aria-pressed="true"]):not(:disabled){opacity:1;background:color-mix(in srgb,currentColor 10%,transparent)}.entry .line-actions button:focus-visible{opacity:1;outline:2px solid currentColor;outline-offset:1px}.entry .line-actions button:disabled{opacity:.35}.text{white-space:pre-wrap;margin-top:3px;overflow-wrap:anywhere}.empty{padding:12px 0;color:#526c5a}
-    .back-latest{margin-left:auto}.scan-note{min-height:16px}
-  </style><details><summary><span class="summary-title">近期弹幕补翻</span><button id="quick-visible" class="summary-quick" type="button">一键补翻漏译</button></summary><div class="menu" popover="auto"><div class="toolbar"><div class="actions"><button id="visible-scan" type="button">补翻当前可见未译</button><button id="batch" type="button">补翻近期未译</button><button id="cancel-batch" type="button" hidden>停止补翻</button><button id="latest" class="back-latest" type="button">回到最新</button></div><details><summary>更多</summary><button id="scan" type="button">原生队列补扫</button></details><p class="note">译文显示在此，不重新发射弹幕。</p><div id="scan-note" class="note scan-note" role="status"></div></div><div id="items" class="list" tabindex="0" aria-label="近期弹幕补翻记录"><div class="empty">暂无记录。已消失且未捕获的内容无法恢复。</div></div></div></details>`;
+    :host{font:14px/1.45 "Segoe UI","Microsoft YaHei UI",sans-serif;color:#28323a}*{box-sizing:border-box}[hidden]{display:none!important}
+    details{position:relative}summary{cursor:pointer;display:inline-flex;align-items:center;gap:7px;list-style:none;user-select:none}
+    summary::-webkit-details-marker{display:none}details>summary:before{content:"";width:6px;height:6px;flex:none;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:rotate(-45deg)}details[open]>summary:before{transform:rotate(45deg)}
+    .summary-title{white-space:nowrap}.summary-quick{color:#23649b;border-color:#b8cde0;background:#f4f8fc}
+    button{font:inherit;color:#34414a;border:1px solid #cbd4da;border-radius:4px;background:#fff;min-height:30px;padding:3px 9px;cursor:pointer;white-space:nowrap}
+    button:hover:not(:disabled),summary:hover{color:#23649b}button:hover:not(:disabled){background:#f4f8fc;border-color:#a8c4dd}button:disabled{opacity:.5;cursor:default}
+    button:focus-visible,summary:focus-visible,.list:focus-visible{outline:2px solid #2675ae;outline-offset:2px}
+    .menu{position:fixed;inset:auto;margin:0;width:min(456px,calc(100vw - 16px));max-height:min(460px,calc(100vh - 16px));display:flex;flex-direction:column;overflow:hidden;background:#fff;color:#28323a;border:1px solid #d0d9df;border-radius:6px;padding:10px 12px;box-shadow:0 8px 24px #1f2c381c}.menu:not(:popover-open){display:none}
+    .toolbar{flex:0 0 auto;display:grid;gap:8px;padding-bottom:9px;border-bottom:1px solid #e1e6ea}.actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}.actions button{white-space:normal;text-align:center}
+    .toolbar>details{display:flex;align-items:center;gap:6px}.toolbar>details>summary{min-height:30px;padding:3px 9px;border:1px solid #cbd4da;border-radius:4px}.toolbar>details>button{margin-inline-start:6px}
+    .note{font-size:14px;color:#68747c;margin:0}.scan-note:empty{display:none}.scan-note:not(:empty){color:#34414a}
+    .list{flex:1 1 auto;min-height:48px;max-height:320px;overflow:auto;overflow-anchor:none;overscroll-behavior:contain;scroll-behavior:auto;padding-inline-end:3px}
+    .entry{padding:10px 1px;border-top:1px solid #e1e6ea;overflow-wrap:anywhere;contain:layout style}.entry:first-child{border-top:0}.entry[data-tombstone="true"]{opacity:.7}
+    .line{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:30px}.line-left{display:flex;gap:8px;align-items:baseline;min-width:0}.state{font-weight:600}.application{color:#68747c}
+    .source{color:#68747c;white-space:pre-wrap}.text{white-space:pre-wrap;margin-top:4px;overflow-wrap:anywhere}
+    .line-actions{display:flex;align-items:center;gap:3px;flex:0 0 auto}.entry .line-actions button{width:28px;height:28px;min-height:0;padding:0;border-color:transparent;display:grid;place-items:center;line-height:1;text-align:center}
+    .entry .line-actions button:hover:not(:disabled),.entry .line-actions button[aria-pressed="true"]:not(:disabled){border-color:#cbd4da;background:#f4f8fc}.entry .line-actions button:disabled{opacity:.4}
+    .empty{padding:12px 1px;color:#68747c}.back-latest{margin-inline-start:auto}
+    @media(max-width:480px){.menu{padding:9px}.actions{gap:5px}.actions button{flex:1 1 auto}.back-latest{margin-inline-start:0}}
+  </style><details><summary><span class="summary-title" data-i18n="m_7acc84c1b930">近期弹幕补翻</span><button id="quick-visible" class="summary-quick" type="button" data-i18n="m_ba37f0bd03a4">一键补翻漏译</button></summary><div class="menu" popover="auto"><div class="toolbar"><div class="actions"><button id="visible-scan" type="button" data-i18n="m_865563f08f89">补翻当前可见未译</button><button id="batch" type="button" data-i18n="m_18aae413fec9">补翻近期未译</button><button id="cancel-batch" type="button" data-i18n="m_02b3bc2a57f4" hidden>停止补翻</button><button id="latest" class="back-latest" type="button" data-i18n="m_1c59875d3a15">回到最新</button></div><details><summary data-i18n="m_38844b135cf7">更多</summary><button id="scan" type="button" data-i18n="m_b4b4c262c946">原生队列补扫</button></details><p class="note" data-i18n="m_cc8bcfe58bf9">译文显示在此，不重新发射弹幕。</p><div id="scan-note" class="note scan-note" role="status"></div></div><div id="items" class="list" tabindex="0" aria-label="近期弹幕补翻记录" data-i18n-aria-label="m_fdcc6c950859"><div class="empty" data-i18n="m_94b67101eb98">暂无记录。已消失且未捕获的内容无法恢复。</div></div></div></details>`;
+  const localeReady = initLocale(root);
 
   const records = new Map<string, Entry>();
   const rows = new Map<string, RowNodes>();
@@ -289,16 +301,16 @@ export function createLiveRepairs(options: {
     }
   };
 
-  const setScanNote = (value: string) => updateText(scanNote, value);
+  const setScanNote = (render: () => string) => bindLocalizedText(scanNote, render);
 
   const updateBatchControls = () => {
     const active = !!batch?.active && !batch.cancelled;
     batchButton.disabled = active;
-    batchButton.textContent = active ? '补翻进行中' : '补翻近期未译';
+    bindLocalizedText(batchButton, () => active ? t('m_973a7874b34e') : t('m_18aae413fec9'));
     cancelBatchButton.hidden = !active; cancelBatchButton.disabled = !active;
     latestButton.disabled = target.scrollTop <= 1;
-    const activeSummary = active ? `补翻进度 ${batch!.completed}/${Math.max(batch!.total, batch!.completed)} · 可停止` : '';
-    if (activeSummary && !scanNote.textContent?.includes('正在读取')) setScanNote(activeSummary);
+    const activeSummary = () => active ? t('m_36e600949392', { p0: batch!.completed, p1: Math.max(batch!.total, batch!.completed) }) : '';
+    if (active && !scanNote.textContent?.includes(t('m_2d1341db7717'))) setScanNote(activeSummary);
   };
 
   const updateRow = (row: Entry, nodes: RowNodes) => {
@@ -306,20 +318,20 @@ export function createLiveRepairs(options: {
     const expired = row.tombstone || row.displayExpired;
     nodes.root.dataset.tombstone = String(!!expired); nodes.root.dataset.supported = String(row.supported);
     nodes.root.dataset.requestId = row.requestId || '';
-    updateText(nodes.state, expired ? '已失效' : labels[row.state]);
-    const application = row.application === 'native-updated' ? '原生已更新' : row.application === 'generated' ? '已生成' : row.application === 'recent-only' ? '仅近期记录' : '';
-    updateText(nodes.application, application); nodes.application.hidden = !application;
+    bindLocalizedText(nodes.state, () => expired ? t('m_2fe5a8d0eee9') : t(labelKeys[row.state]));
+    const applicationText = () => row.application === 'native-updated' ? t('m_0a937d6d4f51') : row.application === 'generated' ? t('m_11448fff91a4') : row.application === 'recent-only' ? t('m_f4b0f641d977') : '';
+    bindLocalizedText(nodes.application, applicationText); nodes.application.hidden = !applicationText();
     updateText(nodes.original, row.originalText); nodes.original.hidden = row.showingOriginal;
     const displayText = row.showingOriginal ? row.originalText : row.text || '';
     updateText(nodes.text, displayText); nodes.text.hidden = !displayText;
     updateIconButton(nodes.button, 'retry');
-    nodes.button.setAttribute('aria-label', expired ? '记录已失效' : row.supported ? '强制重译' : '暂不支持');
+    bindLocalizedAttribute(nodes.button, 'aria-label', () => expired ? t('m_0bcb7c62fd02') : row.supported ? t('m_dee9278dcdbe') : t('m_374930f1453f'));
     nodes.button.disabled = !!expired || !row.supported || !!row.requestId || !requestableStates.has(row.state) && row.state !== 'translated';
-    nodes.button.title = row.tombstone ? '记录已过期，操作后移除' : row.supported ? '使用原文强制重译，绕过缓存' : '原生扫描不支持此条目';
+    bindLocalizedAttribute(nodes.button, 'title', () => row.tombstone ? t('m_51595178ec76') : row.supported ? t('m_9bae35753b2b') : t('m_b931579d86f4'));
     updateIconButton(nodes.originalButton, row.showingOriginal ? 'translation' : 'original');
-    nodes.originalButton.setAttribute('aria-label', row.showingOriginal ? '显示译文' : '显示原文');
+    bindLocalizedAttribute(nodes.originalButton, 'aria-label', () => row.showingOriginal ? t('m_7cd62999f274') : t('m_098e66189da8'));
     nodes.originalButton.setAttribute('aria-pressed', String(row.showingOriginal));
-    nodes.originalButton.title = row.showingOriginal ? '显示已保存译文，不请求' : '显示保存原文，不请求';
+    bindLocalizedAttribute(nodes.originalButton, 'title', () => row.showingOriginal ? t('m_57b624cf8552') : t('m_f67014ece527'));
     nodes.originalButton.disabled = !!expired || !row.originalText || row.showingOriginal && !row.text;
   };
 
@@ -439,7 +451,7 @@ export function createLiveRepairs(options: {
 
   const finishBatchIfDone = (current: BatchState) => {
     if (current.active && current.scanDone && current.activeRequests === 0 && current.queue.length === 0) {
-      current.active = false; setScanNote(`补翻完成 ${current.completed}/${current.total} 条${current.scanStatus === 'partial' ? '；部分结构不可用' : current.scanStatus === 'unavailable' ? '；扫描不可用' : ''}。`); updateBatchControls();
+      current.active = false; setScanNote(() => (t('m_8f2df88da722', { p0: current.completed, p1: current.total, p2: current.scanStatus === 'partial' ? t('m_685a47744fb4') : current.scanStatus === 'unavailable' ? t('m_83890a9c9bde') : '' }))); updateBatchControls();
     }
   };
 
@@ -480,7 +492,7 @@ export function createLiveRepairs(options: {
     }
     if (!row) return;
     if (!row.requestId && row.state !== 'translated') {
-      if (candidate.state && labels[candidate.state]) row.state = candidate.state;
+      if (candidate.state && labelKeys[candidate.state]) row.state = candidate.state;
       if (validText(candidate.text, MAX_TEXT)) { row.text = candidate.text; row.state = 'translated'; }
     }
     if (candidate.text && validText(candidate.text, MAX_TEXT)) syncEntry(row.sourceId, { state: 'translated', text: candidate.text, application: 'recent-only' });
@@ -493,14 +505,14 @@ export function createLiveRepairs(options: {
 
   function startBatch(includeLoaded = true) {
     if (disposed) return;
-    if (batch?.active && !batch.cancelled) { openMenu(); setScanNote(`补翻进行中 ${batch.completed}/${Math.max(batch.total, batch.completed)} 条；已合并重复点击。`); return; }
+    if (batch?.active && !batch.cancelled) { const current = batch; openMenu(); setScanNote(() => (t('m_a73ae5face34', { p0: current.completed, p1: Math.max(current.total, current.completed) }))); return; }
     prune();
     const current: BatchState = { scanId: crypto.randomUUID(), active: true, cancelled: false, scanDone: !includeLoaded, scanStatus: undefined, recentSnapshot: 0, loadedSnapshot: 0, truncated: false, total: 0, completed: 0, activeRequests: 0, queue: [], queuedIds: new Set(), loadedIds: new Set(), requestIds: new Set(), snapshot: new Map() };
     batch = current; openMenu();
     for (const row of sorted().slice(0, MAX_BATCH_RECENT)) {
       current.recentSnapshot++; addBatchCandidate(current, { sourceId: row.sourceId, originalText: row.originalText, strategy: row.strategy, state: row.state, supported: row.supported }, false);
     }
-    setScanNote(includeLoaded ? `已固定近期 ${current.recentSnapshot} 条，读取已加载记录…` : `已固定近期 ${current.recentSnapshot} 条，开始补翻…`);
+    setScanNote(() => (includeLoaded ? t('m_8018a5e50a7b', { p0: current.recentSnapshot }) : t('m_4979ecc5a44c', { p0: current.recentSnapshot })));
     if (includeLoaded) options.scan('loaded', current.scanId);
     pumpBatch(current);
   }
@@ -512,13 +524,13 @@ export function createLiveRepairs(options: {
     for (const row of current.snapshot.values()) if (row.requestId && row.requestOrigin === 'local' && current.requestIds.has(row.requestId)) {
       row.requestId = undefined; row.requestOrigin = undefined; if (row.state === 'translating') row.state = 'failed';
     }
-    current.queue.length = 0; setScanNote(`已停止补翻，已完成 ${current.completed}/${current.total} 条。`); render();
+    current.queue.length = 0; setScanNote(() => (t('m_2c6d40105132', { p0: current.completed, p1: current.total }))); render();
   }
 
   function startVisibleScan() {
     if (disposed || visibleScanActive) return;
-    visibleScanActive = true; clearTimeout(visibleScanTimer); openMenu(); setScanNote('正在读取当前可见弹幕…');
-    visibleScanTimer = setTimeout(() => { visibleScanActive = false; setScanNote('当前画面暂不可补扫；已捕获记录仍可补翻。'); }, 5000);
+    visibleScanActive = true; clearTimeout(visibleScanTimer); openMenu(); setScanNote(() => (t('m_960f60200288')));
+    visibleScanTimer = setTimeout(() => { visibleScanActive = false; setScanNote(() => (t('m_c547bc5768ba'))); }, 5000);
     options.scan('visible');
   }
 
@@ -533,7 +545,7 @@ export function createLiveRepairs(options: {
   root.getElementById('visible-scan')!.addEventListener('click', startVisibleScan);
   batchButton.addEventListener('click', () => startBatch(false)); cancelBatchButton.addEventListener('click', stopBatch);
   latestButton.addEventListener('click', () => { target.scrollTop = 0; updateBatchControls(); positionMenu(); });
-  root.getElementById('scan')!.addEventListener('click', () => { setScanNote('正在读取当前原生弹幕队列…'); options.scan('queue'); });
+  root.getElementById('scan')!.addEventListener('click', () => { setScanNote(() => (t('m_0fb38a610f44'))); options.scan('queue'); });
 
   const view = {
     host,
@@ -566,21 +578,21 @@ export function createLiveRepairs(options: {
     },
     scanStatus(status: string, count: number, scope: 'visible' | 'queue' | 'loaded' = 'queue', requested = 0) {
       if (scope === 'visible') { visibleScanActive = false; clearTimeout(visibleScanTimer); visibleScanTimer = undefined; }
-      const suffix = status === 'partial' ? '；部分渲染结构未支持或达到本次上限' : '';
-      setScanNote(scope === 'visible'
-        ? status === 'unavailable' ? '当前画面暂不可补扫；已捕获记录仍可补翻。' : `已读取 ${count} 条可见消息，补翻 ${requested} 条${suffix}。`
-        : status === 'unavailable' ? '原生队列暂不可用；已捕获记录仍可补翻。' : `已补扫 ${count} 条消息${suffix}；可单条或批量补翻。`);
+      const suffix = () => status === 'partial' ? t('m_5b02c888bd0b') : '';
+      setScanNote(() => (scope === 'visible'
+        ? status === 'unavailable' ? t('m_c547bc5768ba') : t('m_1dc820b6558f', { p0: count, p1: requested, p2: suffix() })
+        : status === 'unavailable' ? t('m_cc2a2b665151') : t('m_903332313229', { p0: count, p1: suffix() })));
       if (scope === 'loaded' && batch) { batch.scanStatus = status as LiveRepairScanStatus; batch.scanDone = true; finishBatchIfDone(batch); }
     },
     scanChunk(chunk: LiveRepairScanChunk) {
       const current = batch; if (!current || !current.active || current.cancelled || current.scanDone || !chunk || chunk.scanId !== current.scanId || !Array.isArray(chunk.candidates)) return false;
       current.scanStatus = chunk.status; for (const candidate of chunk.candidates) addBatchCandidate(current, candidate, true);
       if (chunk.done) current.scanDone = true;
-      setScanNote(chunk.done ? `已读取 ${current.loadedSnapshot} 条，准备补翻 ${current.total} 条${current.truncated ? '；达到上限' : ''}…` : `已读取 ${current.loadedSnapshot} 条，发现 ${current.total} 条待补翻…`);
+      setScanNote(() => (chunk.done ? t('m_7eda5edf4e4e', { p0: current.loadedSnapshot, p1: current.total, p2: current.truncated ? t('m_5d836bb749db') : '' }) : t('m_0b81e36ec699', { p0: current.loadedSnapshot, p1: current.total })));
       pumpBatch(current); finishBatchIfDone(current); render(); return true;
     },
     sync(sourceId: string, update: LiveRepairSync) {
-      const row = records.get(sourceId); if (!row || row.tombstone || row.displayExpired || !update || update.state !== undefined && !labels[update.state]) return false;
+      const row = records.get(sourceId); if (!row || row.tombstone || row.displayExpired || !update || update.state !== undefined && !labelKeys[update.state]) return false;
       const incomingVersion = finiteVersion(update.resultVersion);
       const newer = incomingVersion !== undefined && incomingVersion > row.resultVersion;
       if (row.requestOrigin === 'local' && row.requestId && update.requestId !== row.requestId && !newer) return false;
@@ -643,6 +655,7 @@ export function createLiveRepairs(options: {
       window.removeEventListener('resize', positionMenu); window.removeEventListener('scroll', positionMenu, true);
       window.removeEventListener('pointerup', releaseInteraction, true); window.removeEventListener('pointercancel', releaseInteraction, true);
       window.removeEventListener('keyup', releaseInteraction, true); document.removeEventListener('selectionchange', render);
+      void localeReady.then(disposeLocale => disposeLocale());
       host.remove(); records.clear(); rows.clear();
     },
   };

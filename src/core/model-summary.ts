@@ -6,7 +6,7 @@ const effortLabel = (value?: string) => value === 'off' ? '关闭' : value === '
   : ['minimal','low','medium','high','max','xhigh'].includes(value ?? '') ? value : '';
 
 /** Saved online configuration or matching loaded local model; never disclose endpoint/credentials. */
-export function translationModelSummary(settings: Settings, local?: LocalRuntimeStatus): string {
+export function translationModelSummary(settings: Settings, local?: LocalRuntimeStatus, render: (source: string) => string = value => value): string {
   let model: string | undefined, normal: string | undefined, superchat: string | undefined;
   if (settings.backend === 'local') {
     if (!local || local.modelId !== settings.localModelId || !['ready','generating'].includes(local.phase)) return '';
@@ -21,5 +21,5 @@ export function translationModelSummary(settings: Settings, local?: LocalRuntime
     }
   }
   if (!model) return '';
-  return [`${settings.backend === 'local' ? '本地' : '在线'} · ${model}`, normal ? `思考 ${normal}` : '', superchat && superchat !== normal ? `SC 思考 ${superchat}` : ''].filter(Boolean).join(' · ');
+  return [`${render(settings.backend === 'local' ? '本地' : '在线')} · ${model}`, normal ? render(`思考 ${render(normal)}`) : '', superchat && superchat !== normal ? render(`SC 思考 ${render(superchat)}`) : ''].filter(Boolean).join(' · ');
 }

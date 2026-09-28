@@ -4,9 +4,12 @@ import type { OnlineBudgetState } from '../../src/core/online-budget';
 import type { AdapterDiagnostic, RuntimeStatus, Settings } from '../../src/core/types';
 import { adapterDiagnosticText } from '../../src/core/adapter-diagnostic';
 import { liveStatusText } from '../../src/ui/live-status';
+import { mountTargetLanguageSelect } from '../../src/ui/languages';
 import { initTheme } from '../../src/ui/theme';
 import '../../src/ui/base.css';
 import './popup.css';
+import { initLocale, localizeMessage, t } from '../../src/i18n';
+import { bindLocalizedText } from '../../src/ui/localized-text';
 
 type PopupSettings = Pick<Settings, 'enabled' | 'displayMode' | 'targetLanguage'>;
 type OverviewResponse = {
@@ -15,6 +18,7 @@ type OverviewResponse = {
   settings?: PopupSettings;
   hasKey?: boolean;
   status?: RuntimeStatus | null;
+  errorMessage?: unknown;
   adapterDiagnostic?: AdapterDiagnostic | null;
   bilibiliLiveCandidate?: boolean;
   onlineBudget?: OnlineBudgetState;
@@ -22,22 +26,24 @@ type OverviewResponse = {
 
 const enabled = document.getElementById('enabled') as HTMLInputElement;
 const language = document.getElementById('language') as HTMLSelectElement;
+const languageSelect = mountTargetLanguageSelect(language);
 const mode = document.getElementById('mode') as HTMLSelectElement;
 const status = document.getElementById('status') as HTMLElement;
 const metrics = document.getElementById('metrics') as HTMLElement;
 const coverage = document.getElementById('coverage') as HTMLElement;
 const scenario = document.getElementById('scenario') as HTMLElement;
 const quickControls = [enabled, language, mode];
-const themeDisposer = initTheme(document.getElementById('theme') as HTMLSelectElement);
+void initLocale(document);
+const themeDisposer = initTheme(document.getElementById('theme') as HTMLButtonElement);
 
-const labels: Record<string, string> = {
-  unsupported: '请打开支持的视频或直播页面',
-  disabled: '翻译已关闭',
-  'configuration-needed': '请先配置翻译服务',
-  'finding-player': '正在等待原生播放器',
-  ready: '原生弹幕翻译已就绪',
-  translating: '正在准备后续译文',
-  degraded: '暂时使用原文',
+const labels: Record<RuntimeStatus['state'], string> = {
+  unsupported: 'm_bd90a6715dea',
+  disabled: 'm_f2b5a88401b4',
+  'configuration-needed': 'm_89baf1f67c7c',
+  'finding-player': 'm_a8fb4de9f34a',
+  ready: 'm_6641a8be0bf2',
+  translating: 'm_3d6100cd2329',
+  degraded: 'm_7e354d90714c',
 };
 
 let disposed = false;
@@ -50,17 +56,19 @@ let openingSettings = false;
 let settingsOpenError = false;
 
 function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error && error.message ? error.message : fallback;
+  const rendered = localizeMessage(error);
+  return rendered === t('error.unknown') ? fallback : rendered;
 }
 
-function setStatus(text: string, error = false) {
-  status.textContent = text;
+function setStatus(text: string | (() => string), error = false) {
+  bindLocalizedText(status, typeof text === 'function' ? text : () => text);
   status.classList.toggle('error', error);
   document.body.dataset.status = error ? 'error' : 'normal';
 }
 
 function setQuickControlsDisabled(disabled: boolean) {
-  for (const control of quickControls) control.disabled = disabled;
+  enabled.disabled = mode.disabled = disabled;
+  languageSelect.setDisabled(disabled);
   document.querySelector('.popup-controls')?.setAttribute('aria-busy', String(disabled));
 }
 
@@ -68,35 +76,35 @@ function applySettings(next: PopupSettings) {
   enabled.checked = next.enabled === true;
   mode.value = next.displayMode === 'original' ? 'original' : 'translated';
   const targetLanguage = typeof next.targetLanguage === 'string' && next.targetLanguage ? next.targetLanguage : 'zh-Hans';
-  if (![...language.options].some(option => option.value === targetLanguage)) {
-    language.add(new Option(targetLanguage, targetLanguage));
-  }
-  language.value = targetLanguage;
+  languageSelect.setValue(targetLanguage);
 }
 
 function renderOverview(response: OverviewResponse) {
   const budget = document.getElementById('online-budget-status');
-  if (budget) budget.textContent = onlineBudgetText(response.ok ? response.onlineBudget : undefined);
+  if (budget) bindLocalizedText(budget, () => onlineBudgetText(response.ok ? response.onlineBudget : undefined));
   if (!response.ok) {
-    setStatus(response.error || '扩展后台未就绪', true);
-    metrics.textContent = '';
+    setStatus(() => {
+      const rendered = localizeMessage(response.errorMessage ?? response.error);
+      return rendered === t('error.unknown') ? t('m_8a9091e1ce96') : rendered;
+    }, true);
+    bindLocalizedText(metrics, () => '');
     coverage.hidden = true;
     return;
   }
 
   const current = response.status;
-  const live = current?.scenario === 'live' ? liveStatusText(current) : null;
+  const isLive = current?.scenario === 'live';
   const diagnostic = response.adapterDiagnostic;
-  setStatus(!response.hasKey ? '请先配置翻译服务'
-    : live ? live.state
-      : current ? labels[current.state] || current.note || '等待状态更新'
+  setStatus(() => !response.hasKey ? t('m_89baf1f67c7c')
+    : isLive ? liveStatusText(current!).state
+      : current ? labels[current.state] ? t(labels[current.state]) : localizeMessage(current.noteMessage ?? current.note) || t('m_c463b68e64bb')
       : diagnostic ? adapterDiagnosticText(diagnostic)
-      : response.bilibiliLiveCandidate ? '已识别 Bilibili 直播，正在等待原生直播间就绪' : '打开视频或直播页面开始观看');
-  scenario.textContent = live || response.bilibiliLiveCandidate ? '直播' : current?.scenario === 'video' || diagnostic ? '视频' : '视频与直播';
-  metrics.textContent = live ? live.metrics
-    : current ? `已准备 ${current.prepared ?? 0}/${current.messages} · 近期 ${current.nearPrepared ?? 0}/${current.nearTotal ?? 0} · 队列 ${current.queued}` : '';
-  coverage.textContent = live?.coverage ?? '';
-  coverage.hidden = !live;
+      : response.bilibiliLiveCandidate ? t('m_161e85ac1a8d') : t('m_bd162b1e0020'));
+  bindLocalizedText(scenario, () => isLive || response.bilibiliLiveCandidate ? t('m_e472b37cf9ad') : current?.scenario === 'video' || diagnostic ? t('m_c20f7618d330') : t('m_0e541bff221e'));
+  bindLocalizedText(metrics, () => isLive ? liveStatusText(current!).metrics
+    : current ? t('m_a466e7c1cc38', { p0: current.prepared ?? 0, p1: current.messages, p2: current.nearPrepared ?? 0, p3: current.nearTotal ?? 0, p4: current.queued }) : '');
+  bindLocalizedText(coverage, () => isLive ? liveStatusText(current!).coverage : '');
+  coverage.hidden = !isLive;
   if (response.settings) applySettings(response.settings);
 }
 
@@ -112,8 +120,8 @@ async function refresh() {
   } catch (error) {
     if (disposed || ticket !== refreshTicket || revision !== interactionRevision || busy || interactionDirty || openingSettings || settingsOpenError
       || failedInteractionRevision !== undefined) return;
-    setStatus(errorMessage(error, '扩展后台未就绪'), true);
-    metrics.textContent = '';
+    setStatus(() => errorMessage(error, t('m_8a9091e1ce96')), true);
+    bindLocalizedText(metrics, () => '');
     coverage.hidden = true;
   }
 }
@@ -127,20 +135,20 @@ async function applyQuickSettings() {
   refreshTicket++;
   busy = true;
   setQuickControlsDisabled(true);
-  setStatus('正在应用设置…');
+  setStatus(() => t('m_2d69d60095d2'));
 
-  const payload = { enabled: enabled.checked, targetLanguage: language.value, displayMode: mode.value };
+  const payload = { enabled: enabled.checked, targetLanguage: languageSelect.value(), displayMode: mode.value };
   try {
     const response = await browser.runtime.sendMessage({ type: 'toggle', ...payload }) as OverviewResponse;
     if (disposed || revision !== interactionRevision) return;
-    if (!response?.ok) throw new Error(response?.error || '设置未能应用');
+    if (!response?.ok) throw new Error(response?.error || t('m_38b66054dd5e'));
     if (response.settings) applySettings(response.settings);
     interactionDirty = false;
     failedInteractionRevision = undefined;
   } catch (error) {
     if (revision === interactionRevision && !disposed) {
       failedInteractionRevision = revision;
-      setStatus(errorMessage(error, '设置未能应用，请重试'), true);
+      setStatus(() => errorMessage(error, t('m_708a34be0197')), true);
     }
     return;
   } finally {
@@ -153,15 +161,22 @@ async function applyQuickSettings() {
 }
 
 for (const element of quickControls) element.addEventListener('change', () => { void applyQuickSettings(); });
+language.addEventListener('input', () => {
+  if (disposed || busy) return;
+  interactionDirty = true;
+  failedInteractionRevision = undefined;
+  interactionRevision++;
+  refreshTicket++;
+});
 
 document.getElementById('settings')?.addEventListener('click', async () => {
   if (openingSettings) return;
   openingSettings = true; settingsOpenError = false;
   try {
     const result = await browser.runtime.sendMessage({ type: 'open-settings' });
-    if (!result?.ok) throw new Error(result?.error || '无法打开设置，请重试');
+    if (!result?.ok) throw new Error(result?.error || t('m_e07f2e4b2b94'));
     window.close();
-  } catch (error) { settingsOpenError = true; setStatus(errorMessage(error, '无法打开设置，请重试'), true); }
+  } catch (error) { settingsOpenError = true; setStatus(() => errorMessage(error, t('m_e07f2e4b2b94')), true); }
   finally { openingSettings = false; }
 });
 

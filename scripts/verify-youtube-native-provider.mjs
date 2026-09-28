@@ -101,7 +101,7 @@ export async function main(args) {
     report.browserVersion = await options.evaluate(() => navigator.userAgent);
     rpc = payload => options.evaluate(payload => chrome.runtime.sendMessage(payload), payload);
     const settings = normalizeSettings({ ...authorized.settings, enabled: false, displayMode: 'translated',
-      model: 'deepseek-flash', profile: 'deepseek', thinkingEffort: 'off', concurrency: 32, translationStream: false,
+      model: 'deepseek-flash', profile: 'deepseek', thinkingEffort: 'off', onlineConcurrency: 32, translationStream: false,
       liveBufferMs: config.bufferMs, liveSourceLanguage: 'auto', sourceLanguage: 'auto', targetLanguage: 'zh-Hans' });
     assert.equal(settings.endpoint, authorized.settings.endpoint, 'authorized-destination-changed');
     assert.equal((await rpc({ type: 'save', settings, apiKey: authorized.apiKey, remember: false })).ok, true, 'isolated-save-failed');

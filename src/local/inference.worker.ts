@@ -1,8 +1,6 @@
 import { Wllama } from '@wllama/wllama/esm/index.js';
-import { resolveModelFiles } from './storage.ts';
-import { inspectAndOrderFiles } from './gguf.ts';
 import { localError } from './types.ts';
-import type { LocalModelInfo, LocalRuntimeConfig, LocalInferenceMetrics } from './types.ts';
+import type { LocalModelInfo, LocalRuntimeConfig, LocalInferenceMetrics, PreparedLocalModel } from './types.ts';
 import { normalizeLocalConfig, resolveLocalConfig } from './config.ts';
 import { emptyGpuInfo, observeGpuLog, verifyGpuOffload } from './gpu.ts';
 import { NativeTelemetry } from './native-telemetry.ts';
@@ -20,7 +18,6 @@ let failed = false, loading = false, ready = false;
 let loadId = '';
 let loadFailure: string | undefined;
 const running = new Map<string, AbortController>();
-const sourceVerifications = new Map<string, AbortController>();
 const nativeGenerating = new Set<string>();
 let nativeGenerationPeak = 0;
 const telemetry = () => self.postMessage({ telemetry: { gpu, nativeSlots: native.slots.size,
@@ -55,35 +52,18 @@ function inferenceError(error: unknown): string {
   if (/unknown architecture|unsupported architecture|unsupported.*(?:model|tensor|backend)|(?:model|tensor|backend).*unsupported|not implemented|invalid.*(?:model|tensor)|failed to load.*model/i.test(message)) return 'LOCAL_NATIVE_UNSUPPORTED';
   return localError(error);
 }
-async function resolveModelFilesWithProgress(id: string, modelId: string) {
-  const cancellation = new AbortController();
-  sourceVerifications.set(id, cancellation);
-  try {
-    return await resolveModelFiles(modelId, {
-      shouldCancel: () => cancellation.signal.aborted,
-      onProgress: progress => {
-        if (!cancellation.signal.aborted) self.postMessage({ id, stage: 'fingerprinting',
-          verificationProgress: { bytesProcessed: progress.bytesProcessed, totalBytes: progress.totalBytes } });
-      },
-    });
-  } finally {
-    if (sourceVerifications.get(id) === cancellation) sourceVerifications.delete(id);
-  }
-}
 self.onmessage = async (event: MessageEvent) => {
   const { id, action, modelId, body } = event.data;
-  if (action === 'abort') { running.get(id)?.abort(); sourceVerifications.get(id)?.abort(); return; }
-  if (action === 'cancel-verification') { sourceVerifications.get(id)?.abort(); return; }
+  if (action === 'abort') { running.get(id)?.abort(); return; }
   try {
     if (action === 'load') {
       loading = true; ready = false; loadId = id;
       if (!(navigator as any).gpu) throw new Error('LOCAL_WEBGPU_UNSUPPORTED');
       if (!(WebAssembly as any).Suspending) throw new Error('LOCAL_BROWSER_JSPI_UNSUPPORTED');
       try { new WebAssembly.Memory({ address: 'i64', initial: 1n } as any); } catch { throw new Error('LOCAL_BROWSER_MEMORY64_UNSUPPORTED'); }
-      const model = await resolveModelFilesWithProgress(id, modelId);
-      const inspected = await inspectAndOrderFiles(model.files);
-      const modelInfo = { ...model.info, ...inspected.info, id: model.info.id, name: model.info.name,
-        files: model.info.files, bytes: model.info.bytes, importedAt: model.info.importedAt };
+      const model = event.data.prepared as PreparedLocalModel | undefined;
+      if (!model || model.info.id !== modelId || !Array.isArray(model.files) || !model.files.length) throw new Error('LOCAL_MODEL_SOURCE_INVALID');
+      const modelInfo = model.info;
       loadedModel = modelInfo;
       const requested = normalizeLocalConfig(event.data.config);
       const desired = resolveLocalConfig(requested, modelId), fallbackReasons: string[] = [];
@@ -104,7 +84,7 @@ self.onmessage = async (event: MessageEvent) => {
             suppressNativeLog: false, logger: { debug: metadataOnly, log: metadataOnly, warn: metadataOnly, error: metadataOnly } });
           engine.setCompat(null);
           self.postMessage({ id, stage: 'loading-weights' });
-          await engine.loadModel(inspected.files, { log_level: 2, n_ctx: runtime.contextTokens,
+          await engine.loadModel(model.files, { log_level: 2, n_ctx: runtime.contextTokens,
             ...(runtime.cpuThreads === 'auto' ? {} : { n_threads: runtime.cpuThreads }),
             n_gpu_layers: 999, n_parallel: runtime.parallel, kv_unified: true, cont_batching: true,
             // Avoid idle-slot state copies/readbacks stalling global decoding during refill.
@@ -159,14 +139,6 @@ self.onmessage = async (event: MessageEvent) => {
         }
       }
       throw lastError;
-    }
-    if (action === 'validate-source') {
-      const activeModel = loadedModel;
-      if (!ready || loading || !activeModel || activeModel.id !== modelId) throw new Error('LOCAL_MODEL_NOT_LOADED');
-      const current = await resolveModelFilesWithProgress(id, modelId);
-      if (current.info.id !== activeModel.id) throw new Error('LOCAL_SOURCE_CHANGED');
-      self.postMessage({ id, ok: true });
-      return;
     }
     if (action === 'gpu-flush') {
       if (!ready || loading || running.size) throw new Error('LOCAL_GPU_TIMING_BUSY');

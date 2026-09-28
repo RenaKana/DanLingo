@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS, normalizeSettings, LIVE_PROMPT_VERSION } from '../../src/core/config.ts';
+import { normalizeSettings, LIVE_PROMPT_VERSION } from '../../src/core/config.ts';
 import { cacheResource } from '../../src/core/resource.ts';
 import { TranslationEngine, MemoryTranslationCache, translationCacheKey } from '../../src/translation/index.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 async function flush() { for (let n = 0; n < 60; n++) await Promise.resolve(); }
 class Clock {
@@ -27,7 +28,7 @@ class Clock {
     this.time = target; await flush();
   }
 }
-const settings = extra => ({ ...DEFAULT_SETTINGS, enabled: true, batchSize: 1, ...extra });
+const settings = extra => onlineSettings({ enabled: true, batchSize: 1, ...extra });
 const wireData = init => {
   const content = JSON.parse(init.body).messages[1].content;
   if (content.startsWith('{')) return JSON.parse(content);
@@ -186,7 +187,7 @@ test('identical live text coalesces provider work while preserving every event I
 
 test('pre-live sm cache remains readable through the engine while live cache uses a separate namespace', async t => {
   const cache = new MemoryTranslationCache({ now: () => 1800000001000 });
-  const config = normalizeSettings({ ...DEFAULT_SETTINGS, schemaVersion: 2, enabled: true, model: 'existing-model', thinkingEffort:'default' });
+  const config = normalizeSettings(onlineSettings({ schemaVersion: 2, enabled: true, model: 'existing-model', thinkingEffort:'default' }));
   const text = '既存の文章';
   await cache.set(translationCacheKey('sm9', text, config), '历史译文', { resourceId: 'sm9' });
   const { engine, clock, calls } = harness(t, { cache });

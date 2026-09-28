@@ -1,0 +1,22 @@
+{
+  "m_549ef7f261be": "O contador de solicitações é compartilhado entre todas as abas e serviços e é contabilizado por dia do calendário local neste dispositivo. Tentativas, traduções de recuperação e testes também contam. Este é um limite na quantidade de solicitações; defina um limite monetário no serviço.",
+  "m_4e377b8b93c0": "Remover o registro de \"{p0}\"? O arquivo GGUF original não será afetado. Se o modelo estiver em uso, primeiro será descarregado da memória e a seleção será desmarcada. {p1}",
+  "m_e9d46d8e3ec9": "Excluir a cópia de \"{p0}\" dentro da extensão? O arquivo GGUF original não será afetado. Se o modelo estiver em uso, primeiro será descarregado da memória.",
+  "m_779638a3aad8": "Remover o registro de \"{p0}\"? O arquivo original não será afetado. Se o modelo estiver em uso, primeiro será descarregado da memória e a seleção será desmarcada.",
+  "m_b4fe85db78aa": "Este modelo não reaparecerá ao atualizar a pasta.",
+  "m_9a5bf1f8dda0": "Insira a chave de API; se o domínio do serviço não mudar, o campo pode ficar em branco.",
+  "m_da84b511f856": "Salvar e autorizar o serviço",
+  "m_ffad0837a6bc": "Este serviço ainda não foi autorizado. Para fechar as configurações, clique em “Salvar e autorizar o serviço”.",
+  "m_592a688fb6d4": "O teste enviará a quantidade selecionada de solicitações e poderá gerar uso do serviço. Durante o teste, a tradução da página de visualização será pausada e retomada ao final, sem alterar a opção de ativar ou desativar a tradução.",
+  "m_41ed2767d1c6": "Configurações de exibição",
+  "m_217cfe7db1e3": "Tema do sistema",
+  "m_92618f81aee5": "Desativar raciocínio",
+  "m_9c41b3a9e12a": "Nível de raciocínio",
+  "m_45da2d9c85d1": "Adicionar pasta",
+  "m_9b826346239e": "Mecanismo de tradução",
+  "m_aa0819dfc4d8": "Tema claro",
+  "m_a6b75d068032": "Tema escuro",
+  "locale.label": "Idioma da interface",
+  "m_9dac295e3b09": "Entenda outro idioma por meio do danmaku.",
+  "m_03287b455f2d": "Danmaku comum"
+}

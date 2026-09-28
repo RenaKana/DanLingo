@@ -1,6 +1,6 @@
 import { browser } from 'wxt/browser';
 import { LocalController } from '../../src/local/controller';
-import { deleteModel, listModels, listDirectories, removeDirectory } from '../../src/local/storage';
+import { deleteModel, listModels, listDirectories, removeDirectory, resolveModelFiles } from '../../src/local/storage';
 import { LOCAL_CHANNEL, localError } from '../../src/local/types';
 import { LocalBenchmarkRunner } from '../../src/local/benchmark-runner';
 import { DirectoryScanManager } from '../../src/local/directory-manager';
@@ -8,13 +8,21 @@ import { LocalIdleUnloader } from '../../src/local/idle-unload';
 import { refreshFileReferencesInWorker } from '../../src/local/file-registration-client';
 import type { DirectoryScanStatus } from '../../src/local/directory-types';
 
-const controller = new LocalController(() => new Worker(new URL('../../src/local/inference.worker.ts', import.meta.url), { type: 'module' }));
+const controller = new LocalController(() => new Worker(new URL('../../src/local/inference.worker.ts', import.meta.url), { type: 'module' }),
+  () => performance.now(), resolveModelFiles);
 const benchmark = new LocalBenchmarkRunner(controller);
 const idleUnload = new LocalIdleUnloader({
+  enabled: false,
   snapshot: () => controller.snapshot(), unload: () => controller.unload(), blocked: () => benchmark.isRunning(),
   canUnload: async () => { const reply = await browser.runtime.sendMessage({ type: 'local-idle-check' }); return reply?.ok === true && reply.idle === true; },
   unloaded: () => { void browser.runtime.sendMessage({ type: 'local-idle-unloaded' }).catch(() => {}); },
 });
+// Offscreen documents only expose chrome.runtime. The background owns storage
+// and forwards changes; a concurrent update must win over the initial reply.
+let idlePolicyRevision = 0;
+function applyIdlePolicy(policy: { enabled: boolean; timeoutMs: number }) {
+  idleUnload.configure(policy);
+}
 let policyRevision = 0;
 async function sourcesChanged() {
   const models = await listModels(), currentId = controller.snapshot().model?.id;
@@ -29,10 +37,17 @@ const directories = new DirectoryScanManager(
 let sourceScanEpoch = 0, fileRefreshes = 0, fileRefreshController: AbortController | undefined;
 let fileRefreshStatus: DirectoryScanStatus | undefined;
 async function directoryState() {
-  return { directories: await listDirectories(), scan: fileRefreshes > 0 ? fileRefreshStatus : directories.snapshot(), scanBusy: directories.busy() || fileRefreshes > 0 };
+  const directoryScan = directories.snapshot();
+  return { directories: await listDirectories(), scan: fileRefreshes > 0 || !directories.busy() && fileRefreshStatus ? fileRefreshStatus : directoryScan, scanBusy: directories.busy() || fileRefreshes > 0 };
 }
 browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.channel !== LOCAL_CHANNEL || sender.id !== browser.runtime.id || sender.tab) return;
+  if (message.action === 'idle-policy') {
+    idlePolicyRevision++;
+    applyIdlePolicy(message.policy);
+    sendResponse({ ok: true });
+    return;
+  }
   const respond = async () => {
     const release = ['load', 'ensure', 'complete', 'benchmark-start', 'benchmark-stop'].includes(message.action)
       || message.action === 'state' && message.demand === true ? idleUnload.hold() : undefined;
@@ -54,20 +69,34 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'list': return { ok: true, models: await listModels(), state: controller.snapshot(), ...await directoryState() };
         case 'directory-status': return { ok: true, ...await directoryState() };
         case 'directory-scan': {
+          fileRefreshStatus = undefined;
+          const scanStartedAt = Date.now();
           const epoch = sourceScanEpoch;
           const ids = message.directoryId ? [message.directoryId] : (await listDirectories()).map(directory => directory.id);
           const results = await Promise.all(ids.map(id => directories.scan(id)));
           const cancelled = () => epoch !== sourceScanEpoch || results.some(result => result.status.phase === 'cancelled');
           let fileIssues: Awaited<ReturnType<typeof refreshFileReferencesInWorker>> = [];
           if (!message.directoryId && !cancelled()) {
+            const completed = results.reduce((sum, result) => ({
+              checkedFiles: sum.checkedFiles + result.status.checkedFiles, modelsFound: sum.modelsFound + result.status.modelsFound,
+              timings: { enumerationMs: sum.timings.enumerationMs + (result.status.timings?.enumerationMs ?? 0),
+                fileAccessMs: sum.timings.fileAccessMs + (result.status.timings?.fileAccessMs ?? 0),
+                headerMs: sum.timings.headerMs + (result.status.timings?.headerMs ?? 0),
+                registrationMs: sum.timings.registrationMs + (result.status.timings?.registrationMs ?? 0) },
+            }), { checkedFiles: 0, modelsFound: 0, timings: { enumerationMs: 0, fileAccessMs: 0, headerMs: 0, registrationMs: 0 } });
             fileRefreshes++;
             const refreshController = new AbortController(); fileRefreshController = refreshController;
-            fileRefreshStatus = { phase: 'scanning', stage: 'enumerating', checkedFiles: 0, modelsFound: 0,
-              elapsedMs: 0, fingerprintedBytes: 0, totalFingerprintBytes: 0, issues: [] };
+            fileRefreshStatus = { ...completed, phase: 'scanning', stage: 'enumerating',
+              elapsedMs: Date.now() - scanStartedAt, startedAt: scanStartedAt, issues: [] };
             const refreshStarted = performance.now();
             try {
               fileIssues = await refreshFileReferencesInWorker({ signal: refreshController.signal, onProgress: status => {
-                fileRefreshStatus = { ...status, elapsedMs: performance.now() - refreshStarted };
+                fileRefreshStatus = { ...status, checkedFiles: completed.checkedFiles + status.checkedFiles, modelsFound: completed.modelsFound + status.modelsFound,
+                  elapsedMs: Date.now() - scanStartedAt, startedAt: scanStartedAt,
+                  timings: { enumerationMs: completed.timings.enumerationMs + (status.timings?.enumerationMs ?? 0),
+                    fileAccessMs: completed.timings.fileAccessMs + (status.timings?.fileAccessMs ?? 0),
+                    headerMs: completed.timings.headerMs + (status.timings?.headerMs ?? 0),
+                    registrationMs: completed.timings.registrationMs + (status.timings?.registrationMs ?? 0) } };
               } });
               await sourcesChanged();
             } catch (error) {
@@ -75,14 +104,26 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
               fileRefreshStatus = { ...(fileRefreshStatus ?? { checkedFiles: 0, modelsFound: 0, issues: [] }), phase: 'cancelled', elapsedMs: performance.now() - refreshStarted };
             } finally {
               fileRefreshes--; if (fileRefreshController === refreshController) fileRefreshController = undefined;
-              if (fileRefreshStatus?.phase === 'scanning') fileRefreshStatus = { ...fileRefreshStatus, phase: 'complete', elapsedMs: performance.now() - refreshStarted };
+              if (fileRefreshStatus?.phase === 'scanning') {
+                const failed = results.find(result => result.status.phase === 'error');
+                fileRefreshStatus = { ...fileRefreshStatus, phase: failed ? 'error' : 'complete', error: failed?.status.error,
+                  elapsedMs: Date.now() - scanStartedAt };
+              }
             }
           }
           return { ok: true, models: await listModels(), state: controller.snapshot(), ...await directoryState(), fileIssues };
         }
-        case 'files-changed':
+        case 'files-changed': {
+          // Confirm persisted handles from the same document that prepares real loads.
+          // Only public errors/metadata cross runtime messaging; File objects stay here.
+          const issues: { modelId: string; error: string }[] = [];
+          if (Array.isArray(message.modelIds)) for (const id of new Set<string>(message.modelIds)) {
+            try { await resolveModelFiles(id); }
+            catch (error) { issues.push({ modelId: id, error: localError(error) }); }
+          }
           await sourcesChanged();
-          return { ok: true, models: await listModels(), state: controller.snapshot() };
+          return { ok: true, models: await listModels(), state: controller.snapshot(), issues };
+        }
         case 'directory-cancel':
           sourceScanEpoch++;
           if (fileRefreshController) {
@@ -115,3 +156,7 @@ browser.runtime.onMessage.addListener((message, sender, sendResponse) => {
   void respond().then(sendResponse);
   return true;
 });
+const initialIdlePolicyRevision = idlePolicyRevision;
+void browser.runtime.sendMessage({ type: 'local-idle-policy-get' }).then(reply => {
+  if (reply?.ok === true && idlePolicyRevision === initialIdlePolicyRevision) applyIdlePolicy(reply.policy);
+}).catch(() => { /* Keep automatic unload disabled while saved preferences are unavailable. */ });

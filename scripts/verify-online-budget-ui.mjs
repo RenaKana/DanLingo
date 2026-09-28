@@ -10,11 +10,11 @@ const root = resolve('.artifacts/online-budget-ui'); await mkdir(root, { recursi
 const directory = await mkdtemp(resolve(root, 'run-'));
 const extension = resolve(directory, 'extension'), profile = resolve(directory, 'profile');
 const report = { evidence: 'BUILT_EXTENSION_REAL_BUDGET_STORAGE_SYNTHETIC_TRANSPORT', checks: {}, screenshots: [], errors: [] };
-await cp(resolve('.output/chrome-mv3'), extension, { recursive: true });
+await cp(resolve(process.argv[2] ?? '.output/chrome-mv3'), extension, { recursive: true });
 const manifest = JSON.parse(await readFile(resolve(extension, 'manifest.json'), 'utf8'));
 manifest.host_permissions.push('https://fixture.invalid/*');
 await writeFile(resolve(extension, 'manifest.json'), JSON.stringify(manifest));
-const settings = { ...DEFAULT_SETTINGS, onlineRequestLimitPerDay: 3, endpoint: 'https://fixture.invalid/v1', model: 'deepseek-v4-pro', profile: 'deepseek', thinkingEffort: 'off', liveSourceLanguage: 'ja', liveMaxBatchWaitMs: 0 };
+const settings = { ...DEFAULT_SETTINGS, onlineRequestLimitPerDay: 3, endpoint: 'https://fixture.invalid/v1', model: 'deepseek-v4-pro', profile: 'deepseek', reasoningProfileOverride: 'deepseek', thinkingEffort: 'off', liveSourceLanguage: 'ja', liveMaxBatchWaitMs: 0 };
 let context, page, worker, origin;
 async function launch() {
   context = await chromium.launchPersistentContext(profile, { headless: true,
@@ -23,6 +23,7 @@ async function launch() {
     args: ['--disable-extensions-except=' + extension, '--load-extension=' + extension, '--disable-background-networking', '--disable-component-update', '--disable-sync', '--no-first-run', '--host-resolver-rules=MAP * ~NOTFOUND'] });
   await context.route(/^https?:/, route => route.abort());
   worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
+  await worker.evaluate(() => chrome.storage.local.set({ 'ui.locale.v1': 'zh-CN' }));
   origin = 'chrome-extension://' + new URL(worker.url()).host;
   await worker.evaluate(() => {
     globalThis.__quotaFixture = { sends: 0, fail: false };
@@ -46,7 +47,7 @@ try {
   await launch();
   await check('shared-cap-charges-tests-and-transport-failures', async () => {
     const saved = await rpc({ type: 'save', settings, apiKey: 'synthetic-key', remember: true });
-    assert.equal(saved.ok, true); assert.equal(saved.onlineBudget.used, 0);
+    assert.equal(saved.ok, true, JSON.stringify(saved)); assert.equal(saved.onlineBudget.used, 0);
     await page.reload();
     assert.equal(await page.locator('#online-request-limit').inputValue(), '3');
     const first = await rpc({ type: 'test-model', settings, text: 'A synthetic request.' }); assert.equal(first.ok, true, JSON.stringify(first));
@@ -110,6 +111,17 @@ try {
     assert.equal(await worker.evaluate(() => __quotaFixture.sends), before);
     const unavailable = (await rpc({ type: 'online-budget-status' })).onlineBudget;
     assert.equal(unavailable.status, 'unavailable'); assert.equal(unavailable.used, null);
+  });
+  await check('zero-disables-the-cap-even-with-unavailable-usage-storage', async () => {
+    const saved = await rpc({ type: 'save', settings: { ...settings, onlineRequestLimitPerDay: 0 }, remember: true });
+    assert.equal(saved.ok, true); assert.equal(saved.onlineBudget.status, 'available');
+    const before = await worker.evaluate(() => __quotaFixture.sends);
+    const result = await rpc({ type: 'test-model', settings, text: 'An unlimited synthetic request.' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(await worker.evaluate(() => __quotaFixture.sends), before + 1);
+    await page.reload();
+    await page.waitForFunction(() => document.querySelector('#online-budget-status')?.textContent.includes('不限制'));
+    assert.equal(await page.locator('#online-request-limit').inputValue(), '0');
   });
   assert.deepEqual(report.errors, []); report.status = 'PASS';
 } catch (error) { report.status = 'FAIL'; report.errors.push(error.stack ?? String(error)); process.exitCode = 1; }

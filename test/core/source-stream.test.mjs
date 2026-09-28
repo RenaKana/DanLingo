@@ -17,3 +17,21 @@ test('UTF8 byte limit splits long comments before count limit and reset starts a
   while(p.busy){const c=sent.at(-1);assert.ok(new TextEncoder().encode(JSON.stringify(c)).length<SOURCE_CHUNK_BYTES);total+=c.upserts.length;p.acknowledge(c.revision,c.index,1);}
   assert.equal(total,600);p.reset();p.update([],2);assert.equal(sent.at(-1).reset,true);assert.equal(sent.at(-1).complete,true);
 });
+test('platform-specific byte budget still preserves chunk order, retransmission and acknowledgments',()=>{
+  const sent=[], budget=SOURCE_CHUNK_BYTES/2-16*1024;
+  const p=new SourcePublisher(c=>sent.push(structuredClone(c)),budget);
+  const rows=Array.from({length:1100},(_,i)=>row(i,'語'.repeat(180)));
+  p.update(rows,0);
+  assert.ok(sent[0].upserts.length<500);
+  p.pump(1000);assert.deepEqual(sent.at(-1),sent[0]);
+  let count=0, index=0;
+  while(p.busy){
+    const c=sent.at(-1);
+    assert.equal(c.index,index++);
+    assert.ok(new TextEncoder().encode(JSON.stringify(c)).length<=budget);
+    count+=c.upserts.length;
+    p.acknowledge(c.revision,c.index,1001+index);
+  }
+  assert.equal(count,rows.length);
+  assert.equal(p.complete,true);
+});

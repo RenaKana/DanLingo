@@ -1,0 +1,141 @@
+import type { Settings } from '../../src/core/types';
+
+interface CapacityProfile {
+  identity: string;
+  maxItems: number;
+  maxChars: number;
+  p95Ms?: number;
+  sourceRecordId?: string;
+  manual: boolean;
+}
+interface HybridDraft { enabled: boolean; profiles: CapacityProfile[] }
+interface CapacityReply {
+  ok: boolean;
+  identity?: string;
+  profile?: CapacityProfile;
+  recommendation?: CapacityProfile;
+}
+
+export function mountHybridUI(options: {
+  container: HTMLElement;
+  readSettings: () => Settings;
+  requestCapacity: (settings: Settings) => Promise<CapacityReply>;
+  changed: () => void;
+  enabledChanged: () => void;
+  reveal: (field: HTMLElement) => void;
+}) {
+  const root = options.container;
+  root.innerHTML = `<label class="check"><input id="bilibili-hybrid" type="checkbox" aria-controls="hybrid-controls"><span>B站本地限量 + 在线分流</span></label>
+    <div id="hybrid-controls" hidden>
+      <div class="hybrid-fields">
+        <label><span>每5秒本地新输入条数</span><input id="hybrid-max-items" type="number" min="1" max="1000" step="1" inputmode="numeric"></label>
+        <label><span>每5秒本地新输入字符（UTF-16）</span><input id="hybrid-max-chars" type="number" min="1" max="60000" step="1" inputmode="numeric"></label>
+      </div>
+      <div class="hybrid-actions"><button id="hybrid-apply" type="button" disabled>应用建议</button><span id="hybrid-status" class="subtle" role="status" aria-live="polite"></span></div>
+      <p class="subtle">需启用上方5秒规划并配置两端；本地超额、忙满或未就绪时使用在线服务，沿用在线每日请求上限（0 不限）。</p>
+    </div>`;
+  const enabled = root.querySelector<HTMLInputElement>('#bilibili-hybrid')!;
+  const controls = root.querySelector<HTMLElement>('#hybrid-controls')!;
+  const items = root.querySelector<HTMLInputElement>('#hybrid-max-items')!;
+  const chars = root.querySelector<HTMLInputElement>('#hybrid-max-chars')!;
+  const apply = root.querySelector<HTMLButtonElement>('#hybrid-apply')!;
+  const status = root.querySelector<HTMLElement>('#hybrid-status')!;
+  let profiles: CapacityProfile[] = [];
+  let identity = '', recommendation: CapacityProfile | undefined, revision = 0, error = '';
+  let pending: Promise<void> | undefined;
+
+  function valid() {
+    return items.validity.valid && chars.validity.valid && items.value !== '' && chars.value !== ''
+      && Number.isSafeInteger(Number(items.value)) && Number.isSafeInteger(Number(chars.value));
+  }
+  function matched() { return profiles.find(profile => profile.identity === identity); }
+  function setFields(profile?: CapacityProfile) {
+    items.value = profile ? String(profile.maxItems) : '';
+    chars.value = profile ? String(profile.maxChars) : '';
+  }
+  function retainProfiles(rows: CapacityProfile[]) {
+    const byIdentity = new Map<string, CapacityProfile>();
+    for (const row of rows) byIdentity.set(row.identity, row);
+    return [...byIdentity.values()].slice(-50);
+  }
+  function render() {
+    controls.hidden = !enabled.checked;
+    for (const field of [items, chars]) field.disabled = enabled.checked && !!pending;
+    apply.disabled = !enabled.checked || !!pending || !recommendation || !identity;
+    if (!enabled.checked) { status.textContent = ''; return; }
+    if (pending) { status.textContent = '正在核对当前配置…'; return; }
+    if (error) { status.textContent = error; return; }
+    if (!identity) { status.textContent = '当前配置尚无容量身份'; return; }
+    const current = matched();
+    const suggestion = recommendation ? `建议 ${recommendation.maxItems} 条 / ${recommendation.maxChars} 字符` : '暂无测试建议，请手填上限或主动运行现有性能测试';
+    status.textContent = current ? `${current.manual ? '手动上限' : '已应用上限'} · ${suggestion}` : `尚未应用上限 · ${suggestion}`;
+  }
+  const read = (): HybridDraft => ({ enabled: enabled.checked, profiles: [...profiles] });
+  function saveProfile(profile: CapacityProfile) {
+    profiles = retainProfiles([...profiles, profile]);
+    setFields(profile); options.changed(); render();
+  }
+  function manualEdit() {
+    if (!identity || !valid()) { render(); options.changed(); return; }
+    const source = matched() ?? recommendation;
+    saveProfile({ identity, maxItems: Number(items.value), maxChars: Number(chars.value),
+      ...(source?.p95Ms === undefined ? {} : { p95Ms: source.p95Ms }),
+      ...(source?.sourceRecordId === undefined ? {} : { sourceRecordId: source.sourceRecordId }), manual: true });
+  }
+  enabled.addEventListener('change', () => {
+    options.changed(); options.enabledChanged();
+    if (enabled.checked) void refresh(); else { revision++; identity = ''; recommendation = undefined; pending = undefined; error = ''; render(); }
+  });
+  for (const input of [items, chars]) input.addEventListener('input', manualEdit);
+  apply.addEventListener('click', () => {
+    if (!identity || !recommendation) return;
+    saveProfile({ ...recommendation, identity, manual: false });
+  });
+
+  async function refresh(): Promise<void> {
+    const ticket = ++revision;
+    if (!enabled.checked) { identity = ''; recommendation = undefined; pending = undefined; error = ''; render(); return; }
+    error = '';
+    const request = (async () => {
+      let draft: Settings;
+      try { draft = options.readSettings(); }
+      catch { if (ticket === revision) { identity = ''; recommendation = undefined; error = '请先修正当前配置'; } return; }
+      try {
+        const reply = await options.requestCapacity(draft);
+        if (ticket !== revision || !enabled.checked) return;
+        if (!reply?.ok || !reply.identity) throw new Error('capacity-unavailable');
+        const changed = identity !== reply.identity;
+        identity = reply.identity;
+        recommendation = reply.recommendation?.identity === identity ? reply.recommendation : undefined;
+        const current = matched() ?? (reply.profile?.identity === identity ? reply.profile : undefined);
+        if (current && !matched()) profiles = retainProfiles([...profiles, current]);
+        if (changed) setFields(current ?? recommendation);
+        render();
+      } catch {
+        if (ticket === revision) { identity = ''; recommendation = undefined; error = '容量读取失败，请重试'; }
+      }
+    })();
+    pending = request;
+    render();
+    await request;
+    if (ticket === revision) { pending = undefined; render(); }
+  }
+  function fill(next?: HybridDraft) {
+    ++revision; pending = undefined; identity = ''; recommendation = undefined; error = '';
+    enabled.checked = next?.enabled === true;
+    profiles = Array.isArray(next?.profiles) ? retainProfiles(next.profiles) : [];
+    setFields(); render();
+    if (enabled.checked) void refresh();
+  }
+  async function ensureSelected() {
+    if (!enabled.checked) return;
+    if (pending) await pending;
+    if (!identity) await refresh();
+    if (!identity || !matched()) {
+      options.reveal(items);
+      throw new Error('HYBRID_CAPACITY_REQUIRED');
+    }
+    if (!valid()) { options.reveal(items.validity.valid ? chars : items); throw new Error('HYBRID_CAPACITY_INVALID'); }
+  }
+  return { read, fill, refresh, ensureSelected, enabled: () => enabled.checked };
+}

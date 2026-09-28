@@ -1,0 +1,22 @@
+{
+  "m_549ef7f261be": "Der Anfragezähler wird von allen Tabs und Diensten gemeinsam genutzt und nach dem lokalen Kalendertag auf diesem Gerät berechnet. Wiederholungen, Nachholübersetzungen und Tests zählen ebenfalls. Dies ist eine Begrenzung der Anfragenzahl; legen Sie eine Betragsgrenze beim Dienst fest.",
+  "m_4e377b8b93c0": "Registrierung von „{p0}“ entfernen? Die ursprüngliche GGUF-Datei bleibt unberührt. Wenn das Modell gerade verwendet wird, wird es zuerst aus dem Arbeitsspeicher entladen und die Auswahl aufgehoben. {p1}",
+  "m_e9d46d8e3ec9": "Kopie von „{p0}“ innerhalb der Erweiterung löschen? Die ursprüngliche GGUF-Datei bleibt unberührt. Wenn das Modell gerade verwendet wird, wird es zuerst aus dem Arbeitsspeicher entladen.",
+  "m_779638a3aad8": "Registrierung von „{p0}“ entfernen? Die Originaldatei bleibt unberührt. Wenn das Modell gerade verwendet wird, wird es zuerst aus dem Arbeitsspeicher entladen und die Auswahl aufgehoben.",
+  "m_b4fe85db78aa": "Dieses Modell wird beim Aktualisieren des Ordners nicht erneut angezeigt.",
+  "m_9a5bf1f8dda0": "API-Schlüssel eingeben; wenn sich die Dienstdomain nicht ändert, kann das Feld leer bleiben.",
+  "m_da84b511f856": "Dienst speichern und autorisieren",
+  "m_ffad0837a6bc": "Dieser Dienst ist noch nicht autorisiert. Klicken Sie auf „Dienst speichern und autorisieren“, bevor Sie die Einstellungen schließen.",
+  "m_592a688fb6d4": "Der Test sendet die ausgewählte Anzahl von Anfragen und kann zu Dienstnutzung führen. Während des Tests wird die Übersetzung der Wiedergabeseite pausiert und danach fortgesetzt. Die Einstellung zum Ein- oder Ausschalten der Übersetzung bleibt unverändert.",
+  "locale.label": "Oberflächensprache",
+  "m_41ed2767d1c6": "Wiedergabeeinstellungen",
+  "m_9dac295e3b09": "Andere Sprachen in Danmaku verstehen.",
+  "m_217cfe7db1e3": "Systemthema",
+  "m_92618f81aee5": "Reasoning deaktivieren",
+  "m_9c41b3a9e12a": "Denkaufwand",
+  "m_45da2d9c85d1": "Ordner hinzufügen",
+  "m_9b826346239e": "Übersetzungs-Backend",
+  "m_aa0819dfc4d8": "Helles Design",
+  "m_a6b75d068032": "Dunkles Design",
+  "m_03287b455f2d": "Normales Danmaku"
+}

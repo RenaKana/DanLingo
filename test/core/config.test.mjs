@@ -2,6 +2,21 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DEFAULT_SETTINGS, endpointOrigin, completionEndpoint, modelsEndpoint, normalizeSettings, normalizeThinkingEffort, thinkingEfforts, providerTimeoutMs } from '../../src/core/config.ts';
 
+test('retired Bilibili experiments cannot survive stored or imported settings; planning and filters remain', () => {
+  for (const stored of [false, true]) {
+    for (const enabled of [false, true]) {
+      const result = normalizeSettings({ enabled, bilibiliShadowScheduler: true, bilibiliNativeTranslationOnly: true,
+        bilibiliOwnedRelease: true, bilibiliUserFilters: true, onlineRequestLimitPerDay: 8 }, { stored });
+      assert.equal(result.bilibiliShadowScheduler, false);
+      assert.equal(result.bilibiliNativeTranslationOnly, false);
+      assert.equal(result.enabled, enabled);
+      assert.equal(result.bilibiliOwnedRelease, true);
+      assert.equal(result.bilibiliUserFilters, true);
+      assert.equal(result.onlineRequestLimitPerDay, 8);
+    }
+  }
+});
+
 test('explicit private HTTP opt-in accepts only local and RFC1918 hosts', () => {
   for (const host of ['localhost', '127.0.0.1', '10.0.0.1', '172.16.0.1', '172.31.255.254', '192.168.31.93']) {
     const endpoint=`http://${host}:8080/v1/chat/completions`;
@@ -31,16 +46,29 @@ test('address normalization preserves credential and URL boundary validation', (
   assert.notEqual(endpointOrigin('http://192.168.31.93:8080/v1',true),endpointOrigin('http://192.168.31.93:8081/v1',true));
 });
 
-test('fresh VOD settings default to all comments, a 60 video-second window and larger batches', () => {
+test('fresh VOD settings select automatic scope, a 60 video-second window and separate video batches', () => {
   const result=normalizeSettings(undefined);
   assert.deepEqual(result,DEFAULT_SETTINGS);
+  assert.equal(result.endpoint, '');
+  assert.equal(result.model, '');
+  assert.equal(result.profile, 'chat-completions');
   assert.equal(result.schemaVersion,3);
-  assert.equal(result.translationScope,'all');
+  assert.equal(result.translationScope,'auto');
   assert.equal(result.prefetchSeconds,60);
   assert.equal(result.urgentSeconds,5);
   assert.equal(result.batchSize,100);
+  assert.equal(result.videoBatchSize,20);
   assert.equal(result.maxBatchChars,12000);
   assert.equal(result.concurrency,2);
+});
+
+test('blank online connection fields remain editable and explicit profiles survive normalization', () => {
+  const draft = normalizeSettings({ backend: 'online', endpoint: '', model: '', profile: 'deepseek' });
+  assert.equal(draft.endpoint, '');
+  assert.equal(draft.model, '');
+  assert.equal(draft.profile, 'deepseek');
+  assert.deepEqual(normalizeSettings(draft), draft);
+  assert.deepEqual(normalizeSettings(draft, { stored: true }), draft);
 });
 
 test('old defaults migrate once while customized limits and settings survive', () => {
@@ -60,11 +88,26 @@ test('old defaults migrate once while customized limits and settings survive', (
 });
 
 test('VOD limits allow a one-hour window and bound large batches', () => {
-  const result=normalizeSettings({schemaVersion:2,translationScope:'window',prefetchSeconds:9999,urgentSeconds:0,batchSize:999,maxBatchChars:99999});
+  const result=normalizeSettings({schemaVersion:2,translationScope:'window',prefetchSeconds:9999,urgentSeconds:0,batchSize:999,videoBatchSize:999,maxBatchChars:99999});
   assert.deepEqual([result.prefetchSeconds,result.urgentSeconds,result.batchSize,result.maxBatchChars],[3600,1,200,24000]);
+  assert.equal(result.videoBatchSize,200);
   assert.equal(normalizeSettings({schemaVersion:2,translationScope:'window',prefetchSeconds:5,urgentSeconds:30}).urgentSeconds,5);
   assert.equal(normalizeSettings({schemaVersion:2,translationScope:'all',prefetchSeconds:5,urgentSeconds:30}).urgentSeconds,30);
   assert.equal(normalizeSettings({prefetchSeconds:-1}).prefetchSeconds,5);
+});
+
+test('video batch migration preserves only smaller valid saved shared limits', () => {
+  assert.equal(normalizeSettings({ schemaVersion:3, batchSize: 8 }, { stored:true }).videoBatchSize, 8);
+  assert.equal(normalizeSettings({ schemaVersion:3, batchSize: 80 }, { stored:true }).videoBatchSize, 20);
+  assert.equal(normalizeSettings({ schemaVersion:3, batchSize: 0 }, { stored:true }).videoBatchSize, 20);
+  assert.equal(normalizeSettings({ schemaVersion:3, batchSize: 8, videoBatchSize: 35 }, { stored:true }).videoBatchSize, 35);
+  assert.equal(normalizeSettings({ schemaVersion:3, batchSize: 8, videoBatchSize: 1 }, { stored:true }).batchSize, 8);
+  assert.equal(normalizeSettings({ schemaVersion:3, batchSize: 8, videoBatchSize: 1 }, { stored:true }).videoBatchSize, 1);
+  assert.equal(normalizeSettings({ schemaVersion:3, enabled: true }, { stored:true }).translationScope, 'all');
+  assert.equal(normalizeSettings({ translationScope:'auto' }, { stored:true }).translationScope, 'auto');
+  assert.equal(normalizeSettings({ translationScope:'window' }, { stored:true }).translationScope, 'window');
+  assert.equal(normalizeSettings({ translationScope:'all' }, { stored:true }).translationScope, 'all');
+  assert.equal(normalizeSettings({}, { stored:true }).translationScope, 'auto');
 });
 
 test('missing thinking settings use provider defaults and explicit unsupported efforts are rejected', () => {
@@ -92,19 +135,36 @@ test('thinking and service-default receive 120s independently of the old off tim
   }
   assert.equal(providerTimeoutMs(normalizeSettings({ ...old, thinkingEffort: 'off' })), 9000);
   assert.equal(providerTimeoutMs(normalizeSettings({ profile: 'chat-completions', model: 'any-name' })), 120000);
-  assert.equal(providerTimeoutMs(DEFAULT_SETTINGS), 12000);
+  assert.equal(providerTimeoutMs(DEFAULT_SETTINGS), 120000);
 });
 
 test('custom thinking timeout and higher concurrency persist within the supported limits', () => {
   const custom = normalizeSettings({ ...DEFAULT_SETTINGS, profile: 'deepseek', model:'deepseek-v4-pro', thinkingEffort: 'high',
-    requestTimeoutMs: 70000, thinkingRequestTimeoutMs: 95000, concurrency: 12 });
+    requestTimeoutMs: 70000, thinkingRequestTimeoutMs: 95000, onlineConcurrency: 12 });
   assert.equal(providerTimeoutMs(custom), 95000); assert.equal(custom.concurrency, 12);
   assert.deepEqual(normalizeSettings(custom), custom);
-  const bounded = normalizeSettings({ ...custom, requestTimeoutMs: 999999, thinkingRequestTimeoutMs: 999999, concurrency: 99 });
+  const bounded = normalizeSettings({ ...custom, requestTimeoutMs: 999999, thinkingRequestTimeoutMs: 999999, onlineConcurrency: 99 });
   assert.deepEqual([bounded.requestTimeoutMs, bounded.thinkingRequestTimeoutMs, bounded.concurrency], [120000, 120000, 64]);
   assert.equal(DEFAULT_SETTINGS.concurrency, 2);
 });
 test('entry preload defaults on and preserves an explicit off value', () => {
   assert.equal(normalizeSettings({}).localPreloadOnEntry, true);
   assert.equal(normalizeSettings({ localPreloadOnEntry: false }).localPreloadOnEntry, false);
+});
+
+test('Bilibili hybrid defaults off and retains only bounded, validated capacity profiles', () => {
+  const identity = 'a'.repeat(64);
+  const profile = { identity, maxItems: 1000, maxChars: 60000, p95Ms: 5000,
+    sourceRecordId: 'run-123', manual: false };
+  assert.deepEqual(normalizeSettings({}).bilibiliHybrid, { enabled: false, profiles: [] });
+  const saved = normalizeSettings({ ...DEFAULT_SETTINGS, bilibiliHybrid: { enabled: true, profiles: [profile] } });
+  assert.deepEqual(saved.bilibiliHybrid, { enabled: true, profiles: [profile] });
+  assert.deepEqual(normalizeSettings(saved).bilibiliHybrid, saved.bilibiliHybrid);
+  for (const invalid of [
+    { ...profile, identity: 'not-a-hash' }, { ...profile, maxItems: 0 }, { ...profile, maxItems: 1001 },
+    { ...profile, maxItems: 1.5 }, { ...profile, maxChars: 0 }, { ...profile, maxChars: 60001 },
+    { ...profile, p95Ms: Infinity }, { ...profile, p95Ms: 0 },
+    { ...profile, sourceRecordId: '../sensitive' }, { ...profile, manual: 'false' },
+  ]) assert.throws(() => normalizeSettings({ bilibiliHybrid: { enabled: false, profiles: [invalid] } }), /invalid-hybrid-profile/);
+  assert.throws(() => normalizeSettings({ bilibiliHybrid: { enabled: true, profiles: Array(51).fill(profile) } }), /invalid-hybrid-settings/);
 });

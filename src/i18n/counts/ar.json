@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "{count} مهمة",
+  "count.tasks.one": "{count} مهمة",
+  "count.tasks.two": "{count} مهمتان",
+  "count.tasks.few": "{count} مهام",
+  "count.tasks.many": "{count} مهمة",
+  "count.tasks.other": "{count} مهمة"
+}

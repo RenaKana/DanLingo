@@ -1,19 +1,29 @@
 import { defineConfig } from 'wxt';
 // @ts-ignore Build-only JavaScript plugin, pinned dependency source checks included.
 import { localWllamaAssets } from './scripts/local-wllama-assets.mjs';
-import { TRANSLATION_SHORTCUT_COMMAND, TRANSLATION_SHORTCUT_DEFAULT, TRANSLATION_SHORTCUT_DESCRIPTION } from './src/core/translation-shortcut.ts';
+// @ts-ignore Build-only source identity helpers.
+import { buildIdentityAsset, createBuildIdentity } from './scripts/build-identity.mjs';
+import { TRANSLATION_SHORTCUT_COMMAND, TRANSLATION_SHORTCUT_DEFAULT } from './src/core/translation-shortcut.ts';
+
+const buildIdentity = createBuildIdentity(import.meta.url);
 
 export default defineConfig({
-  vite: () => ({ plugins: [localWllamaAssets()], worker: { plugins: () => [localWllamaAssets()] } }),
+  vite: () => ({
+    define: { __DANLINGO_BUILD_ID__: JSON.stringify(buildIdentity.buildId) },
+    plugins: [localWllamaAssets(), buildIdentityAsset(buildIdentity)], worker: { plugins: () => [localWllamaAssets()] },
+  }),
   manifest: {
-    name: 'DanLingo · 弹幕翻译',
-    description: '在 Niconico、YouTube 与 Bilibili 原生页面翻译弹幕和直播聊天。',
-    version: '0.3.0',
+    name: '__MSG_extensionName__',
+    default_locale: 'en',
+    description: '__MSG_extensionDescription__',
+    version: '0.5.0',
+    icons: { 16: 'icon/16.png', 32: 'icon/32.png', 48: 'icon/48.png', 128: 'icon/128.png' },
+    action: { default_icon: { 16: 'icon/16.png', 32: 'icon/32.png', 48: 'icon/48.png', 128: 'icon/128.png' } },
     minimum_chrome_version: '120',
     commands: {
       [TRANSLATION_SHORTCUT_COMMAND]: {
         suggested_key: { default: TRANSLATION_SHORTCUT_DEFAULT },
-        description: TRANSLATION_SHORTCUT_DESCRIPTION,
+        description: '__MSG_extensionShortcut__',
       },
     },
     permissions: ['storage', 'offscreen'],

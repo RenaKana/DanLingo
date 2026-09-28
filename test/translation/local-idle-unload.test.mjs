@@ -126,6 +126,38 @@ test('unloads at exactly the five-minute idle threshold', async () => {
   assert.equal(h.unloadedStates.length, 1);
 });
 
+test('disabling idle unload cancels a scheduled release and re-enabling starts a full custom window', async () => {
+  const h = harness();
+  h.controller.changed();
+  await advance(h, 100_000);
+  h.controller.configure({ enabled: false, timeoutMs: 60_000 });
+  h.controller.changed();
+  await advance(h, LOCAL_IDLE_TIMEOUT_MS * 10);
+  assert.equal(h.clock.pending().length, 0);
+  assert.equal(h.unloadCalls, 0);
+  h.controller.configure({ enabled: true, timeoutMs: 60_000 });
+  await advance(h, 59_999);
+  assert.equal(h.unloadCalls, 0);
+  await advance(h, 1);
+  assert.equal(h.unloadCalls, 1);
+});
+
+test('changing idle policy invalidates an in-flight unload approval', async () => {
+  const h = harness(), permission = deferred();
+  h.setCheck(() => permission.promise);
+  h.controller.changed();
+  await advance(h, LOCAL_IDLE_TIMEOUT_MS);
+  h.controller.configure({ enabled: false, timeoutMs: 600_000 });
+  permission.resolve(true);
+  await flush();
+  assert.equal(h.unloadCalls, 0);
+  h.controller.configure({ enabled: true, timeoutMs: 600_000 });
+  await advance(h, 599_999);
+  assert.equal(h.unloadCalls, 0);
+  await advance(h, 1);
+  assert.equal(h.unloadCalls, 1);
+});
+
 test('repeated read-only polling does not extend an existing idle deadline', async () => {
   const h = harness();
   h.controller.changed();

@@ -147,11 +147,29 @@ function pathModeFrom(input: ConnectionInput): ConnectionEndpointMode {
  * Unknown custom paths are preserved as complete operation endpoints until an explicit `base` override is used.
  */
 export function resolveConnection(input: ConnectionInput): EffectiveConnection {
+  const backend = input.backend === 'local' ? 'local' : 'online';
+  const protocol = protocolFrom(input);
+  const endpointMode = pathModeFrom(input);
+  if (backend === 'local' && typeof input.endpoint === 'string' && !input.endpoint.trim()) {
+    // A blank user endpoint is valid for local inference. Keep the internal
+    // dispatch URL out of the configured endpoint identity and settings UI.
+    return {
+      inputUrl: '',
+      configuredCompletionEndpoint: '',
+      completionEndpoint: LOCAL_COMPLETION_ENDPOINT,
+      origin: new URL(LOCAL_COMPLETION_ENDPOINT).origin,
+      protocol: protocol.protocol,
+      protocolSource: protocol.source,
+      brand: 'unknown',
+      pathKind: 'completion',
+      endpointMode,
+      backend,
+      requiresManualPath: false,
+    };
+  }
   const url = parseUrl(input.endpoint, input.allowLocalHttp === true);
   const inputUrl = input.endpoint.trim().replace(/^(https?):(?=[^/])/i, '$1://');
   const path = trimmedPath(url);
-  const protocol = protocolFrom(input);
-  const endpointMode = pathModeFrom(input);
   const completionPath = path.toLowerCase().endsWith('/chat/completions') ? path : undefined;
   const modelPath = path.toLowerCase().endsWith('/models') ? path.slice(0, -'/models'.length).replace(/\/+$/, '') : undefined;
   let basePath: string | undefined;
@@ -197,7 +215,6 @@ export function resolveConnection(input: ConnectionInput): EffectiveConnection {
 
   const configuredCompletionEndpoint = withPath(url, configuredCompletionPath);
   const configuredModelsEndpoint = basePath === undefined ? undefined : withPath(url, appendPath(basePath, 'models'));
-  const backend = input.backend === 'local' ? 'local' : 'online';
   const completionEndpoint = backend === 'local' ? LOCAL_COMPLETION_ENDPOINT : configuredCompletionEndpoint;
   const modelsEndpoint = backend === 'local' ? undefined : configuredModelsEndpoint;
   return {

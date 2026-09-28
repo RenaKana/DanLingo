@@ -1,5 +1,5 @@
 import { LOCAL_BACKEND } from './types.ts';
-import type { LocalState, LocalModelInfo, LocalPerformanceConfig, LocalInferenceMetrics } from './types.ts';
+import type { LocalState, LocalModelInfo, LocalPerformanceConfig, LocalInferenceMetrics, PreparedLocalModel, SourcePreparationOptions } from './types.ts';
 import { LOCAL_NATIVE_MAX_INTEGER, normalizeLocalConfig, resolveLocalConfig } from './config.ts';
 
 interface WorkerLike { postMessage(message: unknown): void; terminate(): void; onmessage: ((event: MessageEvent) => void) | null; onerror: ((event: ErrorEvent) => void) | null }
@@ -18,8 +18,19 @@ export class LocalController {
   private state = initialState(0);
   private createWorker: () => WorkerLike;
   private now: () => number;
-  constructor(createWorker: () => WorkerLike, now = () => performance.now()) { this.createWorker = createWorker; this.now = now; }
-  snapshot(): LocalState { return structuredClone(this.state); }
+  private stageStarted = 0;
+  private prepareModel?: (id: string, options: SourcePreparationOptions) => Promise<PreparedLocalModel>;
+  constructor(createWorker: () => WorkerLike, now = () => performance.now(),
+    prepareModel?: (id: string, options: SourcePreparationOptions) => Promise<PreparedLocalModel>) { this.createWorker = createWorker; this.now = now; this.prepareModel = prepareModel; }
+  snapshot(): LocalState {
+    const state = structuredClone(this.state);
+    if (['loading', 'warming'].includes(state.phase)) {
+      const key = state.stage === 'reading-file' ? 'sourceMs' : state.stage === 'reading-header' ? 'metadataMs'
+        : state.stage === 'initializing-wasm' ? 'initializingMs' : state.stage === 'loading-weights' ? 'weightsMs' : undefined;
+      if (key) state.loadTimings = { ...state.loadTimings, [key]: (state.loadTimings?.[key] ?? 0) + this.now() - this.stageStarted };
+    }
+    return state;
+  }
   private reset(error: string): void {
     this.state.generation++;
     this.worker?.terminate(); this.worker = undefined;
@@ -27,7 +38,7 @@ export class LocalController {
     for (const request of [...this.queue, ...this.active.values()]) request.reject(new Error(error));
     this.pending.clear(); this.queue = []; this.active.clear();
     this.identity = undefined; this.loadPromise = undefined;
-    this.state.verificationProgress = undefined;
+    this.state.currentFile = undefined;
   }
   unload(): LocalState {
     this.reset('LOCAL_MODEL_CHANGED'); this.state = initialState(this.state.generation);
@@ -45,52 +56,70 @@ export class LocalController {
     const resolved = resolveLocalConfig(requested, modelId);
     const identity = JSON.stringify([modelId, requested]);
     if (this.identity === identity && ['ready', 'generating'].includes(this.state.phase)) {
-      if (options.validateSourceOnReuse) await this.validateSource(modelId);
+      const generation = this.state.generation;
+      if (options.validateSourceOnReuse && this.prepareModel) await this.prepareModel(modelId, { shouldCancel: () => generation !== this.state.generation });
+      if (generation !== this.state.generation) throw new Error('LOCAL_MODEL_CHANGED');
       return this.snapshot();
     }
-    if (this.identity === identity && this.loadPromise) return this.loadPromise;
+    if (this.identity === identity && this.loadPromise && ['loading', 'warming'].includes(this.state.phase)) return this.loadPromise;
     this.unload(); this.identity = identity;
     const generation = this.state.generation;
     this.state.phase = 'loading'; this.state.stage = 'reading-file'; this.state.requested = requested;
     this.state.model = { id: modelId } as LocalModelInfo;
     const started = this.now();
-    let worker: WorkerLike;
-    try { worker = this.createWorker(); this.worker = worker; }
-    catch (error) { this.state.phase = 'error'; this.state.error = 'LOCAL_WORKER_FAILED'; throw error; }
-    worker.onmessage = event => {
-      if (generation !== this.state.generation) return;
-      const data = event.data;
-      if (data.fatal) {
-        this.fatal(/^LOCAL_[A-Z0-9_]+$/.test(data.error || '') ? data.error : 'LOCAL_GPU_DEVICE_FAILED'); return;
-      }
-      if (data.telemetry) {
-        if (data.telemetry.gpu) this.state.gpu = { ...this.state.gpu, ...data.telemetry.gpu };
-        if (typeof data.telemetry.nativeSlots === 'number') this.state.nativeSlots = data.telemetry.nativeSlots;
-        if (typeof data.telemetry.nativePeakActive === 'number') this.state.nativePeakActive = data.telemetry.nativePeakActive;
-        if (Array.isArray(data.telemetry.nativeEvidence)) this.state.nativeEvidence = data.telemetry.nativeEvidence;
-        return;
-      }
-      if (data.stage) {
-        this.state.stage = data.stage;
-        const progress = data.verificationProgress;
-        if (progress && Number.isSafeInteger(progress.bytesProcessed) && Number.isSafeInteger(progress.totalBytes)
-          && progress.bytesProcessed >= 0 && progress.totalBytes >= progress.bytesProcessed) {
-          this.state.verificationProgress = { bytesProcessed: progress.bytesProcessed, totalBytes: progress.totalBytes };
-        } else if (data.stage !== 'fingerprinting') this.state.verificationProgress = undefined;
-        if (data.stage === 'warming') this.state.phase = 'warming';
-        if (data.model) this.state.model = data.model; return;
-      }
-      const request = this.active.get(data.id);
-      if (request) { this.settle(request, data); return; }
-      const pending = this.pending.get(data.id); if (!pending) return;
-      this.pending.delete(data.id);
-      if (data.ok) pending.resolve(data); else pending.reject(new Error(data.error || 'LOCAL_INFERENCE_FAILED'));
-    };
-    worker.onerror = () => { if (generation === this.state.generation) this.fatal('LOCAL_WORKER_FAILED'); };
+    this.stageStarted = started;
+    let finishStage = () => {};
     const loading = (async () => {
       try {
-        const response = await this.rpc({ action: 'load', modelId, config: requested }, 300_000, 'LOCAL_LOAD_TIMEOUT');
+        const prepared = this.prepareModel ? await this.prepareModel(modelId, {
+          shouldCancel: () => generation !== this.state.generation,
+          onProgress: progress => { if (generation === this.state.generation) {
+            if (this.state.stage !== progress.stage) {
+              if (this.state.stage === 'reading-file') this.state.loadTimings = { sourceMs: this.now() - started };
+              this.stageStarted = this.now();
+            }
+            this.state.stage = progress.stage; this.state.currentFile = progress.currentFile;
+          } },
+        }) : undefined;
         if (generation !== this.state.generation) throw new Error('LOCAL_MODEL_CHANGED');
+        if (prepared) { this.state.model = prepared.info; this.state.loadTimings = { ...prepared.timings }; }
+        this.stageStarted = this.now();
+        finishStage = () => {
+          const key = this.state.stage === 'initializing-wasm' ? 'initializingMs' : this.state.stage === 'loading-weights' ? 'weightsMs' : undefined;
+          if (key) this.state.loadTimings = { ...this.state.loadTimings, [key]: (this.state.loadTimings?.[key] ?? 0) + this.now() - this.stageStarted };
+          this.stageStarted = this.now();
+        };
+        let worker: WorkerLike;
+        try { worker = this.createWorker(); this.worker = worker; }
+        catch (error) { this.state.phase = 'error'; this.state.error = 'LOCAL_WORKER_FAILED'; throw error; }
+        worker.onmessage = event => {
+          if (generation !== this.state.generation) return;
+          const data = event.data;
+          if (data.fatal) {
+            this.fatal(/^LOCAL_[A-Z0-9_]+$/.test(data.error || '') ? data.error : 'LOCAL_GPU_DEVICE_FAILED'); return;
+          }
+          if (data.telemetry) {
+            if (data.telemetry.gpu) this.state.gpu = { ...this.state.gpu, ...data.telemetry.gpu };
+            if (typeof data.telemetry.nativeSlots === 'number') this.state.nativeSlots = data.telemetry.nativeSlots;
+            if (typeof data.telemetry.nativePeakActive === 'number') this.state.nativePeakActive = data.telemetry.nativePeakActive;
+            if (Array.isArray(data.telemetry.nativeEvidence)) this.state.nativeEvidence = data.telemetry.nativeEvidence;
+            return;
+          }
+          if (data.stage) {
+            finishStage();
+            this.state.stage = data.stage; this.state.currentFile = undefined; if (data.stage === 'warming') this.state.phase = 'warming';
+            if (data.model) this.state.model = data.model; return;
+          }
+          const request = this.active.get(data.id);
+          if (request) { this.settle(request, data); return; }
+          const pending = this.pending.get(data.id); if (!pending) return;
+          this.pending.delete(data.id);
+          if (data.ok) pending.resolve(data); else pending.reject(new Error(data.error || 'LOCAL_INFERENCE_FAILED'));
+        };
+        worker.onerror = () => { if (generation === this.state.generation) this.fatal('LOCAL_WORKER_FAILED'); };
+        const response = await this.rpc({ action: 'load', modelId, config: requested, ...(prepared ? { prepared } : {}) }, 300_000, 'LOCAL_LOAD_TIMEOUT');
+        if (generation !== this.state.generation) throw new Error('LOCAL_MODEL_CHANGED');
+        finishStage();
         const runtime = response.runtime ?? resolved;
         if (!Number.isSafeInteger(runtime.parallel) || runtime.parallel < 1 || runtime.parallel > LOCAL_NATIVE_MAX_INTEGER) throw new Error('LOCAL_CONFIG_INVALID');
         this.state.model = response.model; this.state.gpu = response.gpu; this.state.runtime = runtime;
@@ -98,29 +127,14 @@ export class LocalController {
         this.state.warnings = response.warnings ?? [];
         this.state.contextTokens = runtime.contextTokens; this.state.nativeSlots = response.nativeSlots;
         this.state.nativePeakActive = response.nativePeakActive ?? this.state.nativePeakActive; this.state.nativeEvidence = response.nativeEvidence ?? this.state.nativeEvidence;
-        this.state.warmupMs = response.warmupMs; this.state.phase = 'ready'; this.state.stage = 'loaded'; this.state.verificationProgress = undefined; this.state.loadMs = this.now() - started;
+        this.state.warmupMs = response.warmupMs; this.state.phase = 'ready'; this.state.stage = 'loaded'; this.state.currentFile = undefined; this.state.loadMs = this.now() - started;
         return this.snapshot();
       } catch (error) {
-        if (generation === this.state.generation) { this.worker?.terminate(); this.worker = undefined; this.state.phase = 'error'; this.state.error = error instanceof Error ? error.message : 'LOCAL_LOAD_FAILED'; this.state.verificationProgress = undefined; this.state.stage = undefined; }
+        if (generation === this.state.generation) { finishStage(); this.worker?.terminate(); this.worker = undefined; this.state.phase = 'error'; this.state.error = error instanceof Error ? error.message : 'LOCAL_LOAD_FAILED'; this.state.stage = undefined; this.state.currentFile = undefined; }
         throw error;
       } finally { if (generation === this.state.generation) this.loadPromise = undefined; }
     })();
     this.loadPromise = loading; return loading;
-  }
-  /** Recheck a source in the inference worker when a manual load reuses this runtime. */
-  async validateSource(modelId: string): Promise<void> {
-    if (!this.worker || this.state.model?.id !== modelId || !['ready', 'generating'].includes(this.state.phase)) {
-      throw new Error('LOCAL_MODEL_NOT_LOADED');
-    }
-    const generation = this.state.generation;
-    const previousStage = this.state.stage;
-    this.state.stage = 'fingerprinting'; this.state.verificationProgress = undefined;
-    try {
-      await this.rpc({ action: 'validate-source', modelId }, 300_000, 'LOCAL_LOAD_TIMEOUT');
-      if (generation !== this.state.generation) throw new Error('LOCAL_MODEL_CHANGED');
-    } finally {
-      if (generation === this.state.generation) { this.state.stage = previousStage; this.state.verificationProgress = undefined; }
-    }
   }
   /** Diagnostics only, at an idle benchmark boundary; never waits inside complete(). */
   async flushGpuTiming(): Promise<LocalState> {

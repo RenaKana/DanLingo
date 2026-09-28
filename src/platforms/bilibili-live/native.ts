@@ -1,6 +1,6 @@
 import { clockStamp, resourceFromUrl } from '../../core/resource.ts';
 import { needsTranslation } from '../../core/messages.ts';
-import { validLiveBufferMs } from '../../core/live-budget.ts';
+import { validLiveBufferMs, DEFAULT_LIVE_BUFFER_MS } from '../../core/live-budget.ts';
 import { protectText } from '../../translation/text.ts';
 import { ordinaryComment, ordinaryMessageId, decimalId, superChatSource, deletedSuperChats } from './messages.ts';
 import { BilibiliNativeQueue, type BilibiliDecision } from './queue.ts';
@@ -12,6 +12,8 @@ import { captureNativeDispatch } from './dispatch.ts';
 import { timeoutRetryBudget, MAX_TIMEOUT_RETRY_EXTRA_MS } from '../../core/timeout-retry.ts';
 import { bilibiliLiveView, sameBilibiliView, type BilibiliLiveView } from './view.ts';
 import { bilibiliRoomIdentity } from './identity.ts';
+import { localePreference } from '../../i18n/locale.ts';
+import { setLocale } from '../../i18n/text.ts';
 
 type Data = Record<string, any>;
 type Hook = NonNullable<ReturnType<typeof hookMethod>>;
@@ -55,7 +57,7 @@ function startRoomBridge(view: BilibiliLiveView, currentView: () => boolean): ()
   const document = view.document, host = view.window as unknown as Data;
   const Element = view.window.Element, HTMLElement = view.window.HTMLElement;
   let disposed = false, frozen = false, enabled = false, lastControl = -Infinity;
-  let bufferMs = 2000, superChatTimeoutMs = 15000, targetLanguage = 'zh-Hans', sourceLanguage = 'auto', configVersion = -1;
+  let bufferMs = DEFAULT_LIVE_BUFFER_MS, superChatTimeoutMs = 15000, targetLanguage = 'zh-Hans', sourceLanguage = 'auto', configVersion = -1;
   let retryEnabled = false, retryExtraMs = 1000, retryHold = true;
   let binding: Binding | null = null, session = crypto.randomUUID(), sequence = 0;
   let method: Hook | null = null, methodOwner: Data | null = null, observerHook: Hook | null = null;
@@ -253,10 +255,17 @@ function startRoomBridge(view: BilibiliLiveView, currentView: () => boolean): ()
   const control = (event: MessageEvent) => {
     const d=event.data;
     if (event.source!==window || event.origin!==location.origin || d?.bridge!==BRIDGE || d.from!=='content') return;
+    if (d.type==='ui-locale') {
+      const locale = localePreference(d.locale);
+      if (locale !== 'auto') setLocale(locale);
+      return;
+    }
     if (d.type==='control') {
       if (typeof d.enabled!=='boolean' || !validLiveBufferMs(d.bufferMs) || !Number.isSafeInteger(d.configVersion) ||
           d.configVersion<0 || typeof d.targetLanguage!=='string' || !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*$/.test(d.targetLanguage) ||
           typeof d.sourceLanguage!=='string' || !/^(auto|[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8})*)$/.test(d.sourceLanguage)) return;
+      const uiLocale = localePreference(d.uiLocale);
+      if (uiLocale !== 'auto') setLocale(uiLocale);
       if (configVersion!==d.configVersion || targetLanguage!==d.targetLanguage || sourceLanguage!==d.sourceLanguage) detach(true);
       enabled=d.enabled; lastControl=performance.now(); bufferMs=d.bufferMs; configVersion=d.configVersion; targetLanguage=d.targetLanguage; sourceLanguage=d.sourceLanguage;
       retryEnabled=d.bilibiliTimeoutRetryEnabled===true;

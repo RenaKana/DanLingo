@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import { readFileSync } from 'node:fs';
 import ts from 'typescript';
-import { validLiveBufferMs } from '../../src/core/live-budget.ts';
+import { DEFAULT_LIVE_BUFFER_MS, validLiveBufferMs } from '../../src/core/live-budget.ts';
 import { needsTranslation } from '../../src/core/messages.ts';
 import { getTimeoutRetryPolicy } from '../../src/core/timeout-retry.ts';
 import { protectText } from '../../src/translation/text.ts';
@@ -72,7 +72,7 @@ function harness({ deferStaging = false, failAdd = false } = {}) {
   };
   window.postMessage = payload => { posted.push(payload); window.dispatchEvent({ type: 'message', data: payload, source: window, origin: location.origin }); };
   const schedule = (fn, delay, repeat = false) => { const id = ++sequence; timers.set(id, { fn, at: now + delay, repeat: repeat ? delay : 0 }); return id; };
-  const sandbox = { window, document, location, validLiveBufferMs, needsTranslation, getTimeoutRetryPolicy, protectText, navigator: { onLine: true }, EventTarget: Target,
+  const sandbox = { window, document, location, DEFAULT_LIVE_BUFFER_MS, validLiveBufferMs, needsTranslation, getTimeoutRetryPolicy, protectText, navigator: { onLine: true }, EventTarget: Target,
     performance: { timeOrigin: 1000000000000, now: () => now }, crypto: { randomUUID: () => 'session-' + ++uuid },
     setTimeout: (fn, ms) => schedule(fn, ms), clearTimeout: id => timers.delete(id),
     setInterval: (fn, ms) => schedule(fn, ms, true), clearInterval: id => timers.delete(id), console };

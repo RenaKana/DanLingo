@@ -71,7 +71,7 @@ try{
   await options.locator('#backend').selectOption('local');await options.locator('#local-file').setInputFiles(modelPath);await options.locator('#local-import').click();
   modelId=await until(()=>options.locator('#local-model').inputValue(),'import');
   await options.locator('#local-load').click();await until(async()=>{const s=await state();if(s.phase==='error')throw new Error(s.error);return s.phase==='ready';},'load');
-  const settings=normalizeSettings({...DEFAULT_SETTINGS,enabled:true,backend:'local',localModelId:modelId,model:'HY-MT1.5-1.8B-Q8_0',profile:'chat-completions',thinkingEffort:'default',superChatThinkingEffort:'inherit',superChatTimeoutMs:120000,requestTimeoutMs:120000,thinkingRequestTimeoutMs:120000,sourceLanguage:'ja',liveSourceLanguage:'ja',targetLanguage:'zh-Hans',batchSize:1,concurrency:1,liveAdaptiveConcurrency:false,liveMaxBatchWaitMs:0});
+  const settings=normalizeSettings({...DEFAULT_SETTINGS,enabled:true,backend:'local',localModelId:modelId,model:'HY-MT1.5-1.8B-Q8_0',profile:'chat-completions',thinkingEffort:'default',superChatThinkingEffort:'inherit',superChatTimeoutMs:120000,requestTimeoutMs:120000,thinkingRequestTimeoutMs:120000,sourceLanguage:'ja',liveSourceLanguage:'ja',targetLanguage:'zh-Hans',batchSize:1,localConcurrency:1,liveAdaptiveConcurrency:false,liveMaxBatchWaitMs:0});
   assert.equal((await rpc({type:'save',settings,apiKey:'',remember:false})).ok,true);
   page=await context.newPage();page.on('pageerror',error=>report.errors.push(error.message));await page.goto('https://www.youtube.com/watch?v='+ROOM);await page.bringToFront();
   await until(async()=>frame()&&await frame().locator('[data-danlingo-repairs]').count()===1,'repair UI');

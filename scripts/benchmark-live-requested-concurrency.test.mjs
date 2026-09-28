@@ -59,10 +59,11 @@ test('official stdin rejects malformed input with a sanitized error', async () =
   assert.equal(input.listenerCount('data'), 0);
 });
 
-test('explicit 2500ms cell remains valid without changing the default, uniqueness or quota bounds', () => {
+test('explicit buffer cells remain valid beside the 3000ms default, uniqueness and quota bounds', () => {
   assert.deepEqual(REQUESTED_PLAN.map(row => [row.concurrency, row.bufferMs]),
     [[32, 2000], [32, 2500], [32, 3000], [64, 2000], [64, 2500], [64, 3000]]);
-  assert.equal(normalizeSettings({}).liveBufferMs, 2000);
+  assert.equal(normalizeSettings({}).liveBufferMs, 3000);
+  assert.equal(normalizeSettings({ liveBufferMs: 2000 }).liveBufferMs, 2000);
   assert.equal(normalizeSettings({ liveBufferMs: 2500 }).liveBufferMs, 2500);
   const corpus = uniqueBurstCorpus([{ text: 'おはようございます' }]);
   assert.equal(corpus.length, 1000);
@@ -76,7 +77,8 @@ test('explicit 2500ms cell remains valid without changing the default, uniquenes
 for (const concurrency of [32, 64]) test(`isolated 2500ms burst actually fills ${concurrency} mock slots and retains all deadlines`, async () => {
   const corpus = uniqueBurstCorpus([{ text: 'おはようございます' }]);
   const clock = new ControlledClock();
-  const settings = { ...DEFAULT_SETTINGS, enabled: true, displayMode: 'translated', model: 'deepseek-v4-flash', profile: 'deepseek',
+  const settings = { ...DEFAULT_SETTINGS, backend: 'online', reasoningProfileOverride: undefined,
+    enabled: true, displayMode: 'translated', model: 'deepseek-v4-flash', profile: 'deepseek',
     thinkingEffort: 'off', sourceLanguage: 'auto', liveSourceLanguage: 'auto', targetLanguage: 'zh-Hans',
     endpoint: 'https://synthetic.invalid/v1/chat/completions', translationStream: false, batchSize: 10 };
   const result = await runChainCondition({ cell: { id: `mock${concurrency}`, concurrency, bufferMs: 2500, postQuota: 120 },

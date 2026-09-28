@@ -83,7 +83,7 @@ try {
   const worker = context.serviceWorkers()[0] || await context.waitForEvent('serviceworker');
   const options = await context.newPage(); await options.goto(`chrome-extension://${new URL(worker.url()).host}/options.html`);
   const config = normalizeSettings({ ...DEFAULT_SETTINGS, enabled: true, endpoint, allowLocalHttp: true, model: 'fixture-deepseek', profile: 'deepseek', thinkingEffort: 'off',
-    concurrency: 4, batchSize: 1, liveBufferMs: 2000, liveMaxBatchWaitMs: 0, liveSourceLanguage: 'auto', liveAdaptiveConcurrency: false,
+    onlineConcurrency: 4, batchSize: 1, liveBufferMs: 2000, liveMaxBatchWaitMs: 0, liveSourceLanguage: 'auto', liveAdaptiveConcurrency: false,
     superChatThinkingEffort: 'high', superChatTimeoutMs: 15000 });
   assert.equal((await options.evaluate(settings => chrome.runtime.sendMessage({ type: 'save', settings, apiKey: 'synthetic-fixture-only', remember: false }), config)).ok, true);
   page = await context.newPage(); page.on('pageerror', error => report.errors.push(error.message));

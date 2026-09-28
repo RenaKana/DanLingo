@@ -1,3 +1,4 @@
+import type { UiMessage } from '../i18n/wire.ts';
 import type { LocalPerformanceConfig } from '../local/types.ts';
 import type { LocalTranslationProfile } from '../local/translation-profile.ts';
 
@@ -9,6 +10,16 @@ export type ProviderBackend = 'online' | 'local';
 export type ConnectionEndpointMode = 'auto' | 'base' | 'completion';
 export type TranslationStrategy = 'normal' | 'superchat' | 'manual';
 export type ThinkingEffort = 'default' | 'off' | 'on' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
+
+export interface HybridCapacityProfile {
+  /** SHA-256 identity of the local live translation configuration. */
+  identity: string;
+  maxItems: number;
+  maxChars: number;
+  p95Ms?: number;
+  sourceRecordId?: string;
+  manual: boolean;
+}
 
 export interface ConnectionOverride {
   /** The only supported protocol today; `auto` delegates to URL detection. */
@@ -68,13 +79,30 @@ export interface ProviderSettings {
 
 export interface Settings extends ProviderSettings {
   schemaVersion: 3;
-  /** Shared durable cap on online generation attempts per local calendar day. */
+  /** Shared durable cap on online generation attempts per local calendar day; zero is unlimited. */
   onlineRequestLimitPerDay: number;
+  /** Saved independently; ProviderSettings.concurrency is derived for the selected backend. */
+  onlineConcurrency: number;
+  localConcurrency: number;
+  localIdleUnloadEnabled: boolean;
+  localIdleUnloadMinutes: number;
   /** Preload once on entering a supported viewing session; never on heartbeats. */
   localPreloadOnEntry?: boolean;
   enabled: boolean;
   displayMode: 'translated' | 'original';
-  translationScope: 'all' | 'window';
+  translationScope: 'auto' | 'all' | 'window';
+  /** Experimental, read-only Bilibili native user-rule demand filtering. */
+  bilibiliUserFilters: boolean;
+  /** Opt-in five-second native-admission prediction, never a renderer. */
+  bilibiliShadowScheduler?: boolean;
+  /** Opt-in ordinary Bilibili text: suppress a needed translation when no qualified result is ready. */
+  bilibiliNativeTranslationOnly?: boolean;
+  /** Opt-in stable five-second supply list; native filtering, layout and animation remain authoritative. */
+  bilibiliOwnedRelease?: boolean;
+  /** Disabled until explicitly enabled for Bilibili ordinary live translation. */
+  bilibiliHybrid?: { enabled: boolean; profiles: HybridCapacityProfile[] };
+  /** Online video request size, independent from live/local batching. */
+  videoBatchSize: number;
   prefetchSeconds: number;
   urgentSeconds: number;
   cacheMaxEntries: number;
@@ -149,6 +177,8 @@ export interface SourceMessage {
   renderAtMs: number;
   sentAtEpochMs?: number;
   translatable: boolean;
+  /** Explicit adapter scope for the isolated display-plan preview, never native admission. */
+  displayPlanEligible?: boolean;
   style: { position: string; size: string; color: string; font: string; commands: string[] };
 }
 
@@ -160,6 +190,8 @@ export interface PlaybackClock {
   contentActive: boolean;
   durationMs: number;
   buffered?: { startMs: number; endMs: number }[];
+  /** Present only when a native control exposes an authoritative toggle state. */
+  commentsVisible?: boolean;
 }
 
 export interface TranslationInput { id: string; text: string; deadlineAt: number; strategy?: TranslationStrategy }
@@ -167,6 +199,7 @@ export interface TranslationOutput {
   id: string;
   text?: string;
   status: 'translated' | 'cached' | 'original' | 'failed' | 'expired' | 'deferred';
+  backend?: ProviderBackend;
   reason?: string;
   retryAfterMs?: number;
 }
@@ -179,6 +212,9 @@ export interface TranslationRequest {
   resourceId: string;
   items: TranslationInput[];
   settings: Settings;
+  /** Trusted per-request routing context; never saved with settings. */
+  hybrid?: { local: Settings; online: Settings; localReady: boolean; onlineReady: boolean;
+    maxItems: number; maxChars: number; p95Ms?: number; capacityKey: string; onLocalNeeded?: () => void };
   apiKey: string;
   signal?: AbortSignal;
   /** VOD queue time is independent of the actual provider request timeout. */
@@ -247,5 +283,11 @@ export interface RuntimeStatus {
   nearPrepared?: number;
   inflight?: number;
   sourceComplete?: boolean;
+  videoCandidates?: number;
+  videoFiltered?: number;
+  videoEligibilityUnknown?: number;
+  videoEffectiveScope?: 'all' | 'window';
+  videoDisplayState?: 'visible' | 'hidden' | 'unknown';
   note?: string;
+  noteMessage?: UiMessage;
 }

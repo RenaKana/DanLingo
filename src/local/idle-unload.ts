@@ -11,6 +11,7 @@ interface Options {
   schedule?(callback: () => void, delayMs: number): unknown;
   cancel?(timer: unknown): void;
   timeoutMs?: number;
+  enabled?: boolean;
 }
 
 /** Offscreen-owned timer: reading status never extends the model's idle lifetime. */
@@ -23,9 +24,16 @@ export class LocalIdleUnloader {
   private checkingEpoch?: number;
   private disposed = false;
   constructor(options: Options) { this.options = options; }
+  configure(policy: { enabled: boolean; timeoutMs: number }): void {
+    if (!Number.isSafeInteger(policy.timeoutMs) || policy.timeoutMs <= 0 || policy.timeoutMs > 2_147_483_647) throw new RangeError('Invalid local idle timeout');
+    if ((this.options.enabled !== false) === policy.enabled && (this.options.timeoutMs ?? LOCAL_IDLE_TIMEOUT_MS) === policy.timeoutMs) return;
+    this.clear();
+    this.options = { ...this.options, ...policy };
+    this.changed();
+  }
   private now() { return this.options.now?.() ?? performance.now(); }
   private eligible(state: LocalState) {
-    return !this.disposed && !this.holds && !this.options.blocked?.()
+    return !this.disposed && this.options.enabled !== false && !this.holds && !this.options.blocked?.()
       && state.phase === 'ready' && state.active === 0 && state.queued === 0;
   }
   private clear() {

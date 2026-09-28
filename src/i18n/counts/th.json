@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "{count} งาน",
+  "count.tasks.one": "{count} งาน",
+  "count.tasks.two": "{count} งาน",
+  "count.tasks.few": "{count} งาน",
+  "count.tasks.many": "{count} งาน",
+  "count.tasks.other": "{count} งาน"
+}

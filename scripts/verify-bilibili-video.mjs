@@ -162,7 +162,8 @@ async function assertProgress(name) {
 
 async function saveSettings(patch = {}) {
   const current = (await rpc({ type: 'settings' })).settings;
-  const settings = normalizeSettings({ ...current, ...patch, enabled: patch.enabled ?? true, endpoint, allowLocalHttp: true, model: 'bilibili-video-fixture', profile: 'chat-completions', protocol: 'chat-completions', thinkingEffort: 'default', sourceLanguage: 'ja', targetLanguage: 'zh-Hans', translationScope: 'all', concurrency: 4, batchSize: 100, maxBatchChars: 12000, cacheMaxEntries: 20000 });
+  const concurrencySettings = (patch.backend ?? current.backend) === 'local' ? { localConcurrency: 4 } : { onlineConcurrency: 4 };
+  const settings = normalizeSettings({ ...current, ...patch, ...concurrencySettings, enabled: patch.enabled ?? true, endpoint, allowLocalHttp: true, model: 'bilibili-video-fixture', profile: 'chat-completions', protocol: 'chat-completions', thinkingEffort: 'default', sourceLanguage: 'ja', targetLanguage: 'zh-Hans', translationScope: 'all', batchSize: 100, maxBatchChars: 12000, cacheMaxEntries: 20000 });
   const saved = await rpc({ type: 'save', settings, apiKey: KEY, remember: false });
   assert.equal(saved.ok, true, saved.error);
   return saved;

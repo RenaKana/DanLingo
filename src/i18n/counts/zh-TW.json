@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "{count} 項工作",
+  "count.tasks.one": "{count} 項工作",
+  "count.tasks.two": "{count} 項工作",
+  "count.tasks.few": "{count} 項工作",
+  "count.tasks.many": "{count} 項工作",
+  "count.tasks.other": "{count} 項工作"
+}

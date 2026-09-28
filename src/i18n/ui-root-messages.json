@@ -1,0 +1,3 @@
+{
+  "m_0c8ed57b8044": "GGUF v2/v3；支持单文件和完整多分片。须内嵌 tokenizer；普通模型须有聊天模板，已识别的 Seed-X-PPO、TranslateGemma 使用专用翻译格式。当前引擎不支持 NLLB/mBART，词表文件不能单独加载。其他架构和实际翻译效果仍需验证。"
+}

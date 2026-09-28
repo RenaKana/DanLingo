@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "{count} 件のタスク",
+  "count.tasks.one": "{count} 件のタスク",
+  "count.tasks.two": "{count} 件のタスク",
+  "count.tasks.few": "{count} 件のタスク",
+  "count.tasks.many": "{count} 件のタスク",
+  "count.tasks.other": "{count} 件のタスク"
+}

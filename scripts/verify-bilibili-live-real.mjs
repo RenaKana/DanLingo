@@ -111,7 +111,7 @@ try {
   options = await context.newPage(); await options.goto(`chrome-extension://${new URL(worker.url()).host}/options.html`);
   rpc = message => options.evaluate(value => chrome.runtime.sendMessage(value), message);
   const settings = normalizeSettings({ ...DEFAULT_SETTINGS, enabled: true, endpoint, allowLocalHttp: true, model: 'local-mock',
-    thinkingEffort: 'default', sourceLanguage: 'auto', liveSourceLanguage: 'auto', targetLanguage: 'en', liveAdaptiveConcurrency: false, concurrency: 4, batchSize: 5, liveBufferMs: 2000 });
+    thinkingEffort: 'default', sourceLanguage: 'auto', liveSourceLanguage: 'auto', targetLanguage: 'en', liveAdaptiveConcurrency: false, onlineConcurrency: 4, batchSize: 5, liveBufferMs: 2000 });
   assert.equal((await rpc({ type: 'save', settings, apiKey: key, remember: false })).ok, true);
   page = await context.newPage(); report.navigationStatus = (await page.goto(report.url, { waitUntil: 'domcontentloaded', timeout: 45000 }))?.status();
   await page.bringToFront();

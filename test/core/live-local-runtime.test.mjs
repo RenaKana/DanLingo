@@ -15,6 +15,7 @@ import * as modelSummaryModule from '../../src/core/model-summary.ts';
 import * as biliEmotes from '../../src/platforms/bilibili-live/emotes.ts';
 import * as biliView from '../../src/platforms/bilibili-live/view.ts';
 import { LiveScheduler } from '../../src/core/live-scheduler.ts';
+import * as i18nTextModule from '../../src/i18n/text.ts';
 
 const flush = () => new Promise(resolveFlush => setImmediate(resolveFlush));
 const wait = ms => new Promise(resolveWait => setTimeout(resolveWait, ms));
@@ -137,6 +138,7 @@ function liveContentHarness(platform, options = {}) {
     '../src/core/messages': messageModule,
     '../src/translation/text': textModule,
     '../src/core/timeout-retry': timeoutRetryModule,
+    '../src/i18n/text.ts': i18nTextModule,
     '../src/platforms/bilibili-live/emotes': biliEmotes,
     '../src/platforms/bilibili-live/view': biliView,
     '../src/ui/live-status': { createLiveStatus: () => statusView },

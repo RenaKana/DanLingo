@@ -1,9 +1,10 @@
 import { normalizeLocalConfig } from './config.ts';
 import type { ProviderSettings } from '../core/types.ts';
-import type { LocalControl, LocalReply, LocalState } from './types.ts';
+import type { LocalControl, LocalPerformanceConfig, LocalReply, LocalState } from './types.ts';
 
 export const LOCAL_AUTOLOAD_KEY = 'localAutoLoad.v1';
-type Policy = { revision: number; paused: boolean; failure?: { identity: string; error: string } };
+type ExplicitLoad = { identity: string; modelId: string; config: LocalPerformanceConfig; generation: number };
+type Policy = { revision: number; paused: boolean; failure?: { identity: string; error: string }; explicitLoad?: ExplicitLoad };
 export interface LocalRuntimeStatus { phase: LocalState['phase']; paused: boolean; modelId?: string; modelName?: string; stage?: string; error?: string;
   normalThinking?: string; superChatThinking?: string }
 type Control = LocalControl & { policyRevision?: number };
@@ -31,8 +32,15 @@ export class LocalAutoLoader {
     if (this.policy) return this.policy;
     if (!this.initializing) this.initializing = this.options.storage.get(LOCAL_AUTOLOAD_KEY).then(stored => {
       const value = stored[LOCAL_AUTOLOAD_KEY];
+      let explicitLoad: ExplicitLoad | undefined;
+      try {
+        const explicit = value?.explicitLoad;
+        if (typeof explicit?.identity === 'string' && typeof explicit.modelId === 'string' && Number.isSafeInteger(explicit.generation)) {
+          explicitLoad = { ...explicit, config: normalizeLocalConfig(explicit.config) };
+        }
+      } catch { /* A stale session hint must not prevent settings from opening. */ }
       return this.policy = { revision: Number.isSafeInteger(value?.revision) && value.revision >= 0 ? value.revision : 0,
-        paused: value?.paused === true, ...(typeof value?.failure?.identity === 'string' && /^LOCAL_[A-Z0-9_]+$/.test(value?.failure?.error) ? { failure: value.failure } : {}) };
+        paused: value?.paused === true, ...(explicitLoad ? { explicitLoad } : {}), ...(typeof value?.failure?.identity === 'string' && /^LOCAL_[A-Z0-9_]+$/.test(value?.failure?.error) ? { failure: value.failure } : {}) };
     });
     return this.initializing;
   }
@@ -54,22 +62,61 @@ export class LocalAutoLoader {
       ...(this.state?.error || policy.failure?.error ? { error: this.state?.error ?? policy.failure?.error } : {}) };
   }
   async observe(state?: LocalState) {
-    if (state) this.state = state;
+    if (state) {
+      this.state = state;
+      const policy = await this.readPolicy(), explicit = policy.explicitLoad;
+      // A fatal worker reset increments the generation but still belongs to the
+      // same failed load; keep its parameters so admissions latch that failure.
+      const sameFailure = explicit && state.phase === 'error' && state.requested
+        && localLoadIdentity({ localModelId: state.model?.id, localPerformance: state.requested })
+          === localLoadIdentity({ localModelId: explicit.modelId, localPerformance: explicit.config });
+      if (explicit && (state.phase === 'idle' || state.model?.id !== explicit.modelId || state.generation !== explicit.generation && !sameFailure)) {
+        delete policy.explicitLoad; await this.persist();
+      }
+    }
     const status = await this.status(), next = JSON.stringify(status);
     if (this.published !== next) { this.published = next; this.options.changed(status); }
+  }
+  /** Keep draft parameters for this runtime generation without saving form settings. */
+  async retainExplicitLoad(settings: ProviderSettings, state?: LocalState) {
+    const policy = await this.readPolicy();
+    if (!policy.paused && state?.model && state.model.id === settings.localModelId && state.requested && Number.isSafeInteger(state.generation) && state.phase !== 'idle') {
+      policy.explicitLoad = { identity: localLoadIdentity(settings), modelId: state.model.id,
+        config: normalizeLocalConfig(state.requested), generation: state.generation };
+      await this.persist();
+    }
+    await this.observe(state);
+  }
+  private loadSettings(settings: ProviderSettings, policy: Policy): ProviderSettings {
+    return policy.explicitLoad?.identity === localLoadIdentity(settings)
+      ? { ...settings, localPerformance: policy.explicitLoad.config } : settings;
   }
   /** Revocations are persisted before IPC; offscreen rejects an older, delayed ensure message. */
   async setPaused(paused: boolean): Promise<number> {
     const policy = await this.readPolicy();
-    policy.revision++; policy.paused = paused; delete policy.failure; this.loading = undefined;
+    policy.revision++; policy.paused = paused; delete policy.failure; delete policy.explicitLoad; this.loading = undefined;
     await this.persist(); await this.observe(); return policy.revision;
   }
   async invalidate(): Promise<number> {
     const policy = await this.readPolicy(); return this.setPaused(policy.paused);
   }
+  /** Inspect an already usable runtime without starting a load or renewing demand. */
+  async peekReady(settings: ProviderSettings): Promise<LocalState | undefined> {
+    const policy = await this.readPolicy(), revision = policy.revision;
+    if (!settings.localModelId || policy.paused) return;
+    const effective = this.loadSettings(settings, policy), identity = localLoadIdentity(effective);
+    if (policy.failure?.identity === identity) return;
+    const reply = await this.options.control({ action: 'state' });
+    if (policy.paused || policy.revision !== revision || !reply.ok) return;
+    await this.observe(reply.state);
+    const state = reply.state;
+    if (state?.model?.id === settings.localModelId && ['ready', 'generating'].includes(state.phase)
+      && localLoadIdentity({ localModelId: state.model.id, localPerformance: state.requested }) === identity) return state;
+  }
   async ready(settings: ProviderSettings, waitForLoad = false): Promise<LocalState> {
     if (!settings.localModelId) throw new Error('LOCAL_MODEL_NOT_SELECTED');
-    const policy = await this.readPolicy(), identity = localLoadIdentity(settings), revision = policy.revision;
+    const policy = await this.readPolicy(), revision = policy.revision;
+    let effectiveSettings = this.loadSettings(settings, policy), identity = localLoadIdentity(effectiveSettings);
     if (policy.paused) throw new Error('LOCAL_AUTOLOAD_PAUSED');
     if (policy.failure?.identity === identity) throw new Error(policy.failure.error);
     const existing = this.loading;
@@ -82,6 +129,8 @@ export class LocalAutoLoader {
     if (policy.paused || revision !== policy.revision) throw new Error('LOCAL_AUTOLOAD_PAUSED');
     if (!reply.ok) throw new Error(reply.error ?? 'LOCAL_OFFSCREEN_UNAVAILABLE');
     const state = reply.state;
+    await this.observe(state);
+    effectiveSettings = this.loadSettings(settings, policy); identity = localLoadIdentity(effectiveSettings);
     if (state?.phase === 'error' && state.model?.id === settings.localModelId
       && localLoadIdentity({ localModelId: state.model.id, localPerformance: state.requested }) === identity) {
       policy.failure = { identity, error: state.error ?? 'LOCAL_LOAD_FAILED' };
@@ -112,7 +161,7 @@ export class LocalAutoLoader {
       try {
         await this.observe();
         if (policy.paused || policy.revision !== revision) throw new Error('LOCAL_AUTOLOAD_PAUSED');
-        const result = await this.options.control({ action: 'ensure', modelId: settings.localModelId!, config: settings.localPerformance, policyRevision: revision });
+        const result = await this.options.control({ action: 'ensure', modelId: settings.localModelId!, config: effectiveSettings.localPerformance, policyRevision: revision });
         if (policy.paused || policy.revision !== revision) throw new Error('LOCAL_MODEL_CHANGED');
         if (!result.ok || !result.state) throw new Error(result.error ?? 'LOCAL_LOAD_FAILED');
         delete policy.failure; await this.persist(); await this.observe(result.state); return result.state;

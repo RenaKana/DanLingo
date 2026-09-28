@@ -14,7 +14,7 @@ const descriptor = await open(modelPath, 'r');
 const file = {
   name: basename(modelPath), size: before.size, lastModified: before.mtimeMs,
   slice(start, end) {
-    assert.equal(start, 0, 'Parser must read from the file header only');
+    assert.equal(start, reads.at(-1)?.end ?? 0, 'Header reads must be sequential and nonoverlapping');
     assert.ok(end <= maxHeader, 'Parser must not read beyond its 32 MiB header budget');
     return { async arrayBuffer() {
       const buffer = Buffer.alloc(end - start);
@@ -34,7 +34,8 @@ let info;
 try { ({ info } = await inspectAndOrderFiles([file])); }
 finally { await descriptor.close(); }
 const headerRecognitionMs = performance.now() - started;
-assert.ok(reads.length === 1 && reads[0].bytes <= maxHeader, 'One bounded header read only');
+const readBytes = reads.reduce((total, read) => total + read.bytes, 0);
+assert.ok(reads.length > 0 && readBytes <= maxHeader, 'Total header reads stay within the 32 MiB budget');
 assert.equal(info.fingerprint, undefined, 'Recognition must not calculate a whole-file fingerprint');
 const after = await stat(modelPath);
 assert.equal(after.size, before.size); assert.equal(after.mtimeMs, before.mtimeMs);
@@ -49,4 +50,4 @@ const report = {
 const root = resolve('.artifacts/directory-real-header'); await mkdir(root, { recursive: true });
 const directory = await mkdtemp(resolve(root, 'run-'));
 await writeFile(resolve(directory, 'report.json'), JSON.stringify(report, null, 2));
-console.log(JSON.stringify({ status: report.status, bytes: report.bytes, readBytes: reads[0].bytes, headerRecognitionMs, report: resolve(directory, 'report.json') }));
+console.log(JSON.stringify({ status: report.status, bytes: report.bytes, readBytes, headerRecognitionMs, report: resolve(directory, 'report.json') }));

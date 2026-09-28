@@ -1,3 +1,4 @@
+import * as performanceHistory from '../../src/translation/performance-history.ts';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -12,12 +13,16 @@ import * as timeoutRetry from '../../src/core/timeout-retry.ts';
 import * as biliEmotes from '../../src/platforms/bilibili-live/emotes.ts';
 import * as scheduling from '../../src/core/scheduler.ts';
 import * as stream from '../../src/core/source-stream.ts';
+import * as videoPolicy from '../../src/core/video-policy.ts';
+import * as shadow from '../../src/core/bilibili-shadow.ts';
 import { BRIDGE } from '../../src/platforms/niconico/native.ts';
 import * as provider from '../../src/translation/provider.ts';
+import * as hybridCapacity from '../../src/translation/hybrid-capacity.ts';
 import * as performanceTesting from '../../src/translation/performance-test.ts';
 import * as connectionDiscovery from '../../src/translation/connection-discovery.ts';
 import { LOCAL_CHANNEL } from '../../src/local/types.ts';
 import * as providerSettings from '../../src/local/provider-settings.ts';
+import * as localConfig from '../../src/local/config.ts';
 import * as translationProfile from '../../src/local/translation-profile.ts';
 import * as autoLoad from '../../src/local/auto-load.ts';
 import * as modelCatalog from '../../src/core/model-catalog.ts';
@@ -25,6 +30,17 @@ import * as serviceHistory from '../../src/core/service-history.ts';
 import * as onlineBudget from '../../src/core/online-budget.ts';
 import * as translationShortcut from '../../src/core/translation-shortcut.ts';
 import * as settingsFrame from '../../src/core/settings-frame.ts';
+import * as i18nWire from '../../src/i18n/wire.ts';
+import * as i18nText from '../../src/i18n/text.ts';
+import * as localizedText from '../../src/ui/localized-text.ts';
+import * as auditRead from '../../src/diagnostics/bilibili-audit-cache.ts';
+import * as livePreviewHost from '../../src/diagnostics/live-preview-host.ts';
+import * as nativeSupplyWatch from '../../src/diagnostics/native-supply-watch.ts';
+import * as experimentWatch from '../../src/diagnostics/bilibili-experiment-watch.ts';
+import * as displayPlanSession from '../../src/diagnostics/display-plan-session.ts';
+import * as userFilterSimulation from '../../src/diagnostics/user-filter-simulation.ts';
+import * as userFilterWire from '../../src/platforms/bilibili/user-filter-wire.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 // Execute the actual entrypoints with browser APIs at their external boundary mocked.
 const compiled = new Map(['background', 'watch.content'].map(name => [name, ts.transpileModule(
@@ -33,41 +49,63 @@ const compiled = new Map(['background', 'watch.content'].map(name => [name, ts.t
 ).outputText]));
 function load(name, dependencies, globals = {}) {
   const exports = {};
-  runInNewContext(compiled.get(name), { exports, URL, AbortController, performance, crypto, TextEncoder, structuredClone, setTimeout, clearTimeout, setInterval, clearInterval,
+  runInNewContext(compiled.get(name), { exports, Error, URL, AbortController, performance, crypto, TextEncoder, structuredClone, setTimeout, clearTimeout, setInterval, clearInterval,
     require: key => { if (!(key in dependencies)) throw new Error(`Unexpected import ${key}`); return dependencies[key]; },
     ...globals });
   return exports.default;
 }
 const url = id => `https://www.nicovideo.jp/watch/${id}`;
 const flush = () => new Promise(resolve => setImmediate(resolve));
-const settings = { ...config.DEFAULT_SETTINGS, enabled: true, endpoint: 'https://provider.example/v1/chat/completions', sourceLanguage: 'ja' };
+const settings = onlineSettings({ enabled: true, endpoint: 'https://provider.example/v1/chat/completions', sourceLanguage: 'ja' });
+delete settings.reasoningProfileOverride;
 const input = resourceId => ({ type: 'translate', resourceId, requestId: crypto.randomUUID(),
   items: [{ id: `${resourceId}-one`, text: 'これはテストです', remainingMs: 12000 }] });
 
 function background(options = {}) {
-  const h = { currentUrl: url('sm2'), activeId: 7, calls: [], messages: [], permissions: async () => true, getHook: async () => {}, tabHook: async () => {},
+  const h = { currentUrl: url('sm2'), activeId: 7, calls: [], messages: [], tabMessages: [], permissions: async () => true, getHook: async () => {}, tabHook: async () => {},
     translate: async request => ({ items: request.items.map(item => ({ id: item.id, status: 'translated', text: '测试译文' })) }), ...options.hooks };
   const local = { [config.SETTINGS_KEY]: { ...settings, ...options.settings } };
   const session = { [config.KEY_STORAGE_KEY]: { origin: 'https://provider.example', value: 'unit-test-only' }, ...options.session };
   h.localStorage = local; h.sessionStorage = session;
+  h.storageEvents = [];
+  h.emitStorageChange = async (changes, area = 'local') => {
+    h.storageEvents.push({ changes: structuredClone(changes), area });
+    return h.onStorageChanged?.(changes, area);
+  };
   const storage = (values, area) => ({ setAccessLevel: async () => {},
-    get: async () => { await h.getHook(); return { ...values }; },
-    set: async patch => { await h.writeHook?.(area, patch); Object.assign(values, patch); }, remove: async key => { await h.removeHook?.(area, key); delete values[key]; } });
+    get: async key => { await h.getHook(area, key); return { ...values }; },
+    set: async patch => {
+      await h.writeHook?.(area, patch);
+      const changes = Object.fromEntries(Object.entries(patch).map(([key, newValue]) => [key, {
+        ...(Object.hasOwn(values, key) ? { oldValue: structuredClone(values[key]) } : {}), newValue: structuredClone(newValue),
+      }]));
+      Object.assign(values, patch);
+      await h.emitStorageChange(changes, area);
+    },
+    remove: async key => {
+      await h.removeHook?.(area, key);
+      const keys = Array.isArray(key) ? key : [key];
+      const changes = Object.fromEntries(keys.filter(item => Object.hasOwn(values, item)).map(item => [item, { oldValue: structuredClone(values[item]) }]));
+      for (const item of keys) delete values[item];
+      if (Object.keys(changes).length) await h.emitStorageChange(changes, area);
+    } });
+  h.localArea = storage(local, 'local'); h.sessionArea = storage(session, 'session');
   let listener;
-  const browser = { runtime: { id: 'test-extension', getURL: path => `chrome-extension://test-extension${path}`,
-    onMessage: { addListener: fn => { listener = fn; } }, sendMessage: async message => { h.messages.push(structuredClone(message)); }, getPlatformInfo: async () => ({}),
+  const browser = { runtime: { id: 'test-extension', getURL: path => `chrome-extension://test-extension${path}`, getManifest: () => ({ version: 'fixture' }),
+    onMessage: { addListener: fn => { listener = fn; } }, sendMessage: async message => { h.messages.push(structuredClone(message)); await h.sendRuntimeMessage?.(message); }, getPlatformInfo: async () => ({}),
     openOptionsPage: async () => { h.optionsOpens = (h.optionsOpens ?? 0) + 1; await h.openOptionsHook?.(); } },
     commands: { onCommand: { addListener: fn => { h.command = fn; } } },
-    storage: { local: storage(local, 'local'), session: storage(session, 'session') }, permissions: { contains: (...args) => h.permissions(...args) },
+    storage: { onChanged: { addListener: fn => { h.onStorageChanged = fn; } }, local: h.localArea, session: h.sessionArea }, permissions: { contains: (...args) => h.permissions(...args) },
     tabs: { get: async () => { await h.tabHook(); return { id: 7, url: h.currentUrl }; }, query: async () => [{ id: h.activeId, url: h.currentUrl }],
       sendMessage: async (_id, message, options) => {
+        h.tabMessages.push({ message, options });
         if (message.type === 'settings-host-probe') return h.settingsProbe?.();
         if (message.type === 'settings-host-open') return h.openSettingsHost?.(message);
         if (['verify-live-session', 'verify-resource-session'].includes(message.type)) return { ok: h.prove ? await h.prove(message.session) : true };
         if (message.type === 'get-adapter-diagnostic') return h.diagnostic?.(message, options);
         if (message.type === 'verify-adapter-diagnostic') return h.verifyDiagnostic?.(message, options);
       },
-      onRemoved: { addListener: () => {} }, onUpdated: { addListener: fn => { h.updated = fn; } } } };
+      onRemoved: { addListener: fn => { h.removed = fn; } }, onUpdated: { addListener: fn => { h.updated = fn; } } } };
   class Engine {
     translate(request) { h.calls.push(request); return h.translate(request); }
     stats() { return h.stats ?? {}; }
@@ -77,16 +115,27 @@ function background(options = {}) {
   }
   class Cache { async stats() { return {}; } async clear() {} }
   load('background', { 'wxt/browser': { browser }, 'wxt/utils/define-background': { defineBackground: fn => fn() },
+    '../src/diagnostics/bilibili-audit-cache': auditRead,
+    '../src/diagnostics/live-preview-host': livePreviewHost,
+    '../src/platforms/bilibili/user-filter-wire': userFilterWire,
+    '../src/core/build-identity': { BUILD_ID: 'test-build' },
+    '../src/i18n/wire.ts': i18nWire,
     '../src/core/config': config, '../src/core/messages': messages, '../src/core/resource': resource, '../src/core/live-metrics': metrics,
     '../src/core/adapter-diagnostic': diagnostics,
+    '../src/core/video-policy': videoPolicy,
+    '../src/core/bilibili-shadow': shadow,
     '../src/core/timeout-retry': timeoutRetry,
+    '../src/local/config': localConfig,
     '../src/local/provider-settings': providerSettings,
     '../src/local/translation-profile': translationProfile,
     '../src/local/auto-load': autoLoad, '../src/core/model-catalog': modelCatalog, '../src/core/settings-frame': settingsFrame,
     '../src/core/service-history': serviceHistory, '../src/core/online-budget': onlineBudget, '../src/core/translation-shortcut': translationShortcut,
     '../src/platforms/bilibili-live/emotes': biliEmotes,
-    '../src/translation': { TranslationEngine: Engine, IndexedDbTranslationCache: Cache }, '../src/translation/provider': provider, '../src/translation/model-test': {},
-    '../src/translation/performance-test': options.performanceTesting ?? performanceTesting, '../src/translation/connection-discovery': connectionDiscovery,
+    '../src/translation': { TranslationEngine: Engine, IndexedDbTranslationCache: Cache }, '../src/translation/provider': provider, '../src/translation/model-test': options.modelTesting ?? {},
+    '../src/translation/performance-history': performanceHistory,
+    '../src/translation/hybrid-capacity': hybridCapacity,
+    '../src/translation/performance-test': options.performanceTesting ?? performanceTesting,
+    '../src/translation/connection-discovery': options.connectionDiscovery ?? connectionDiscovery,
     '../src/local/types': { LOCAL_CHANNEL }, '../src/local/bridge': { createLocalFetch: () => { throw new Error('Unexpected local inference'); }, localControl: control => {
       if (h.localControl) return h.localControl(control);
       throw new Error('Unexpected local control');
@@ -100,6 +149,91 @@ function background(options = {}) {
 const testUi = { id: 'test-extension', url: 'chrome-extension://test-extension/options.html' };
 const popupUi = { id: 'test-extension', url: 'chrome-extension://test-extension/popup.html' };
 
+test('popup target language accepts the same custom values as full settings and keeps unrelated preferences', async () => {
+  const h = background({ settings: { onlineConcurrency: 8, localConcurrency: 3 } });
+  const reply = await h.send({ type: 'toggle', targetLanguage: '  Klingon (tlh)  ' }, popupUi);
+  assert.equal(reply.ok, true);
+  assert.equal(reply.settings.targetLanguage, 'Klingon (tlh)');
+  assert.equal(reply.settings.onlineConcurrency, 8);
+  assert.equal(reply.settings.localConcurrency, 3);
+  assert.equal((await h.send({ type: 'toggle', targetLanguage: ' ' }, popupUi)).settings.targetLanguage, 'Klingon (tlh)');
+});
+
+test('saved backend-specific concurrency reaches the translation dispatcher after a backend switch', async () => {
+  const h = background({ settings: { onlineConcurrency: 8, localConcurrency: 3 } });
+  const online = await h.send(input('sm2'));
+  assert.equal(online.ok, true);
+  assert.equal(h.calls[0].settings.concurrency, 8);
+  h.localStorage[config.SETTINGS_KEY].backend = 'local';
+  const local = await h.send({ type: 'settings' }, testUi);
+  assert.equal(local.settings.concurrency, 3);
+  assert.equal(local.settings.onlineConcurrency, 8);
+  h.localStorage[config.SETTINGS_KEY].backend = 'online';
+  assert.equal((await h.send({ type: 'settings' }, testUi)).settings.concurrency, 8);
+});
+
+test('disabled idle unloading rejects an offscreen release even when no translation is running', async () => {
+  const h = background({ settings: { localIdleUnloadEnabled: false } });
+  const reply = await h.send({ type: 'local-idle-check' }, { id: 'test-extension', url: 'chrome-extension://test-extension/offscreen.html' });
+  assert.equal(reply.ok, true);
+  assert.equal(reply.idle, false);
+});
+
+test('offscreen idle-policy lookup responds before pause recovery and exposes only normalized idle fields', async () => {
+  const h = background({ settings: { localIdleUnloadEnabled: false, localIdleUnloadMinutes: 2, endpoint: 'https://private.example/key', model: 'private-model', localModelId: 'private-local-model' } });
+  let releaseRead;
+  const pauseRecovery = new Promise(resolve => { releaseRead = resolve; });
+  h.getHook = async (_area, key) => {
+    if (key === 'performancePause.v1') await pauseRecovery;
+  };
+  let settled = false;
+  const pending = h.send({ type: 'local-idle-policy-get' }, offscreenUi).then(reply => { settled = true; return reply; });
+  await flush();
+  const settledBeforeRecovery = settled;
+  releaseRead();
+  const reply = await pending;
+  assert.equal(settledBeforeRecovery, true, 'the idle policy is independent of recovery of a native benchmark pause');
+  assert.equal(reply.ok, true);
+  assert.deepEqual(structuredClone(reply.policy), { enabled: false, timeoutMs: 120_000 });
+  assert.deepEqual(Object.keys(reply.policy).sort(), ['enabled', 'timeoutMs']);
+});
+
+test('idle-policy lookup rejects non-offscreen, tab-backed, and foreign-extension senders', async () => {
+  const h = background();
+  for (const sender of [
+    testUi,
+    { ...offscreenUi, id: 'another-extension' },
+    { ...offscreenUi, tab: { id: 7 } },
+    { ...offscreenUi, url: 'chrome-extension://test-extension/options.html' },
+  ]) assert.equal((await h.send({ type: 'local-idle-policy-get' }, sender)).ok, false);
+});
+
+test('local settings changes broadcast only the idle policy, and deletion broadcasts normalized defaults', async () => {
+  const h = background();
+  const saved = structuredClone(h.localStorage[config.SETTINGS_KEY]);
+  await h.localArea.set({ [config.SETTINGS_KEY]: { ...saved, localIdleUnloadEnabled: false, localIdleUnloadMinutes: 2 } });
+  assert.deepEqual(h.messages.filter(message => message.action === 'idle-policy'), [
+    { channel: LOCAL_CHANNEL, action: 'idle-policy', policy: { enabled: false, timeoutMs: 120_000 } },
+  ]);
+  await h.localArea.set({ unrelated: false });
+  await h.sessionArea.set({ [config.SETTINGS_KEY]: { ...saved, localIdleUnloadEnabled: true, localIdleUnloadMinutes: 1 } });
+  assert.equal(h.messages.filter(message => message.action === 'idle-policy').length, 1);
+  await h.localArea.remove(config.SETTINGS_KEY);
+  assert.deepEqual(h.messages.filter(message => message.action === 'idle-policy').at(-1),
+    { channel: LOCAL_CHANNEL, action: 'idle-policy', policy: { enabled: true, timeoutMs: 300_000 } });
+});
+
+test('missing offscreen receiver does not fail a saved settings update', async () => {
+  const h = background({ hooks: { sendRuntimeMessage: async message => {
+    if (message.channel === LOCAL_CHANNEL && message.action === 'idle-policy') throw new Error('Receiving end does not exist');
+  } } });
+  const current = (await h.send({ type: 'settings' }, testUi)).settings;
+  const reply = await h.send({ type: 'save', settings: { ...current, localIdleUnloadEnabled: false, localIdleUnloadMinutes: 2, targetLanguage: 'ko' }, remember: false }, testUi);
+  assert.equal(reply.ok, true, reply.error);
+  assert.equal(h.localStorage[config.SETTINGS_KEY].localIdleUnloadEnabled, false);
+  assert.equal(h.localStorage[config.SETTINGS_KEY].targetLanguage, 'ko');
+});
+
 for (const currentUrl of ['https://example.invalid/page', 'chrome://newtab/', 'file:///D:/example.html', '']) test(`settings open independently outside supported sites: ${currentUrl || 'unavailable URL'}`, async () => {
   const h = background({ hooks: { currentUrl } });
   const result = await h.send({ type: 'open-settings' }, popupUi);
@@ -112,16 +246,65 @@ test('settings fall back independently when page integration is absent or fails'
   assert.equal((await absent.send({ type: 'open-settings' }, popupUi)).mode, 'standalone');
   const failed = background({ hooks: { settingsProbe: () => ({ ok: true, hostDocument: 'host-document' }), openSettingsHost: () => ({ ok: false }) } });
   assert.equal((await failed.send({ type: 'open-settings' }, popupUi)).mode, 'standalone');
-  assert.equal(failed.optionsOpens, 1); assert.equal(Object.keys(failed.sessionStorage[settingsFrame.SETTINGS_FRAME_KEY]).length, 0);
+  assert.equal(failed.optionsOpens, 1); assert.equal(failed.sessionStorage[settingsFrame.SETTINGS_FRAME_KEY], undefined);
 });
 
-test('supported settings stay embedded and unrelated senders cannot open privileged settings', async () => {
+test('settings always open independently and unrelated senders cannot open the options page', async () => {
   const h = background({ hooks: { settingsProbe: () => ({ ok: true, hostDocument: 'host-document' }), openSettingsHost: () => ({ ok: true }) } });
   const result = await h.send({ type: 'open-settings' }, popupUi);
-  assert.equal(result.mode, 'embedded'); assert.equal(h.optionsOpens, undefined);
+  assert.equal(result.mode, 'standalone'); assert.equal(h.optionsOpens, 1);
+  assert.equal(h.sessionStorage[settingsFrame.SETTINGS_FRAME_KEY], undefined);
   assert.equal((await h.send({ type: 'open-settings' }, testUi)).ok, false);
   assert.equal((await h.send({ type: 'open-settings' })).ok, false);
   assert.equal((await h.send({ type: 'open-settings' }, { ...popupUi, id: 'other-extension' })).ok, false);
+});
+
+test('local settings preserve blank online-only endpoint and model fields', async () => {
+  const h = background({ settings: { backend: 'local', endpoint: '', model: '', localModelId: 'local-fixture' } });
+  const reply = await h.send({ type: 'settings' }, testUi);
+  assert.equal(reply.ok, true);
+  assert.equal(reply.settings.endpoint, '');
+  assert.equal(reply.settings.model, '');
+  assert.equal(reply.settings.localModelId, 'local-fixture');
+});
+
+test('online translation reports a missing endpoint before asking for an API key', async () => {
+  const h = background({ settings: { endpoint: '', model: '' } });
+  const reply = await h.send(input('sm2'));
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, '请先填写服务地址');
+  assert.equal(h.calls.length, 0);
+});
+
+test('popup toggle keeps translation disabled when online setup is incomplete', async () => {
+  const h = background({ settings: { enabled: false, endpoint: '', model: '' } });
+  const reply = await h.send({ type: 'toggle', enabled: true }, testUi);
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, '请先填写服务地址');
+  assert.equal(h.localStorage[config.SETTINGS_KEY].enabled, false);
+});
+
+test('keyboard shortcut cannot enable online translation without an address and model', async () => {
+  const h = background({ settings: { enabled: false, endpoint: '', model: '' } });
+  h.command('toggle-translation');
+  for (let i = 0; i < 8; i++) await flush();
+  assert.equal(h.localStorage[config.SETTINGS_KEY].enabled, false);
+});
+
+test('online model discovery works before a model has been selected', async () => {
+  let discovered;
+  const h = background({ settings: { model: '' }, connectionDiscovery: {
+    discoverConnectionModels: async (settings, apiKey) => {
+      discovered = { model: settings.model, endpoint: settings.endpoint, apiKey };
+      return { models: ['first-available-model'] };
+    },
+  } });
+  const draft = (await h.send({ type: 'settings' }, testUi)).settings;
+  assert.equal(draft.model, '');
+  const reply = await h.send({ type: 'models', settings: draft }, testUi);
+  assert.equal(reply.ok, true, reply.error);
+  assert.deepEqual(reply.models, ['first-available-model']);
+  assert.deepEqual(discovered, { model: '', endpoint: settings.endpoint, apiKey: 'unit-test-only' });
 });
 
 test('standalone settings open errors remain retryable', async () => {
@@ -132,10 +315,11 @@ test('standalone settings open errors remain retryable', async () => {
 });
 
 const replayConfig = { mode: 'latency', count: 1, concurrency: 1, batchSize: 1, arrivalIntervalMs: 0, strategy: 'normal' };
+
 function testPriorityHarness(options = {}) {
   let h;
   class PerformanceTest {
-    constructor(_config, settings) { this.report = { id: crypto.randomUUID(), state: 'running', backend: settings.backend, model: settings.model }; }
+    constructor(_config, settings) { this.report = { id: crypto.randomUUID(), state: 'running', backend: settings.backend, model: settings.model, measurement: {} }; }
     snapshot() { return { ...this.report }; }
     run() { h.testStarted = true; return new Promise((resolve, reject) => {
       h.finishTest = (failure = false) => { this.report.state = failure ? 'stopped' : 'completed'; failure ? reject(new Error('fixture failure')) : resolve(this.snapshot()); };
@@ -302,6 +486,243 @@ test('invalid immediate model choice leaves all persisted fields unchanged', asy
   h.localControl = async () => ({ ok: true, models: [] });
   assert.equal((await h.send({ type: 'select-local-model', modelId: 'missing-model' }, ui)).ok, false);
   assert.deepEqual((await h.send({ type: 'settings' }, ui)).settings, original);
+});
+
+function selectionLoadHarness(options = {}) {
+  const h = background({ settings: { backend: 'local', enabled: false, endpoint: '', model: '', localModelId: '', ...options.settings },
+    modelTesting: options.modelTesting, performanceTesting: options.performanceTesting });
+  h.models = options.models ?? [{ id: 'model-a', availability: 'ready' }, { id: 'model-b', availability: 'ready' }];
+  h.localState = { phase: 'idle' };
+  h.localActions = [];
+  h.loadBehavior = options.load ?? (async control => {
+    h.localState = { phase: 'ready', generation: 3, requested: control.config, model: { id: control.modelId, name: control.modelId } };
+    return { ok: true, state: h.localState };
+  });
+  h.localControl = async control => {
+    h.localActions.push(control);
+    if (control.action === 'list') return { ok: true, models: h.models, state: h.localState };
+    if (control.action === 'load') return h.loadBehavior(control);
+    if (['cancel', 'unload'].includes(control.action)) { h.cancelRequested = true; h.localState = { phase: 'idle' }; return { ok: true, state: h.localState }; }
+    if (control.action === 'state') return { ok: true, state: h.localState };
+    if (control.action === 'delete') {
+      h.models = h.models.filter(model => model.id !== control.modelId);
+      if (h.localState.model?.id === control.modelId) h.localState = { phase: 'idle' };
+      return { ok: true, models: h.models, state: h.localState };
+    }
+    throw new Error(`Unexpected local control ${control.action}`);
+  };
+  h.selectAndLoad = (modelId = 'model-a') => h.send({ type: 'select-local-model', modelId, load: true, config: { promptMode: 'json' } }, testUi);
+  return h;
+}
+
+test('explicit model selection validates, saves and loads the requested model', async () => {
+  const h = selectionLoadHarness();
+  const reply = await h.selectAndLoad();
+  assert.equal(reply.ok, true, reply.error);
+  assert.equal(reply.settings.localModelId, 'model-a');
+  assert.equal(h.localStorage[config.SETTINGS_KEY].localModelId, 'model-a');
+  assert.equal(h.localStorage[config.SETTINGS_KEY].endpoint, '');
+  assert.equal(h.localStorage[config.SETTINGS_KEY].model, '');
+  assert.equal(h.localActions.find(control => control.action === 'load').config.promptMode, 'json');
+  assert.equal(reply.state.model.id, 'model-a');
+  assert.equal(h.sessionStorage[autoLoad.LOCAL_AUTOLOAD_KEY].explicitLoad.config.promptMode, 'json');
+  assert.equal(h.sessionStorage[autoLoad.LOCAL_AUTOLOAD_KEY].explicitLoad.generation, 3);
+});
+
+test('failed explicit load returns the committed model choice and current runtime state', async () => {
+  const h = selectionLoadHarness({ load: async control => ({ ok: false, error: 'LOCAL_MODEL_NOT_FOUND', state: {
+    phase: 'error', model: { id: control.modelId }, generation: 4, requested: control.config, error: 'LOCAL_MODEL_NOT_FOUND' } }) });
+  const reply = await h.selectAndLoad();
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, 'LOCAL_MODEL_NOT_FOUND');
+  assert.equal(reply.settings.localModelId, 'model-a');
+  assert.equal(h.localStorage[config.SETTINGS_KEY].localModelId, 'model-a');
+  assert.equal(reply.state.phase, 'error');
+  assert.equal(h.sessionStorage[autoLoad.LOCAL_AUTOLOAD_KEY].explicitLoad.config.promptMode, 'json');
+});
+
+for (const [error, availability, retained] of [
+  ['LOCAL_SOURCE_MISSING', 'missing', false],
+  ['LOCAL_DIRECTORY_PERMISSION_REQUIRED', 'permission-required', true],
+]) test(`failed explicit load can await source reconciliation without locking settings: ${error}`, async () => {
+  let escapeRecovery, reconciliation, timer;
+  const escape = new Promise(resolve => { escapeRecovery = resolve; });
+  const h = selectionLoadHarness({ load: async () => {
+    h.models[0].availability = availability;
+    h.localState = { phase: 'idle' };
+    // The real offscreen error handler waits for this reverse IPC before replying to load.
+    reconciliation = h.send({ type: 'local-sources-updated' }, offscreenUi);
+    await Promise.race([reconciliation, escape]);
+    return { ok: false, error, state: h.localState };
+  } });
+  const loading = h.selectAndLoad();
+  try {
+    const reply = await Promise.race([loading, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('load and source reconciliation deadlocked')), 500);
+    })]);
+    assert.equal(reply.error, error);
+    assert.equal(reply.settings.localModelId ?? '', retained ? 'model-a' : '');
+    assert.equal(h.localStorage[config.SETTINGS_KEY].localModelId, retained ? 'model-a' : '');
+    const saved = await h.send({ type: 'save', settings: { ...reply.settings, targetLanguage: 'ko' }, remember: false }, testUi);
+    assert.equal(saved.ok, true, saved.error);
+    assert.equal(saved.settings.targetLanguage, 'ko');
+    const removed = await h.send({ type: 'local-control', control: { action: 'delete', modelId: 'model-a' } }, testUi);
+    assert.equal(removed.ok, true, removed.error);
+    h.loadBehavior = async control => ({ ok: true, state: { phase: 'ready', model: { id: control.modelId } } });
+    assert.equal((await h.selectAndLoad('model-b')).ok, true, 'load ownership must be released');
+  } finally {
+    clearTimeout(timer); escapeRecovery();
+    await loading; await reconciliation;
+  }
+});
+
+test('saving settings during an explicit native load does not wait for that load', async () => {
+  let finishLoad, enteredLoad, timer;
+  const entered = new Promise(resolve => { enteredLoad = resolve; });
+  const h = selectionLoadHarness({ load: () => { enteredLoad(); return new Promise(resolve => { finishLoad = resolve; }); } });
+  const loading = h.selectAndLoad(); await entered;
+  try {
+    const current = (await h.send({ type: 'settings' }, testUi)).settings;
+    const saving = h.send({ type: 'save', settings: { ...current, localIdleUnloadEnabled: false }, remember: false }, testUi);
+    const reply = await Promise.race([saving, new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('saving is blocked by native model load')), 500);
+    })]);
+    assert.equal(reply.ok, true, reply.error);
+    assert.equal(reply.settings.localIdleUnloadEnabled, false);
+    assert.equal(reply.settings.localModelId, 'model-a');
+  } finally {
+    clearTimeout(timer); finishLoad({ ok: false, error: 'LOCAL_MODEL_CHANGED', state: { phase: 'idle' } }); await loading;
+  }
+});
+
+test('translation is refused while an explicit local model load owns the runtime', async () => {
+  let releaseLoad, enteredLoad;
+  const loadStarted = new Promise(resolve => { enteredLoad = resolve; });
+  const h = selectionLoadHarness({ settings: { enabled: true }, load: () => {
+    enteredLoad(); return new Promise(resolve => { releaseLoad = resolve; });
+  } });
+  const selection = h.selectAndLoad();
+  await loadStarted;
+  try {
+    const reply = await h.send(input('sm2'));
+    assert.equal(reply.ok, false);
+    assert.equal(reply.error, 'LOCAL_MODEL_LOADING');
+    assert.equal(h.localActions.filter(control => control.action === 'load').length, 1);
+  } finally {
+    releaseLoad({ ok: false, error: 'cancelled', state: { phase: 'idle' } });
+    await selection;
+  }
+});
+
+test('explicit load permits cancellation and rejects a second selection load', async () => {
+  let releaseLoad, enteredLoad;
+  const loadStarted = new Promise(resolve => { enteredLoad = resolve; });
+  const h = selectionLoadHarness({ load: () => { enteredLoad(); return new Promise(resolve => { releaseLoad = resolve; }); } });
+  const first = h.selectAndLoad('model-a');
+  await loadStarted;
+  const overlapping = await h.selectAndLoad('model-b');
+  assert.equal(overlapping.ok, false);
+  assert.match(overlapping.error, /本地模型正在使用中/);
+  assert.equal((await h.send({ type: 'select-local-model', modelId: 'model-b' }, testUi)).ok, false);
+  assert.equal(h.localActions.filter(control => control.action === 'load').length, 1);
+  const cancelled = await h.send({ type: 'local-control', control: { action: 'cancel' } }, testUi);
+  assert.equal(cancelled.ok, true);
+  assert.equal(h.cancelRequested, true);
+  releaseLoad({ ok: false, error: 'cancelled', state: { phase: 'idle' } });
+  const reply = await first;
+  assert.equal(reply.ok, false);
+  assert.equal(reply.settings.localModelId, 'model-a');
+  assert.equal(reply.state.phase, 'idle');
+});
+
+test('source mutations are blocked during explicit selection load and deletion can be retried afterward', async () => {
+  let releaseLoad, enteredLoad;
+  const loadStarted = new Promise(resolve => { enteredLoad = resolve; });
+  const h = selectionLoadHarness({ settings: { localModelId: 'model-a' }, load: control => {
+    enteredLoad();
+    return new Promise(resolve => { releaseLoad = () => {
+      h.localState = { phase: 'ready', model: { id: control.modelId, name: control.modelId } };
+      resolve({ ok: true, state: h.localState });
+    }; });
+  } });
+  const selection = h.selectAndLoad();
+  await loadStarted;
+  const deletion = h.send({ type: 'local-control', control: { action: 'delete', modelId: 'model-a' } }, testUi);
+  const blockedDelete = await deletion;
+  assert.equal(blockedDelete.ok, false);
+  assert.equal(blockedDelete.error, '本地模型正在使用中，请结束当前翻译或测试后再试');
+  for (const control of [
+    { action: 'files-changed', modelIds: ['model-a'] },
+    { action: 'directory-scan', directoryId: 'folder-a' },
+    { action: 'directory-remove', directoryId: 'folder-a' },
+  ]) {
+    const blocked = await h.send({ type: 'local-control', control }, testUi);
+    assert.equal(blocked.ok, false, control.action);
+    assert.equal(blocked.error, '本地模型正在使用中，请结束当前翻译或测试后再试');
+  }
+  assert.equal(h.localActions.some(control => control.action === 'delete'), false);
+  releaseLoad();
+  const selected = await selection;
+  assert.equal(selected.ok, true, selected.error);
+  const deleted = await h.send({ type: 'local-control', control: { action: 'delete', modelId: 'model-a' } }, testUi);
+  assert.equal(deleted.ok, true, deleted.error);
+  assert.equal(h.localStorage[config.SETTINGS_KEY].localModelId, '');
+  assert.equal(deleted.models.some(model => model.id === 'model-a'), false);
+});
+
+test('tests and runtime loads are refused while an explicit selection load owns the local runtime', async t => {
+  let releaseLoad, enteredLoad;
+  const loadStarted = new Promise(resolve => { enteredLoad = resolve; });
+  let translationTests = 0, performanceStarts = 0;
+  class TrackingPerformanceTest {
+    constructor() { performanceStarts++; throw new Error('unexpected performance test dispatch'); }
+  }
+  const h = selectionLoadHarness({
+    modelTesting: { testModel: async () => { translationTests++; throw new Error('unexpected translation test dispatch'); } },
+    performanceTesting: { PerformanceTest: TrackingPerformanceTest },
+    load: () => { enteredLoad(); return new Promise(resolve => { releaseLoad = resolve; }); },
+  });
+  const selection = h.selectAndLoad();
+  await loadStarted;
+  // A failed assertion must still release the fixture's keepAlive interval.
+  t.after(async () => {
+    releaseLoad({ ok: true, state: { phase: 'ready', model: { id: 'model-a' } } });
+    await selection;
+  });
+  const draft = (await h.send({ type: 'settings' }, testUi)).settings;
+  const busy = '本地模型正在使用中，请结束当前翻译或测试后再试';
+  const testReply = await h.send({ type: 'test-model', settings: draft, text: 'test' }, testUi);
+  assert.equal(testReply.ok, false);
+  assert.equal(testReply.error, busy);
+  assert.equal(translationTests, 0);
+  const performanceReply = await h.send({ type: 'performance-start', settings: draft, config: replayConfig }, testUi);
+  assert.equal(performanceReply.ok, false);
+  assert.equal(performanceReply.error, busy);
+  assert.equal(performanceStarts, 0);
+  const benchmarkReply = await h.send({ type: 'local-control', control: { action: 'benchmark-start', modelId: 'model-a' } }, testUi);
+  assert.equal(benchmarkReply.ok, false);
+  assert.equal(benchmarkReply.error, busy);
+  const secondLoadReply = await h.send({ type: 'local-control', control: { action: 'load', modelId: 'model-b' } }, testUi);
+  assert.equal(secondLoadReply.ok, false);
+  assert.equal(secondLoadReply.error, busy);
+  assert.equal(h.localActions.filter(control => control.action === 'load').length, 1);
+  assert.equal(h.localActions.some(control => control.action === 'benchmark-start'), false);
+  releaseLoad({ ok: true, state: { phase: 'ready', model: { id: 'model-a' } } });
+  const selected = await selection;
+  assert.equal(selected.ok, true, selected.error);
+  assert.equal(selected.settings.localModelId, 'model-a');
+  assert.equal(selected.state.phase, 'ready');
+  assert.equal(selected.state.model.id, 'model-a');
+});
+
+test('explicit model load is refused while a performance test owns the runtime', async () => {
+  const h = testPriorityHarness();
+  assert.equal((await h.startTest()).ok, true);
+  const reply = await h.send({ type: 'select-local-model', modelId: 'model-a', load: true, config: {} }, testUi);
+  assert.equal(reply.ok, false);
+  assert.match(reply.error, /性能测试正在使用模型/);
+  assert.equal(h.localStorage[config.SETTINGS_KEY].localModelId ?? '', '');
+  h.finishTest(); await h.waitResumed();
 });
 
 function modelDeletionHarness(options = {}) {
@@ -631,7 +1052,7 @@ test('navigation during asynchronous permission read is checked again before pro
 });
 
 test('navigation during scope configuration read cannot save an old video action', async () => {
-  const h = background(); await h.send({ type: 'settings' });
+  const h = background({ settings: { translationScope: 'all' } }); await h.send({ type: 'settings' });
   h.getHook = async () => { h.currentUrl = url('sm3'); };
   const result = await h.send({ type: 'scheduling-settings', resourceId: 'sm2', translationScope: 'window', prefetchSeconds: 90 });
   assert.equal(result.retryAfterMs, 500);
@@ -759,6 +1180,140 @@ function bili(h, scenario = 'video') {
     urlResourceId: scenario === 'video' ? 'BV1xx411c7mD:p2' : '777', sessionId: 'bili-session', generation: 1 };
   return { session, message: () => ({ ...input(session.resourceId), session, sentAt: resource.clockStamp() }) };
 }
+
+const displayPlanGuardKey = 'bilibiliUserFilters.zeroTransport.v1';
+const renderGuardKey = 'bilibiliRenderPreview.zeroTransport.v1';
+test('render preview owns a separate guard and preserves the exact existing persistent value', async () => {
+  const h = background({ settings: { enabled: false } }), video = bili(h);
+  await h.send({ type: 'session-open', session: video.session });
+  const persistent = { enabled: false, startedAt: 123, custom: 'preserve-unknown-owner' };
+  h.localStorage[displayPlanGuardKey] = persistent;
+  const call = (action, tabId = 7) => h.send({ type: 'bilibili-render-preview-guard', action, tabId }, dispatchRunnerUi);
+  const before = await h.send({ type: 'build-identity' }, dispatchRunnerUi);
+  assert.equal(before.protections.persistentGuard.enabled, true, 'legacy transport uses object truthiness');
+  assert.equal(before.protections.persistentGuard.declaredEnabled, false);
+  const prepared = await call('prepare');
+  assert.equal(prepared.ok, true, prepared.error); assert.equal(prepared.temporaryGuard.ownerTabId, 7);
+  assert.equal(prepared.effectiveZeroTransport, true);
+  assert.equal((await call('cleanup', 8)).error, 'render-preview-guard-owned-by-other-task');
+  assert.equal((await h.send({ type: 'bilibili-user-filters-audit', action: 'cleanup' }, dispatchRunnerUi)).error,
+    'user-filter-guard-owned-by-render-preview');
+  const cleaned = await call('cleanup');
+  assert.equal(cleaned.zeroModelGuard, false); assert.equal(cleaned.temporaryGuard.ownerTabId, null);
+  assert.equal(cleaned.effectiveZeroTransport, true, 'existing protection remains active after our cleanup');
+  assert.equal(h.localStorage[displayPlanGuardKey], persistent, 'no rewrite of unknown-owner protection');
+  assert.equal(h.localStorage[renderGuardKey], undefined);
+  assert.equal((await call('cleanup')).ok, true);
+  assert.equal(h.calls.length, 0);
+});
+
+test('render guard owner closure releases only render protection and mutual exclusion protects the old task', async () => {
+  const h = background({ settings: { enabled: false } }), video = bili(h);
+  await h.send({ type: 'session-open', session: video.session });
+  const call = action => h.send({ type: 'bilibili-render-preview-guard', action });
+  await h.send({ type: 'bilibili-display-plan-guard', action: 'prepare' });
+  assert.equal((await call('prepare')).ok, false);
+  await h.send({ type: 'bilibili-display-plan-guard', action: 'cleanup' });
+  h.localStorage[displayPlanGuardKey] = { enabled: true, kind: 'existing-protection' };
+  assert.equal((await call('prepare')).ok, true);
+  assert.equal((await h.send({ type: 'bilibili-display-plan-guard', action: 'prepare' })).error,
+    'display-plan-guard-owned-by-render-preview');
+  h.updated(7, { status: 'loading' }); h.removed(8); await flush();
+  assert.equal(h.localStorage[renderGuardKey].tabId, 7);
+  h.removed(7); await flush();
+  assert.equal(h.localStorage[renderGuardKey], undefined);
+  assert.equal(h.localStorage[displayPlanGuardKey].kind, 'existing-protection');
+});
+const displayPlanGuard = (action, tabId) => ({ type: 'bilibili-display-plan-guard', action,
+  ...(tabId === undefined ? {} : { tabId }) });
+
+test('display-plan guard belongs to its tab through navigation and clears only when that tab closes', async () => {
+  const h = background({ settings: { enabled: false } }), video = bili(h);
+  assert.equal((await h.send({ type: 'session-open', session: video.session })).ok, true);
+  const prepared = await h.send(displayPlanGuard('prepare'));
+  assert.equal(prepared.ok, true, prepared.error);
+  assert.equal(prepared.zeroModelGuard, true);
+  assert.equal(prepared.ownerTabId, 7);
+  assert.equal(prepared.buildId, 'test-build');
+  assert.equal(h.localStorage[displayPlanGuardKey].kind, 'display-plan');
+  assert.equal((await h.send(displayPlanGuard('status', 8), dispatchRunnerUi)).error,
+    'display-plan-guard-owned-by-other-task');
+  assert.equal((await h.send(displayPlanGuard('cleanup', 8), dispatchRunnerUi)).error,
+    'display-plan-guard-owned-by-other-task');
+  h.updated(7, { status: 'loading' });
+  assert.equal((await h.send(displayPlanGuard('status', 7), dispatchRunnerUi)).zeroModelGuard, true,
+    'navigation cannot silently unlock the zero-transport guard');
+  h.removed(8); await flush();
+  assert.equal(h.localStorage[displayPlanGuardKey].tabId, 7);
+  h.removed(7); await flush();
+  assert.equal(h.localStorage[displayPlanGuardKey], undefined);
+  assert.equal((await h.send(displayPlanGuard('status', 7), dispatchRunnerUi)).zeroModelGuard, false);
+  assert.equal(h.calls.length, 0);
+});
+
+test('closing a tab leaves the older user-filter audit guard intact', async () => {
+  const h = background({ settings: { enabled: false } });
+  const prepared = await h.send({ type: 'bilibili-user-filters-audit', action: 'prepare' }, dispatchRunnerUi);
+  assert.equal(prepared.zeroModelGuard, true);
+  const legacy = structuredClone(h.localStorage[displayPlanGuardKey]);
+  assert.equal(legacy.kind, undefined);
+  h.removed(7); await flush();
+  assert.deepEqual(structuredClone(h.localStorage[displayPlanGuardKey]), legacy);
+});
+
+test('display-plan and older user-filter audit cannot take over each other’s guard', async () => {
+  const h = background({ settings: { enabled: false } }), video = bili(h);
+  assert.equal((await h.send({ type: 'session-open', session: video.session })).ok, true);
+  const audit = action => ({ type: 'bilibili-user-filters-audit', action });
+  assert.equal((await h.send(audit('prepare'), dispatchRunnerUi)).zeroModelGuard, true);
+  const legacy = structuredClone(h.localStorage[displayPlanGuardKey]);
+  for (const action of ['prepare', 'status', 'cleanup'])
+    assert.equal((await h.send(displayPlanGuard(action))).error, 'display-plan-guard-owned-by-other-task');
+  assert.deepEqual(structuredClone(h.localStorage[displayPlanGuardKey]), legacy);
+  assert.equal((await h.send(audit('cleanup'), dispatchRunnerUi)).zeroModelGuard, false);
+  assert.equal((await h.send(displayPlanGuard('prepare'))).zeroModelGuard, true);
+  for (const action of ['prepare', 'cleanup'])
+    assert.equal((await h.send(audit(action), dispatchRunnerUi)).error, 'user-filter-guard-owned-by-display-plan');
+  assert.equal(h.localStorage[displayPlanGuardKey].kind, 'display-plan');
+  assert.equal((await h.send(displayPlanGuard('cleanup'))).zeroModelGuard, false);
+  assert.equal(h.localStorage[displayPlanGuardKey], undefined);
+});
+
+test('a pending display-plan prepare blocks concurrent prepare and cleanup', async () => {
+  const h = background({ settings: { enabled: false } }), video = bili(h);
+  assert.equal((await h.send({ type: 'session-open', session: video.session })).ok, true);
+  let enterRead, releaseRead;
+  const enteredRead = new Promise(resolve => { enterRead = resolve; });
+  h.getHook = async (area, key) => {
+    if (area === 'local' && key === displayPlanGuardKey && !releaseRead)
+      await new Promise(resolve => { releaseRead = resolve; enterRead(); });
+  };
+  const preparing = h.send(displayPlanGuard('prepare'));
+  await enteredRead;
+  assert.equal((await h.send(displayPlanGuard('prepare'))).error, 'display-plan-guard-busy');
+  assert.equal((await h.send(displayPlanGuard('cleanup'))).error, 'display-plan-guard-busy');
+  assert.equal((await h.send({ type: 'bilibili-user-filters-audit', action: 'prepare' }, dispatchRunnerUi)).error,
+    'user-filter-guard-busy');
+  releaseRead();
+  assert.equal((await preparing).zeroModelGuard, true);
+  assert.equal((await h.send(displayPlanGuard('cleanup'))).zeroModelGuard, false);
+});
+
+test('passive Bilibili audit rejects wrong scope and enabled translation before any cache read or model call', async () => {
+  const h = background(), video = bili(h);
+  const request = { type: 'bilibili-audit-read', resourceId: video.session.resourceId, texts: [] };
+  assert.equal((await h.send(request)).ok, false);
+  h.currentUrl = 'https://www.bilibili.com/video/BV1yvhW6sEzi/#danlingo-audit';
+  h.sender.url = h.currentUrl;
+  video.session.urlResourceId = 'BV1yvhW6sEzi:p1';
+  assert.equal((await h.send({ type: 'session-open', session: video.session })).ok, true);
+  assert.equal((await h.send(request)).error, 'audit-requires-disabled-idle-translation');
+  h.localStorage[config.SETTINGS_KEY].enabled = false;
+  h.stats = { pendingItems: 1, activeRequests: 0, providerCalls: 0 };
+  assert.equal((await h.send(request)).error, 'audit-requires-disabled-idle-translation');
+  assert.equal((await h.send(request, { ...h.sender, documentId: 'stale' })).ok, false);
+  assert.equal(h.calls.length, 0);
+});
 test('Bilibili binds attested native CID rather than URL candidate and rejects stale documents', async () => {
   const h = background(), video = bili(h);
   assert.equal((await h.send(video.message())).ok, false);
@@ -969,12 +1524,73 @@ test('live IPC admission is independently bounded at 1024 while VOD keeps 18 res
   resolves.forEach(r => r.resolve({ items: [] })); await Promise.all(pending);
 });
 
+test('VOD emits useful results before its aggregate response and binds them to the originating document', async () => {
+  let finish;
+  const h = background({ hooks: { translate: () => new Promise(resolve => { finish = resolve; }) } });
+  h.sender = { ...h.sender, url: url('sm2'), documentId: 'vod-document' };
+  const message = { ...input('sm2'), configVersion: 0 };
+  const pending = h.send(message); await flush();
+  const request = h.calls[0];
+  assert.equal(request.settings.batchSize, 20);
+  const output = { id: message.items[0].id, status: 'cached', text: '提前可用的译文' };
+  request.onResult(output);
+  const emitted = h.tabMessages.filter(row => row.message.type === 'video-translation-result');
+  assert.equal(emitted.length, 1);
+  assert.equal(emitted[0].message.requestId, message.requestId);
+  assert.equal(emitted[0].message.resourceId, 'sm2');
+  assert.equal(emitted[0].message.configVersion, 0);
+  assert.equal(emitted[0].options.documentId, 'vod-document');
+  request.onResult({ ...output, id: 'foreign-id' });
+  await h.send({ type: 'cancel', requestId: message.requestId });
+  request.onResult(output);
+  assert.equal(h.tabMessages.filter(row => row.message.type === 'video-translation-result').length, 1);
+  finish({ items: [output] }); await pending;
+});
+
+test('video batching is independent from live batching and rejects stale configuration', async () => {
+  const h = background({ settings: { batchSize: 100, videoBatchSize: 3 } });
+  assert.equal((await h.send({ ...input('sm2'), configVersion: 999 })).ok, false);
+  assert.equal(h.calls.length, 0);
+  const tooLarge = input('sm2');
+  tooLarge.items = Array.from({ length: 4 }, (_, n) => ({ ...tooLarge.items[0], id: `row-${n}` }));
+  assert.equal((await h.send(tooLarge)).ok, false);
+  assert.equal((await h.send(input('sm2'))).ok, true);
+  assert.equal(h.calls.at(-1).settings.batchSize, 3);
+  const live = youtube(h); await h.send({ type: 'session-open', session: live.session });
+  assert.equal((await h.send(live.message())).ok, true);
+  assert.equal(h.calls.at(-1).settings.batchSize, 100);
+});
+
+test('cancelling a VOD window during permission admission prevents subsequent provider work', async () => {
+  let release;
+  const h = background({ hooks: { permissions: () => new Promise(resolve => { release = resolve; }) } });
+  const message = input('sm2');
+  const pending = h.send(message); await flush();
+  assert.equal(typeof release, 'function');
+  await h.send({ type: 'cancel', requestId: message.requestId });
+  release(true); await pending;
+  assert.equal(h.calls.length, 0);
+});
+
+test('automatic video scope is saved without touching service or live batching', async () => {
+  const h = background({ settings: { translationScope: 'all', batchSize: 80, videoBatchSize: 12 } });
+  const reply = await h.send({ type: 'scheduling-settings', resourceId: 'sm2', translationScope: 'auto', prefetchSeconds: 60 });
+  assert.equal(reply.ok, true);
+  assert.equal(reply.settings.translationScope, 'auto');
+  assert.equal(reply.settings.batchSize, 80);
+  assert.equal(reply.settings.videoBatchSize, 12);
+});
+
 function content(initialUrl = url('sm1')) {
-  const h = { calls: [], sent: [], runtimeSent: [], views: [], intervals: [], invalidated: [], now: 10000 };
+  const h = { calls: [], sent: [], runtimeSent: [], views: [], nativeViews: [], intervals: [], invalidated: [], now: 10000 };
+  h.nativeSupplyButton = { title: '', onclick: null };
   const location = { href: initialUrl, origin: new URL(initialUrl).origin };
   const handlers = new Map();
+  const documentHandlers = new Map();
+  const document = { visibilityState: 'visible', fullscreenElement: null, querySelector: () => null, querySelectorAll: () => [],
+    addEventListener: (name, fn) => documentHandlers.set(name, fn), removeEventListener: name => documentHandlers.delete(name) };
   const window = { postMessage: payload => h.sent.push(payload), addEventListener: (name, fn) => handlers.set(name, fn), removeEventListener() {} };
-  const safeConfig = { ok: true, settings: { ...settings }, hasKey: true };
+  const safeConfig = { ok: true, settings: { ...settings }, hasKey: true, configVersion: 0 };
   const browser = { runtime: { id: 'test-extension', sendMessage: async message => {
     h.runtimeSent.push(message);
     if (message.type === 'settings') return safeConfig;
@@ -988,18 +1604,33 @@ function content(initialUrl = url('sm1')) {
     'wxt/utils/define-content-script': { defineContentScript: options => options },
     '../src/core/config': config, '../src/core/messages': messages, '../src/core/resource': resource,
     '../src/core/adapter-diagnostic': diagnostics,
+    '../src/core/video-policy': videoPolicy,
+    '../src/core/bilibili-shadow': shadow,
+    '../src/diagnostics/bilibili-experiment-watch': experimentWatch,
+    '../src/diagnostics/native-supply-watch': nativeSupplyWatch,
+    '../src/diagnostics/display-plan-session': displayPlanSession,
+    '../src/ui/render-preview': { mountRenderPreview: () => { throw new Error('Niconico has no render-preview host'); } },
+    '../src/platforms/bilibili/user-filter-wire': userFilterWire,
+    '../src/diagnostics/user-filter-simulation': userFilterSimulation,
+    '../src/core/build-identity': { BUILD_ID: 'test-build' },
     '../src/core/scheduler': { ...scheduling, VideoScheduler: class extends scheduling.VideoScheduler {
       constructor(options) { super({ ...options, now: () => h.now }); }
     } },
     '../src/core/source-stream': stream, '../src/platforms/niconico/native': { BRIDGE },
-    '../src/ui/progress': { createProgress: () => ({ attach() {}, dispose() {}, update: (settings, stats, notice) => h.views.push({ stats, notice }) }) },
-  }, { window, location, performance: { now: () => h.now }, clearInterval() {} });
+    '../src/i18n/wire.ts': i18nWire,
+    '../src/i18n/text.ts': i18nText,
+    '../src/ui/localized-text': localizedText,
+    '../src/ui/bilibili-fullscreen-toggle': { mountBilibiliFullscreenToggle: () => ({ update() {}, dispose() {} }) },
+    '../src/ui/progress': { createProgress: () => ({ attach() {}, dispose() {},
+      nativeSupplyButton: h.nativeSupplyButton, update: (settings, stats, notice) => h.views.push({ stats, notice }),
+      updateNativeSupply: value => h.nativeViews.push(value) }) },
+  }, { window, document, location, performance: { now: () => h.now }, clearInterval() {} });
   entry.main({ setInterval: fn => { h.intervals.push(fn); }, onInvalidated: fn => h.invalidated.push(fn) });
   h.post = data => handlers.get('message')({ source: window, origin: location.origin, data: { bridge: BRIDGE, from: 'native', ...data } });
-  h.video = (id, session = id) => {
+  h.video = (id, session = id, clockPatch = {}) => {
     location.href = url(id);
     const scope = { resourceId: id, session, epoch: 1 };
-    h.post({ ...scope, type: 'snapshot', clock: { mediaTimeMs: 0, durationMs: 100000, playbackRate: 1, paused: true, contentActive: true, seeking: false } });
+    h.post({ ...scope, type: 'snapshot', clock: { mediaTimeMs: 0, durationMs: 100000, playbackRate: 1, paused: true, contentActive: true, seeking: false, ...clockPatch } });
     h.post({ ...scope, type: 'sources', sourceGeneration: 0, revision: 1, index: 0, reset: true, complete: true, removes: [],
       upserts: [{ sourceId: 'one', threadId: 'thread', fork: 'main', originalText: 'これはテストです', mediaTimeMs: 0, renderAtMs: -2000, translatable: true, style: {} }] });
   };
@@ -1008,6 +1639,75 @@ function content(initialUrl = url('sm1')) {
   h.location = location; h.safeConfig = safeConfig;
   return h;
 }
+
+test('video incremental delivery is immediate, deduplicated, and isolated from stale or forged notifications', async () => {
+  const h = content(); await flush(); h.video('sm1'); await flush();
+  const request = h.calls[0];
+  const event = { type: 'video-translation-result', requestId: request.requestId, resourceId: 'sm1', configVersion: 0,
+    output: { id: request.items[0].id, status: 'translated', text: '即时译文' } };
+  for (const patch of [{ requestId: 'wrong' }, { resourceId: 'sm2' }, { configVersion: 4 }, { output: { ...event.output, id: 'wrong' } }]) h.receive({ ...event, ...patch });
+  h.receive(event, { id: 'foreign-extension' }); h.receive(event, { id: 'test-extension', tab: {} });
+  assert.equal(h.sent.filter(row => row.type === 'prepared').length, 0);
+  h.receive(event); h.receive(event);
+  assert.equal(h.sent.filter(row => row.type === 'prepared').length, 1, 'delivery precedes final response and the next UI timer');
+  request.resolve({ ok: true, items: [event.output] }); await flush(); h.tick();
+  assert.equal(h.sent.filter(row => row.type === 'prepared').length, 1);
+  assert.equal(h.views.at(-1).stats.translated, 1);
+  h.video('sm2'); await flush(); h.receive(event);
+  assert.equal(h.sent.filter(row => row.type === 'prepared').length, 1);
+  h.dispose();
+});
+
+test('a hidden native switch suppresses the first source dispatch and resumes only after a visible snapshot', async () => {
+  const h = content(); await flush(); h.video('sm1', 'sm1', { commentsVisible: false }); await flush();
+  h.tick();
+  assert.equal(h.calls.length, 0);
+  assert.equal(h.views.at(-1).stats.displayState, 'hidden');
+  h.post({ type: 'snapshot', resourceId: 'sm1', session: 'sm1', epoch: 1,
+    clock: { mediaTimeMs: 0, durationMs: 100000, playbackRate: 1, paused: true, contentActive: true, seeking: false, commentsVisible: true } });
+  await flush(); assert.equal(h.calls.length, 1);
+  h.dispose();
+});
+
+test('older playback snapshots cannot roll back the current eligibility epoch', async () => {
+  const h = content(); await flush(); h.video('sm1'); await flush();
+  const request = h.calls[0];
+  const clock = { mediaTimeMs: 0, durationMs: 100000, playbackRate: 1, paused: true, contentActive: true, seeking: false };
+  for (const epoch of [0, -1]) h.post({ type: 'snapshot', resourceId: 'sm1', session: 'sm1', epoch, clock });
+  h.post({ type: 'video-eligibility', resourceId: 'sm1', session: 'sm1', epoch: 1, sourceGeneration: 0, revision: 1,
+    reset: true, capability: 'unknown', display: 'hidden', items: [] });
+  h.tick();
+  assert.equal(h.views.at(-1).stats.displayState, 'hidden');
+  assert.equal(h.sent.filter(row => row.type === 'control').at(-1).epoch, 1);
+  request.resolve({ ok: true, items: [] }); await flush(); h.dispose();
+});
+
+test('aggregate fallback also rejects an old configuration when scheduling alone changes', async () => {
+  const h = content(); await flush(); h.video('sm1'); await flush();
+  const request = h.calls[0];
+  h.settingsChanged({ type: 'settings-updated', ...h.safeConfig, configVersion: 1,
+    settings: { ...settings, prefetchSeconds: 90 } });
+  request.resolve({ ok: true, items: request.items.map(item => ({ id: item.id, text: '过期译文', status: 'translated' })) });
+  await flush();
+  assert.equal(h.sent.filter(row => row.type === 'prepared').length, 0);
+  h.dispose();
+});
+
+test('native eligibility is session, epoch and source-generation bound and does not erase prepared text', async () => {
+  const h = content(); await flush(); h.video('sm1'); await flush();
+  const request = h.calls[0], output = { id: request.items[0].id, text: '缓存译文', status: 'cached' };
+  h.receive({ type: 'video-translation-result', requestId: request.requestId, resourceId: 'sm1', configVersion: 0, output });
+  const update = { type: 'video-eligibility', resourceId: 'sm1', session: 'sm1', epoch: 1, sourceGeneration: 0, revision: 1,
+    reset: true, capability: 'unknown', display: 'visible', items: [{ id: output.id, originalText: request.items[0].text, state: 'filtered' }] };
+  h.post({ ...update, session: 'wrong' }); h.post({ ...update, epoch: 0 }); h.post({ ...update, sourceGeneration: 99 });
+  h.tick(); assert.equal(h.views.at(-1).stats.filtered, 0);
+  h.post(update); h.tick(); assert.equal(h.views.at(-1).stats.filtered, 1);
+  h.post({ ...update, revision: 2, items: [{ ...update.items[0], state: 'eligible' }] }); h.tick();
+  assert.equal(h.views.at(-1).stats.filtered, 0);
+  assert.equal(h.views.at(-1).stats.translated, 1);
+  assert.equal(h.calls.length, 1, 'qualification-only updates keep usable translations');
+  request.resolve({ ok: true, items: [output] }); await flush(); h.dispose();
+});
 
 test('late failed content response cannot overwrite a new video notice or preparation', async () => {
   const h = content(); await flush(); h.video('sm1'); await flush(); h.video('sm2'); await flush();
@@ -1165,8 +1865,124 @@ test('Bilibili valid snapshot clears failed diagnosis and recovery never authent
   await flush();
   assert.equal((await h.receive(query)).diagnostic.code, 'waiting-status');
   assert.equal((await h.receive({ ...query, type: 'verify-adapter-diagnostic', documentSession: previous.documentSession, diagnostic: previous.diagnostic })).ok, false);
+  h.tick(); await flush();
   assert.ok(h.runtimeSent.some(m => m.type === 'status' && m.session.resourceId === 'av117224320801605:cid41641968199'));
   h.post({ type: 'unavailable', diagnostic }); await flush();
   assert.ok(h.runtimeSent.some(m => m.type === 'session-close'));
   assert.equal((await h.receive(query)).diagnostic.code, 'unsupported-version'); h.dispose();
 });
+
+const dispatchRunnerUi = { id: 'test-extension', frameId: 0, url: 'chrome-extension://test-extension/dispatch-runner.html' };
+
+function dispatchRunnerHarness(options = {}) {
+  const savedLocalConfig = localConfig.normalizeLocalConfig(options.settings?.localPerformance ?? {});
+  const h = background({ settings: { backend: 'local', enabled: false, localModelId: 'model-a',
+    ...options.settings, localPerformance: savedLocalConfig } });
+  h.localActions = [];
+  h.localModels = [{ id: 'model-a', name: 'Model A' }, { id: 'model-b', name: 'Model B' }];
+  h.localState = options.state ?? { phase: 'idle', active: 0, queued: 0 };
+  h.localControl = async control => {
+    h.localActions.push(structuredClone(control));
+    if (control.action === 'list') return { ok: true, models: structuredClone(h.localModels), state: structuredClone(h.localState) };
+    if (control.action === 'state') return { ok: true, state: structuredClone(h.localState) };
+    if (control.action === 'load') {
+      h.localState = { phase: 'ready', active: 0, queued: 0, generation: 1,
+        model: { id: control.modelId, name: control.modelId }, requested: structuredClone(control.config) };
+      return { ok: true, state: structuredClone(h.localState) };
+    }
+    return { ok: true, state: structuredClone(h.localState) };
+  };
+  return h;
+}
+
+test('top-level dispatch runner can inspect local models and load only the selected model with warmup disabled', async () => {
+  const h = dispatchRunnerHarness();
+  const before = structuredClone(h.localStorage[config.SETTINGS_KEY]);
+  const settingsReply = await h.send({ type: 'settings' }, dispatchRunnerUi);
+  assert.equal(settingsReply.ok, true);
+  assert.equal(settingsReply.settings.localModelId, 'model-a');
+  const identity = await h.send({ type: 'build-identity' }, dispatchRunnerUi);
+  assert.equal(identity.ok, true);
+  assert.equal(identity.component, 'background');
+  assert.equal(typeof identity.buildId, 'string');
+  assert.equal(identity.idle, true);
+  h.stats = { activeRequests: 1 };
+  assert.equal((await h.send({ type: 'build-identity' }, dispatchRunnerUi)).idle, false);
+  h.stats = {};
+  assert.equal((await h.send({ type: 'local-control', control: { action: 'state' } }, dispatchRunnerUi)).ok, true);
+  const listed = await h.send({ type: 'local-control', control: { action: 'list' } }, dispatchRunnerUi);
+  assert.equal(listed.ok, true);
+  assert.deepEqual(listed.models.map(model => model.id), ['model-a', 'model-b']);
+  const loadConfig = { ...before.localPerformance, warmup: false };
+  const loaded = await h.send({ type: 'local-control', control: { action: 'load', modelId: 'model-a', config: loadConfig } }, dispatchRunnerUi);
+  assert.equal(loaded.ok, true, loaded.error);
+  const forwardedLoad = h.localActions.find(control => control.action === 'load');
+  assert.equal(forwardedLoad.modelId, 'model-a');
+  assert.deepEqual(forwardedLoad.config, loadConfig);
+  assert.equal(forwardedLoad.config.warmup, false);
+  assert.deepEqual(structuredClone(h.localStorage[config.SETTINGS_KEY]), before, 'runner loading must not save settings');
+});
+
+test('dispatch runner identity requires the extension top-level runner document', async () => {
+  for (const sender of [
+    { ...dispatchRunnerUi, id: 'another-extension', url: 'chrome-extension://another-extension/dispatch-runner.html' },
+    { ...dispatchRunnerUi, url: 'chrome-extension://test-extension/dispatch-runner/other.html' },
+    { ...dispatchRunnerUi, frameId: 1 },
+  ]) {
+    const h = dispatchRunnerHarness();
+    const reply = await h.send({ type: 'local-control', control: { action: 'state' } }, sender);
+    assert.equal(reply.ok, false, JSON.stringify(sender));
+    assert.equal(h.localActions.length, 0, JSON.stringify(sender));
+  }
+});
+
+test('dispatch runner cannot save settings or invoke destructive and unrelated local operations', async () => {
+  const h = dispatchRunnerHarness();
+  const before = structuredClone(h.localStorage[config.SETTINGS_KEY]);
+  const controls = ['delete', 'cancel', 'unload', 'files-changed', 'benchmark-start', 'directory-scan']
+    .map(action => ({ type: 'local-control', control: { action, modelId: 'model-a' } }));
+  controls.push({ type: 'save', settings: { ...before, localModelId: 'model-b' }, remember: true });
+  for (const message of controls) assert.equal((await h.send(message, dispatchRunnerUi)).ok, false, message.control?.action ?? message.type);
+  assert.equal(h.localActions.length, 0);
+  assert.deepEqual(structuredClone(h.localStorage[config.SETTINGS_KEY]), before);
+});
+
+test('dispatch runner load rejects changed settings, active ordinary work, and a non-idle runtime', async () => {
+  const cases = [
+    { name: 'enabled settings', settings: { enabled: true } },
+    { name: 'online backend', settings: { backend: 'online' } },
+    { name: 'no selected model', settings: { localModelId: '' } },
+    { name: 'different model', request: { modelId: 'model-b' } },
+    { name: 'changed performance config', request: { config: { parallel: 7 } } },
+    { name: 'warmup enabled', request: { config: { warmup: true } } },
+    { name: 'ordinary request active', stats: { activeRequests: 1 } },
+    { name: 'runtime generating', state: { phase: 'generating', active: 1, queued: 0 } },
+    { name: 'runtime queued', state: { phase: 'idle', active: 0, queued: 1 } },
+    { name: 'runtime not idle', state: { phase: 'ready', active: 0, queued: 0 } },
+  ];
+  for (const testCase of cases) {
+    const h = dispatchRunnerHarness({ settings: testCase.settings, state: testCase.state });
+    if (testCase.stats) h.stats = testCase.stats;
+    const saved = h.localStorage[config.SETTINGS_KEY];
+    const control = { action: 'load', modelId: 'model-a', config: { ...saved.localPerformance, warmup: false }, ...testCase.request };
+    const reply = await h.send({ type: 'local-control', control }, dispatchRunnerUi);
+    assert.equal(reply.ok, false, testCase.name);
+    assert.equal(h.localActions.some(action => action.action === 'load'), false, testCase.name);
+  }
+});
+
+test('Bilibili content-script sender cannot access local runner state, model list, or load', async () => {
+  const h = dispatchRunnerHarness();
+  const bilibiliContent = { id: 'test-extension', frameId: 0, url: 'https://www.bilibili.com/video/BV1xx411c7mD/',
+    tab: { id: 7, url: 'https://www.bilibili.com/video/BV1xx411c7mD/' } };
+  const saved = h.localStorage[config.SETTINGS_KEY];
+  const replies = [];
+  for (const control of [
+    { action: 'state' },
+    { action: 'list' },
+    { action: 'load', modelId: 'model-a', config: { ...saved.localPerformance, warmup: false } },
+  ]) replies.push(await h.send({ type: 'local-control', control }, bilibiliContent));
+  assert.deepEqual(replies.map(reply => reply.ok), [false, false, false]);
+  assert.equal(h.localActions.length, 0);
+});
+

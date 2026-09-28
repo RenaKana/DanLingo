@@ -320,7 +320,7 @@ try {
   assert.equal(defaults.thinkingRequestTimeoutMs, 120000);
   const configured = await rpc({ type: 'save', settings: { ...defaults, endpoint, allowLocalHttp: true, enabled: false,
     model: 'deepseek-flash', profile: 'deepseek', thinkingEffort: 'high', sourceLanguage: 'ja', targetLanguage: 'zh-Hans',
-    translationScope: 'all', concurrency: 1, batchSize: 100 }, apiKey: key, remember: false });
+    translationScope: 'all', onlineConcurrency: 1, batchSize: 100 }, apiKey: key, remember: false });
   assert.equal(configured.ok, true, configured.error);
   assert.equal(configured.hasKey, true);
   await command('Page.reload', {}, options.sessionId);
@@ -340,12 +340,12 @@ try {
   report.checks.settings = { defaults: { requestTimeoutMs: 12000, thinkingRequestTimeoutMs: 120000 }, fieldId: timeoutField,
     savedThroughForm: [110000, 120000], screenshot: await screenshot(options, 'options-thinking-120s') };
   for (const value of [16, 1]) {
-    await evaluate(options, `(() => { const input = document.getElementById('concurrency');
+    await evaluate(options, `(() => { const input = document.getElementById('online-concurrency');
       input.value = '${value}'; input.dispatchEvent(new Event('input', { bubbles: true })); document.getElementById('save').click(); })()`);
-    await until(async () => (await rpc({ type: 'settings' })).settings.concurrency === value, `UI saves concurrency ${value}`);
+    await until(async () => (await rpc({ type: 'settings' })).settings.onlineConcurrency === value, `UI saves online concurrency ${value}`);
     await until(() => evaluate(options, 'document.getElementById("result").textContent === "已保存"'), 'concurrency UI save completion');
   }
-  report.checks.settings.concurrencySavedThroughForm = [16, 1];
+  report.checks.settings.onlineConcurrencySavedThroughForm = [16, 1];
   await rpc({ type: 'clear-cache' });
 
   phase = 'long-success';

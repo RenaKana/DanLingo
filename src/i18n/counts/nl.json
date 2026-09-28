@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "{count} taken",
+  "count.tasks.one": "{count} taak",
+  "count.tasks.two": "{count} taken",
+  "count.tasks.few": "{count} taken",
+  "count.tasks.many": "{count} taken",
+  "count.tasks.other": "{count} taken"
+}

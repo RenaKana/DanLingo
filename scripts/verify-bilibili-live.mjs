@@ -46,7 +46,7 @@ try{
  await context.addInitScript(()=>{window.__BILI_MESSAGES__=[];window.addEventListener('message',e=>{if(e.source===window&&e.origin===location.origin&&e.data?.bridge==='danlingo-live-v1'&&window.__BILI_MESSAGES__.length<20000)window.__BILI_MESSAGES__.push(e.data);});});
  if(!timeoutOnly&&!emotesOnly)await context.addInitScript(()=>{window.__BILI_PREEXISTING_SC__=true;window.__BILI_DISABLE_HEARTBEAT__=true;window.__BILI_DELAY_ENGINE__=true;});
  const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');options=await context.newPage();await options.goto('chrome-extension://'+new URL(worker.url()).host+'/options.html');rpc=payload=>options.evaluate(payload=>chrome.runtime.sendMessage(payload),payload);
- const config=normalizeSettings({...DEFAULT_SETTINGS,enabled:true,endpoint,allowLocalHttp:true,model:'bilibili-fixture',thinkingEffort:'default',sourceLanguage:'ja',liveSourceLanguage:'ja',concurrency:4,batchSize:1,liveMaxBatchWaitMs:0,liveBufferMs:2000,liveAdaptiveConcurrency:false,superChatTimeoutMs:5000});
+ const config=normalizeSettings({...DEFAULT_SETTINGS,enabled:true,endpoint,allowLocalHttp:true,model:'bilibili-fixture',thinkingEffort:'default',sourceLanguage:'ja',liveSourceLanguage:'ja',onlineConcurrency:4,batchSize:1,liveMaxBatchWaitMs:0,liveBufferMs:2000,liveAdaptiveConcurrency:false,superChatTimeoutMs:5000});
  assert.equal((await rpc({type:'save',settings:config,apiKey:'synthetic-bilibili-fixture-only',remember:false})).ok,true);
  page=await context.newPage();page.on('pageerror',e=>report.errors.push(e.message));await page.goto('https://live.bilibili.com/777');await page.bringToFront();
  if(!timeoutOnly&&!emotesOnly){

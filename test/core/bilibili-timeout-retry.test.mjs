@@ -9,7 +9,7 @@ import { ordinaryComment } from '../../src/platforms/bilibili-live/messages.ts';
 import { needsTranslation } from '../../src/core/messages.ts';
 
 test('second attempt defaults off, adds 1s to the first budget, and preserves existing preferences/cache identity', () => {
-  const before = normalizeSettings({ ...DEFAULT_SETTINGS, liveBufferMs: 2000, targetLanguage: 'en', concurrency: 12, requestTimeoutMs: 7000 });
+  const before = normalizeSettings({ ...DEFAULT_SETTINGS, liveBufferMs: 2000, targetLanguage: 'en', onlineConcurrency: 12, requestTimeoutMs: 7000 });
   assert.equal(before.bilibiliTimeoutRetryEnabled, false);
   assert.equal(before.bilibiliTimeoutRetryExtraMs, 1000);
   assert.equal(before.bilibiliTimeoutRetryMode, 'hold');

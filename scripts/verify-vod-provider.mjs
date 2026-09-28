@@ -205,7 +205,7 @@ headers, source/translation text, reasoning content or remote response bodies.`)
   if (apiKey.length > 4096) throw new Error('Invalid credential input');
   const settings = normalizeSettings({ ...DEFAULT_SETTINGS, endpoint, allowLocalHttp: true, enabled: true,
     translationScope: 'all', sourceLanguage: 'ja', targetLanguage: 'zh-Hans', batchSize: 100,
-    maxBatchChars: 12000, concurrency: 2, urgentSeconds: 5, requestTimeoutMs: 12000, thinkingRequestTimeoutMs: 120000 });
+    maxBatchChars: 12000, onlineConcurrency: 2, urgentSeconds: 5, requestTimeoutMs: 12000, thinkingRequestTimeoutMs: 120000 });
   const report = { capturedAt: new Date().toISOString(), evidence: 'recorded-source-production-scheduler-real-provider-NOT-browser',
     endpoint, promptVersion: PROMPT_VERSION,
     source: { fileName, capturedAt: recording.capturedAt, resourceId: recording.watchId,

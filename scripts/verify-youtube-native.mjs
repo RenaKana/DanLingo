@@ -63,7 +63,7 @@ try {
   });
   await new Promise(done => server.listen(0, '127.0.0.1', done)); endpoint = `http://127.0.0.1:${server.address().port}/v1/chat/completions`;
   const config = normalizeSettings({ ...DEFAULT_SETTINGS, enabled: true, endpoint, allowLocalHttp: true, model: 'native-chat-fixture', profile: 'chat-completions', thinkingEffort: 'default',
-    concurrency: 4, batchSize: 1, liveBufferMs: 2000, liveMaxBatchWaitMs: 0, liveSourceLanguage: 'ja', liveAdaptiveConcurrency: false });
+    onlineConcurrency: 4, batchSize: 1, liveBufferMs: 2000, liveMaxBatchWaitMs: 0, liveSourceLanguage: 'ja', liveAdaptiveConcurrency: false });
   const manifestText = await readFile(resolve(build, 'manifest.json'), 'utf8');
   report.build = { path: build, manifestSha256: createHash('sha256').update(manifestText).digest('hex'), version: JSON.parse(manifestText).version };
   const extension = resolve(runDir, 'test-extension'); await cp(build, extension, { recursive: true });

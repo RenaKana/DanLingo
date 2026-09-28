@@ -1,0 +1,23 @@
+{
+  "m_549ef7f261be": "Penghitung permintaan digunakan bersama oleh semua tab dan layanan, dengan hitungan per hari kalender lokal di perangkat ini. Percobaan ulang, terjemahan susulan, dan tes juga dihitung. Ini adalah batas jumlah permintaan; atur batas biaya di layanan.",
+  "m_4e377b8b93c0": "Hapus pendaftaran \"{p0}\"? File GGUF asli tidak akan terpengaruh. Jika model sedang digunakan, model akan dikeluarkan dari memori terlebih dahulu dan pilihannya dihapus. {p1}",
+  "m_e9d46d8e3ec9": "Hapus salinan \"{p0}\" di dalam ekstensi? File GGUF asli tidak akan terpengaruh. Jika model sedang digunakan, model akan dikeluarkan dari memori terlebih dahulu.",
+  "m_779638a3aad8": "Hapus pendaftaran \"{p0}\"? File asli tidak akan terpengaruh. Jika model sedang digunakan, model akan dikeluarkan dari memori terlebih dahulu dan pilihannya dihapus.",
+  "m_b4fe85db78aa": "Model ini tidak akan muncul kembali saat folder disegarkan.",
+  "m_da84b511f856": "Simpan layanan ini dan berikan otorisasi",
+  "m_ffad0837a6bc": "Layanan ini belum diotorisasi. Klik \"Simpan layanan ini dan berikan otorisasi\" sebelum menutup pengaturan.",
+  "m_592a688fb6d4": "Tes akan mengirimkan jumlah permintaan yang dipilih dan dapat menimbulkan penggunaan layanan. Terjemahan halaman tontonan dijeda selama tes dan dilanjutkan setelah selesai, tanpa mengubah pengaturan nyala atau mati terjemahan.",
+  "m_5c6b58748487": "Alamat layanan belum diotorisasi.",
+  "m_e0bb6a927847": "Alamat layanan belum diotorisasi; konfigurasi tidak disimpan.",
+  "m_41ed2767d1c6": "Pengaturan menonton",
+  "m_217cfe7db1e3": "Tema sistem",
+  "m_92618f81aee5": "Nonaktifkan penalaran",
+  "m_9c41b3a9e12a": "Tingkat penalaran",
+  "m_45da2d9c85d1": "Tambahkan folder",
+  "m_9b826346239e": "Mesin terjemahan",
+  "m_aa0819dfc4d8": "Tema terang",
+  "m_a6b75d068032": "Tema gelap",
+  "locale.label": "Bahasa antarmuka",
+  "m_9dac295e3b09": "Pahami bahasa lain melalui danmaku.",
+  "m_03287b455f2d": "Danmaku biasa"
+}

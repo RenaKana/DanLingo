@@ -3,20 +3,36 @@ import { browserLaunchOptions, loadPlaywright } from "./browser-runtime.mjs";
 import assert from 'node:assert/strict';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
-const moduleUri = async file => 'data:text/javascript;base64,' + Buffer.from(ts.transpileModule(await readFile(file, 'utf8'), {
+const transpile = source => ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 },
-}).outputText).toString('base64');
+}).outputText.replace(/^\s*import[^;]+;\s*/gm, '').replace(/\bexport\s+(?=(?:const|function|class|let|var))/g, '');
+const moduleUri = async () => {
+  const catalog = JSON.parse(await readFile('src/i18n/locales/zh-CN.json', 'utf8'));
+  const [localized, status, repairs] = await Promise.all([
+    readFile('src/ui/localized-text.ts', 'utf8'), readFile('src/ui/live-status.ts', 'utf8'), readFile('src/ui/live-repairs.ts', 'utf8'),
+  ]);
+  const localeFixture = `const catalog = ${JSON.stringify(catalog)};
+    const getLocale = () => 'zh-CN';
+    const onLocaleChange = () => () => {};
+    const localizeMessage = value => typeof value === 'string' ? value : '';
+    const t = (key, params = {}) => (catalog[key] ?? key).replace(/\\{([A-Za-z][A-Za-z0-9_]*)\\}/g, (match, name) => params[name] ?? match);
+    const initLocale = root => { for (const node of root.querySelectorAll('[data-i18n]')) node.textContent = t(node.dataset.i18n);
+      for (const node of root.querySelectorAll('[data-i18n-aria-label]')) node.setAttribute('aria-label', t(node.dataset.i18nAriaLabel));
+      return Promise.resolve(() => {}); };`;
+  const source = [localeFixture, transpile(localized), transpile(status), transpile(repairs),
+    'export { createLiveStatus, createLiveRepairs };'].join('\n');
+  return 'data:text/javascript;base64,' + Buffer.from(source).toString('base64');
+};
 const { chromium } = await loadPlaywright();
 const browser = await chromium.launch({ ...browserLaunchOptions("chromium"), headless: true });
 const page = await browser.newPage({ viewport: { width: 760, height: 700 } });
 const output = resolve('.artifacts/live/recent-repairs'); await mkdir(output, { recursive: true });
 try {
-  await page.route('**/*', route => route.fulfill({ contentType: 'text/html', body: '<meta charset="utf-8"><main style="width:640px;margin:24px"><div id="player" style="height:240px;background:#18231d;color:white;padding:12px"><video></video>合成 Niconico 原生画布区域</div></main>' }));
+  await page.route('**/*', route => route.fulfill({ contentType: 'text/html', body: '<meta charset="utf-8"><main style="width:min(640px,calc(100vw - 32px));margin:24px 16px"><div id="player" style="height:240px;background:#20252a;color:white;padding:12px"><video></video>合成 Niconico 原生画布区域</div></main>' }));
   await page.goto('https://fixture.invalid/');
-  await page.evaluate(async ({ repairs, status }) => {
-    const { createLiveRepairs } = await import(repairs), { createLiveStatus } = await import(status);
+  await page.evaluate(async source => {
+    const { createLiveRepairs, createLiveStatus } = await import(source);
     const pending = new Map(), calls = []; let scans = 0;
     const view = createLiveRepairs({ request(value) { calls.push(value); return new Promise(resolve => pending.set(value.requestId, resolve)); }, scan(scope) {
       scans++;
@@ -34,7 +50,7 @@ try {
     view.capture('successful', '翻訳済みの原文', 'queued'); view.prepared('successful', '已经翻译');
     window.__fixture = { view, calls, setModelSummary(summary) { statusView.update(runtimeStatus, summary); }, get scans() { return scans; }, reply(id, text, state = 'translated') { const call = calls.filter(row => row.sourceId === id).at(-1); pending.get(call.requestId)({ id: call.requestId, status: state, text }); },
       staleReply(requestId, text) { pending.get(requestId)({ id: requestId, status: 'translated', text }); } };
-  }, { repairs: await moduleUri('src/ui/live-repairs.ts'), status: await moduleUri('src/ui/live-status.ts') });
+  }, await moduleUri());
   const model = page.locator('#danlingo-live-status').locator('#model');
   const modelSummary = '在线 · deepseek-v4-flash · 思考 关闭 · SC 思考 max';
   await model.waitFor({ state: 'attached' });
@@ -46,6 +62,9 @@ try {
   assert.equal(await model.isVisible(), true);
   assert.equal(await model.textContent(), modelSummary);
   await page.screenshot({ path: resolve(output, 'live-model-status.png') });
+  await page.setViewportSize({ width: 375, height: 700 });
+  await page.screenshot({ path: resolve(output, 'live-status-mobile.png') });
+  await page.setViewportSize({ width: 760, height: 700 });
   await page.getByText('近期弹幕补翻', { exact: true }).click();
   const row = id => page.locator(`[data-source-id="${id}"]`);
   const failedRetry = row('failed').getByRole('button', { name: '强制重译', exact: true });
@@ -93,13 +112,26 @@ try {
   await page.evaluate(()=>window.__fixture.reply('visible-missed','可见漏译的补翻结果'));
   await row('visible-missed').getByText('可见漏译的补翻结果',{exact:true}).waitFor();
   await page.screenshot({ path: resolve(output, 'recent-repairs.png') });
+  await page.setViewportSize({ width: 375, height: 700 });
+  await page.waitForFunction(() => {
+    const menu = document.querySelector('#danlingo-live-status')?.shadowRoot.querySelector('#danlingo-live-repairs')?.shadowRoot.querySelector('.menu');
+    const box = menu?.getBoundingClientRect(); return box && box.left >= 0 && box.right <= innerWidth;
+  });
+  const mobile = await page.evaluate(() => {
+    const host = document.querySelector('#danlingo-live-status');
+    const menu = host.shadowRoot.querySelector('#danlingo-live-repairs').shadowRoot.querySelector('.menu');
+    const barBox = host.getBoundingClientRect(), menuBox = menu.getBoundingClientRect();
+    return { barRight: barBox.right, menuLeft: menuBox.left, menuRight: menuBox.right, documentWidth: document.documentElement.scrollWidth };
+  });
+  assert.ok(mobile.barRight <= 375 && mobile.menuLeft >= 0 && mobile.menuRight <= 375 && mobile.documentWidth <= 375, JSON.stringify(mobile));
+  await page.screenshot({ path: resolve(output, 'recent-repairs-mobile.png') });
   await page.evaluate(() => { for (let i = 0; i < 350; i++) window.__fixture.view.capture('bound-' + i, 'Bounded record ' + i, 'unprocessed'); });
   // End focus/selection before checking the hard bound; active evicted rows may remain tombstoned until release.
   await page.locator('.note').first().click();
   assert.equal(await page.locator('[data-source-id]').count(), 300);
   assert.equal(await row('bound-0').count(), 0); assert.equal(await row('bound-349').count(), 1);
-  await writeFile(resolve(output, 'report.json'), JSON.stringify({ status: 'PASS', evidence: 'PRODUCTION_RECENT_UI_STATUS_DETERMINISTIC_REQUEST_STUB',
-    checks: ['model-summary-visible-and-hidden-without-summary', 'single-retry-merges-clicks', 'batch-excludes-success-and-inflight', 'no-need-reconsideration-failure-is-not-unneeded', 'show-original-local-and-toggle', 'original-choice-survives-inflight-result', 'explicit-force', 'stale-generation-no-overwrite', 'queue-scan-is-read-only-until-user-retry', 'visible-scan-captures-and-repairs-only-untranslated', 'bounded-300-records-all-readable'],
-    limitation: 'No real Niconico page, actual native pixel visibility, or HTTP transport evidence from this UI test.' }, null, 2));
+  await writeFile(resolve(output, 'report.json'), JSON.stringify({ status: 'PASS', evidence: 'SOURCE_RECENT_UI_STATUS_DETERMINISTIC_LOCALE_AND_REQUEST_STUB',
+    checks: ['model-summary-visible-and-hidden-without-summary', 'single-retry-merges-clicks', 'batch-excludes-success-and-inflight', 'no-need-reconsideration-failure-is-not-unneeded', 'show-original-local-and-toggle', 'original-choice-survives-inflight-result', 'explicit-force', 'stale-generation-no-overwrite', 'queue-scan-is-read-only-until-user-retry', 'visible-scan-captures-and-repairs-only-untranslated', 'mobile-375-no-horizontal-overflow', 'bounded-300-records-all-readable'],
+    limitation: 'Locale storage/change and real Niconico page, native pixel visibility, and HTTP transport are not covered by this source fixture.' }, null, 2));
   console.log('PASS recent record repair UI and status integration');
 } finally { await browser.close(); }

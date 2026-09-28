@@ -7,6 +7,7 @@ const QUANTIZATIONS: Record<number, string> = {
   14: 'Q4_K_S', 15: 'Q4_K_M', 16: 'Q5_K_S', 17: 'Q5_K_M', 18: 'Q6_K',
 };
 const MAX_HEADER = 32 * 1024 * 1024;
+const INITIAL_HEADER_PREFIX = 64 * 1024;
 const SHARD_NAME = /(?:^|[-_.])(\d{5})-of-(\d{5})\.gguf$/i;
 const FINGERPRINT_CHUNK_SIZE = 4 * 1024 * 1024;
 const FINGERPRINT_VERSION = 'sha256-tree-v1';
@@ -240,38 +241,87 @@ function infoFromParsed(fileNames: string[], bytes: number, parsed: ParsedGguf, 
 /** Run in the import/inference worker. Header reads are bounded; weight bytes are not buffered. */
 async function parseGguf(file: Blob, requireCompanions: boolean): Promise<ParsedGguf> {
   if (!Number.isSafeInteger(file.size) || file.size < 24) throw invalidHeader();
-  const buffer = await file.slice(0, Math.min(file.size, MAX_HEADER)).arrayBuffer();
-  const data = new DataView(buffer); let offset = 0;
-  const requireBytes = (count: number) => {
-    if (!Number.isSafeInteger(count) || count < 0 || offset + count > buffer.byteLength) throw invalidHeader();
+  let buffer = new Uint8Array(0);
+  let data = new DataView(buffer.buffer);
+  let offset = 0;
+  const rangeEnd = (start: number, count: number): number => {
+    const end = start + count;
+    if (!Number.isSafeInteger(start) || start < 0 || !Number.isSafeInteger(count) || count < 0
+      || !Number.isSafeInteger(end) || end > MAX_HEADER || end > file.size) throw invalidHeader();
+    return end;
   };
-  const u32 = () => { requireBytes(4); const n = data.getUint32(offset, true); offset += 4; return n; };
-  const u64 = () => {
-    requireBytes(8);
+  const ensureEnd = async (end: number): Promise<void> => {
+    rangeEnd(offset, end - offset);
+    if (end <= buffer.byteLength) return;
+    const growth = buffer.byteLength === 0 ? 8
+      : buffer.byteLength < INITIAL_HEADER_PREFIX ? INITIAL_HEADER_PREFIX : buffer.byteLength * 2;
+    const target = Math.min(file.size, MAX_HEADER, Math.max(end, growth));
+    const added = await file.slice(buffer.byteLength, target).arrayBuffer();
+    if (added.byteLength !== target - buffer.byteLength) throw invalidHeader();
+    const grown = new Uint8Array(target);
+    grown.set(buffer);
+    grown.set(new Uint8Array(added), buffer.byteLength);
+    buffer = grown;
+    data = new DataView(buffer.buffer, buffer.byteOffset, buffer.byteLength);
+  };
+  const requireBytes = async (count: number): Promise<void> => {
+    const end = rangeEnd(offset, count);
+    if (end > buffer.byteLength) await ensureEnd(end);
+  };
+  const skip = (count: number): void => { offset = rangeEnd(offset, count); };
+  const u32 = async (): Promise<number> => {
+    await requireBytes(4);
+    const n = data.getUint32(offset, true); offset += 4; return n;
+  };
+  const u64Loaded = (): number => {
+    if (offset + 8 > buffer.byteLength) throw invalidHeader();
     const n = Number(data.getBigUint64(offset, true)); offset += 8;
     if (!Number.isSafeInteger(n)) throw invalidHeader();
     return n;
   };
-  const string = (read: boolean) => {
-    const size = u64(); requireBytes(size);
+  const u64 = async (): Promise<number> => {
+    await requireBytes(8);
+    return u64Loaded();
+  };
+  const string = async (read: boolean): Promise<string> => {
+    const size = await u64();
     let s = '';
     if (read) {
-      try { s = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(buffer, offset, size)); }
+      await requireBytes(size);
+      try { s = new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(buffer.buffer, buffer.byteOffset + offset, size)); }
       catch { throw invalidHeader(); }
     }
-    offset += size; return s;
+    skip(size); return s;
   };
-  const value = (type: number, read: boolean, depth = 0): unknown => {
+  const value = async (type: number, read: boolean, depth = 0): Promise<unknown> => {
     if (depth > 1) throw invalidHeader();
     if (type === 8) return string(read);
     if (type === 9) {
-      const childType = u32(); const length = u64();
+      const childType = await u32(); const length = await u64();
       if (length > 1_000_000) throw invalidHeader();
-      for (let i = 0; i < length; i++) value(childType, false, depth + 1);
+      // The former recursive parser reached depth 2 for any non-empty nested array and rejected it.
+      if (depth > 0 && length > 0) throw invalidHeader();
+      const childSize: Record<number, number> = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8 };
+      const fixedSize = childSize[childType];
+      if (fixedSize !== undefined) {
+        const size = length * fixedSize;
+        if (!Number.isSafeInteger(size)) throw invalidHeader();
+        skip(size);
+      } else if (childType === 8) {
+        for (let i = 0; i < length; i++) {
+          if (offset + 8 > buffer.byteLength) await requireBytes(8);
+          skip(u64Loaded());
+        }
+      } else if (childType === 9) {
+        for (let i = 0; i < length; i++) await value(childType, false, depth + 1);
+      } else if (length > 0) {
+        throw invalidHeader();
+      }
       return length;
     }
     const sizes: Record<number, number> = { 0: 1, 1: 1, 2: 2, 3: 2, 4: 4, 5: 4, 6: 4, 7: 1, 10: 8, 11: 8, 12: 8 };
-    const size = sizes[type]; if (!size) throw invalidHeader(); requireBytes(size);
+    const size = sizes[type]; if (!size) throw invalidHeader();
+    await requireBytes(size);
     if (!read) { offset += size; return undefined; }
     const result = type === 1 ? data.getInt8(offset) : type === 3 ? data.getInt16(offset, true)
       : type === 5 ? data.getInt32(offset, true) : type === 6 ? data.getFloat32(offset, true)
@@ -283,15 +333,16 @@ async function parseGguf(file: Blob, requireCompanions: boolean): Promise<Parsed
     return result;
   };
 
-  if (u32() !== 0x46554747) throw new Error('LOCAL_NOT_GGUF');
-  if (![2, 3].includes(u32())) throw new Error('LOCAL_GGUF_VERSION_UNSUPPORTED');
-  const tensorCount = u64(); const metadataCount = u64();
+  await ensureEnd(8);
+  if (await u32() !== 0x46554747) throw new Error('LOCAL_NOT_GGUF');
+  if (![2, 3].includes(await u32())) throw new Error('LOCAL_GGUF_VERSION_UNSUPPORTED');
+  const tensorCount = await u64(); const metadataCount = await u64();
   if (!nonNegativeInteger(tensorCount) || metadataCount > 100_000) throw invalidHeader();
   const metadata: Record<string, unknown> = {};
   for (let i = 0; i < metadataCount; i++) {
-    const key = string(true); const type = u32();
+    const key = await string(true); const type = await u32();
     const wanted = metadataKeyWanted(key);
-    const entry = value(type, wanted); if (wanted) metadata[key] = entry;
+    const entry = await value(type, wanted); if (wanted) metadata[key] = entry;
   }
   const architecture = typeof metadata['general.architecture'] === 'string' ? metadata['general.architecture'].trim() : '';
   const tokenizer = typeof metadata['tokenizer.ggml.model'] === 'string' ? metadata['tokenizer.ggml.model'].trim() : '';
@@ -318,12 +369,12 @@ async function parseGguf(file: Blob, requireCompanions: boolean): Promise<Parsed
     const alignmentValue = metadataNumber(metadata, 'general.alignment') ?? 32;
     const alignment = alignmentValue > 0 && alignmentValue <= 4096 ? alignmentValue : 32;
     for (let i = 0; i < tensorCount; i++) {
-      string(false);
-      const dimensions = u32();
+      await string(false);
+      const dimensions = await u32();
       if (dimensions > 64) throw invalidHeader();
-      for (let dimension = 0; dimension < dimensions; dimension++) u64();
-      u32();
-      u64();
+      for (let dimension = 0; dimension < dimensions; dimension++) await u64();
+      await u32();
+      await u64();
     }
     const dataOffset = alignedOffset(offset, alignment);
     if (dataOffset <= file.size) weightBytes = file.size - dataOffset;

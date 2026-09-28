@@ -1,0 +1,105 @@
+{
+  "version": "0.4.0",
+  "locales": {
+    "ar": {
+      "name": "DanLingo",
+      "shortDescription": "ترجم التعليقات والدردشة المدعومة بخدمة تختارها أو بنموذج GGUF محلي.",
+      "description": "ترجم تعليقات دانماكو في فيديوهات Niconico وBilibili، ودردشة البث المباشر على Niconico وYouTube وBilibili. يعمل DanLingo على هذه الصفحات المدعومة فقط ولا يترجم صفحات الويب كاملة. للترجمة عبر الإنترنت، اضبط خدمة متوافقة مع Chat Completions وأدخل مفتاح API الخاص بك. يُرسل النص المحدد أو العناصر النائبة المحمية، مع معلومات اللغة والنموذج، إلى تلك الخدمة؛ وقد تفرض الخدمة رسوماً. للترجمة المحلية، اختر نموذج GGUF متوافقاً على جهازك. لا يتضمن الملحق مفتاح API أو أوزان نموذج. تعتمد السرعة والجودة على الخدمة أو النموذج والمتصفح والجهاز، ولا توجد ضمانات. يوفر DanLingo عشرين لغة للواجهة، وهي مستقلة عن لغتي المصدر والهدف للترجمة. يبقى النص الأصلي متاحاً عند فشل الترجمة."
+    },
+    "de": {
+      "name": "DanLingo",
+      "shortDescription": "Übersetze unterstützte Danmaku und Live-Chats mit deinem Dienst oder einem lokalen GGUF-Modell.",
+      "description": "Übersetze Danmaku in Niconico- und Bilibili-Videos sowie Live-Chats auf Niconico, YouTube und Bilibili. DanLingo funktioniert auf diesen unterstützten Bereichen und übersetzt keine ganzen Webseiten. Für Online-Übersetzungen richtest du einen kompatiblen Chat-Completions-Dienst ein und gibst deinen eigenen API-Schlüssel ein. Der ausgewählte Text oder geschützte Platzhalter sowie Sprach- und Modellinformationen werden an diesen Dienst gesendet; dessen Nutzung kann Kosten verursachen. Für lokale Übersetzungen wählst du ein kompatibles GGUF-Modell auf deinem Gerät. API-Schlüssel und Modellgewichte sind nicht enthalten. Geschwindigkeit und Übersetzungsqualität hängen vom Dienst oder Modell, Browser und Gerät ab; sie sind nicht garantiert. DanLingo bietet 20 Oberflächensprachen, unabhängig von Quell- und Zielsprache der Übersetzung. Schlägt eine Übersetzung fehl, bleibt der Originaltext verfügbar."
+    },
+    "en": {
+      "name": "DanLingo",
+      "shortDescription": "Translate supported danmaku and live chat with your online service or a local GGUF model.",
+      "description": "Translate danmaku in Niconico and Bilibili videos, plus live chat on Niconico, YouTube, and Bilibili. DanLingo works on these supported surfaces; it does not translate entire webpages. For online translation, configure a compatible Chat Completions service and provide your own API key. Selected text, or protected placeholders, along with language and model information is sent to that service; provider use may incur fees. For local translation, select a compatible GGUF model stored on your device. No API key or model weights are included. Speed and translation quality depend on the provider or model, browser, and hardware and are not guaranteed. DanLingo offers 20 interface languages; these are separate from source and target translation languages. Original text remains available if translation fails."
+    },
+    "es": {
+      "name": "DanLingo",
+      "shortDescription": "Traduce danmaku y chats en directo compatibles con tu servicio o un modelo GGUF local.",
+      "description": "Traduce danmaku en vídeos de Niconico y Bilibili, además de chats en directo en Niconico, YouTube y Bilibili. DanLingo funciona en estas secciones compatibles; no traduce páginas web enteras. Para traducir en línea, configura un servicio compatible con Chat Completions y proporciona tu propia clave de API. El texto seleccionado, o los marcadores protegidos, junto con información del idioma y del modelo se envían a ese servicio; su uso puede generar cargos. Para traducir localmente, selecciona un modelo GGUF compatible guardado en tu dispositivo. No se incluyen claves de API ni pesos de modelos. La velocidad y la calidad dependen del servicio o modelo, el navegador y el hardware, y no están garantizadas. DanLingo ofrece 20 idiomas de interfaz, independientes de los idiomas de origen y destino. Si falla la traducción, el texto original sigue disponible."
+    },
+    "fr": {
+      "name": "DanLingo",
+      "shortDescription": "Traduisez les danmaku et chats pris en charge avec votre service ou un modèle GGUF local.",
+      "description": "Traduisez les danmaku des vidéos Niconico et Bilibili, ainsi que les chats en direct sur Niconico, YouTube et Bilibili. DanLingo fonctionne sur ces espaces pris en charge et ne traduit pas les pages Web entières. Pour la traduction en ligne, configurez un service compatible avec Chat Completions et fournissez votre propre clé API. Le texte sélectionné, ou des marqueurs protégés, ainsi que les informations de langue et de modèle sont envoyés à ce service ; son utilisation peut entraîner des frais. Pour la traduction locale, sélectionnez un modèle GGUF compatible enregistré sur votre appareil. Aucune clé API ni aucun poids de modèle n'est fourni. La vitesse et la qualité dépendent du service ou du modèle, du navigateur et du matériel, sans garantie. DanLingo propose 20 langues d'interface, indépendantes des langues source et cible. En cas d'échec, le texte original reste disponible."
+    },
+    "hi": {
+      "name": "DanLingo",
+      "shortDescription": "अपने ऑनलाइन सेवा या स्थानीय GGUF मॉडल से समर्थित डैनमाकू और लाइव चैट का अनुवाद करें।",
+      "description": "Niconico और Bilibili वीडियो में डैनमाकू तथा Niconico, YouTube और Bilibili पर लाइव चैट का अनुवाद करें। DanLingo केवल इन समर्थित हिस्सों पर काम करता है; यह पूरे वेबपेज का अनुवाद नहीं करता। ऑनलाइन अनुवाद के लिए संगत Chat Completions सेवा कॉन्फ़िगर करें और अपनी API कुंजी दें। चुना गया पाठ या सुरक्षित प्लेसहोल्डर, साथ में भाषा और मॉडल की जानकारी, उस सेवा को भेजी जाती है; सेवा के उपयोग पर शुल्क लग सकता है। स्थानीय अनुवाद के लिए अपने डिवाइस पर मौजूद संगत GGUF मॉडल चुनें। कोई API कुंजी या मॉडल वज़न शामिल नहीं है। गति और अनुवाद की गुणवत्ता सेवा या मॉडल, ब्राउज़र और हार्डवेयर पर निर्भर करती है और इसकी गारंटी नहीं है। DanLingo में इंटरफ़ेस की 20 भाषाएँ हैं; ये अनुवाद की स्रोत और लक्ष्य भाषाओं से अलग हैं। अनुवाद विफल होने पर मूल पाठ उपलब्ध रहता है।"
+    },
+    "id": {
+      "name": "DanLingo",
+      "shortDescription": "Terjemahkan danmaku dan chat langsung yang didukung dengan layanan Anda atau model GGUF lokal.",
+      "description": "Terjemahkan danmaku di video Niconico dan Bilibili, serta chat langsung di Niconico, YouTube, dan Bilibili. DanLingo hanya berfungsi pada area yang didukung ini; ekstensi ini tidak menerjemahkan seluruh halaman web. Untuk terjemahan online, konfigurasi layanan yang kompatibel dengan Chat Completions dan masukkan kunci API Anda sendiri. Teks yang dipilih atau placeholder terlindungi, beserta informasi bahasa dan model, dikirim ke layanan tersebut; penggunaannya dapat dikenai biaya. Untuk terjemahan lokal, pilih model GGUF kompatibel yang tersimpan di perangkat Anda. Kunci API dan bobot model tidak disertakan. Kecepatan dan kualitas bergantung pada layanan atau model, browser, dan perangkat keras, serta tidak dijamin. DanLingo menyediakan 20 bahasa antarmuka yang terpisah dari bahasa sumber dan target terjemahan. Jika terjemahan gagal, teks asli tetap tersedia."
+    },
+    "it": {
+      "name": "DanLingo",
+      "shortDescription": "Traduci danmaku e chat supportati con il tuo servizio o un modello GGUF locale.",
+      "description": "Traduci i danmaku nei video Niconico e Bilibili e le chat in diretta su Niconico, YouTube e Bilibili. DanLingo funziona su queste sezioni supportate e non traduce intere pagine web. Per la traduzione online, configura un servizio compatibile con Chat Completions e fornisci la tua chiave API. Il testo selezionato, o segnaposto protetti, insieme alle informazioni su lingua e modello viene inviato al servizio; l'uso può comportare costi. Per la traduzione locale, seleziona un modello GGUF compatibile memorizzato sul dispositivo. Non sono incluse chiavi API né pesi dei modelli. Velocità e qualità dipendono dal servizio o modello, dal browser e dall'hardware e non sono garantite. DanLingo offre 20 lingue dell'interfaccia, distinte dalle lingue di origine e destinazione. Se la traduzione non riesce, il testo originale resta disponibile."
+    },
+    "ja": {
+      "name": "DanLingo",
+      "shortDescription": "対応する弾幕やライブチャットを、自分で設定したサービスまたはローカルGGUFモデルで翻訳します。",
+      "description": "NiconicoとBilibiliの動画の弾幕、およびNiconico、YouTube、Bilibiliのライブチャットを翻訳します。DanLingoはこれらの対応箇所で動作し、ウェブページ全体を翻訳するものではありません。オンライン翻訳では、Chat Completions互換サービスを設定し、ご自身のAPIキーを入力してください。選択したテキストまたは保護されたプレースホルダーと、言語およびモデルの情報がそのサービスに送信され、サービス利用料が発生する場合があります。ローカル翻訳では、端末に保存された互換性のあるGGUFモデルを選択します。APIキーやモデルの重みは同梱されません。速度や翻訳品質はサービスまたはモデル、ブラウザー、ハードウェアによって異なり、保証されません。DanLingoのインターフェースは20言語に対応し、翻訳元・翻訳先の言語とは別です。翻訳に失敗した場合も原文を確認できます。"
+    },
+    "ko": {
+      "name": "DanLingo",
+      "shortDescription": "지원되는 탄막과 실시간 채팅을 사용자가 선택한 서비스 또는 로컬 GGUF 모델로 번역하세요.",
+      "description": "Niconico와 Bilibili 동영상의 탄막, 그리고 Niconico, YouTube, Bilibili의 실시간 채팅을 번역합니다. DanLingo는 지원되는 화면에서만 작동하며 웹페이지 전체를 번역하지 않습니다. 온라인 번역을 사용하려면 Chat Completions 호환 서비스를 설정하고 본인의 API 키를 입력하세요. 선택한 텍스트 또는 보호된 자리표시자와 언어 및 모델 정보가 해당 서비스로 전송되며 서비스 이용료가 발생할 수 있습니다. 로컬 번역은 기기에 저장된 호환 GGUF 모델을 선택해 사용합니다. API 키와 모델 가중치는 포함되어 있지 않습니다. 속도와 번역 품질은 서비스 또는 모델, 브라우저, 하드웨어에 따라 다르며 보장되지 않습니다. DanLingo는 번역 원문 및 대상 언어와 별개인 20개의 인터페이스 언어를 제공합니다. 번역에 실패해도 원문을 확인할 수 있습니다."
+    },
+    "nl": {
+      "name": "DanLingo",
+      "shortDescription": "Vertaal ondersteunde danmaku en livechats met je eigen dienst of een lokaal GGUF-model.",
+      "description": "Vertaal danmaku in Niconico- en Bilibili-video's en livechats op Niconico, YouTube en Bilibili. DanLingo werkt op deze ondersteunde onderdelen en vertaalt geen volledige webpagina's. Configureer voor online vertaling een dienst die compatibel is met Chat Completions en geef je eigen API-sleutel op. De geselecteerde tekst of beschermde placeholders, samen met taal- en modelinformatie, wordt naar die dienst gestuurd; gebruik kan kosten met zich meebrengen. Kies voor lokale vertaling een compatibel GGUF-model op je apparaat. Er worden geen API-sleutel of modelgewichten meegeleverd. Snelheid en vertaalkwaliteit hangen af van de dienst of het model, de browser en de hardware en zijn niet gegarandeerd. DanLingo biedt 20 interfacetalen, los van de bron- en doeltalen voor vertalingen. Bij een vertaalfout blijft de oorspronkelijke tekst beschikbaar."
+    },
+    "pl": {
+      "name": "DanLingo",
+      "shortDescription": "Tłumacz obsługiwane danmaku i czaty na żywo własną usługą lub lokalnym modelem GGUF.",
+      "description": "Tłumacz danmaku w filmach Niconico i Bilibili oraz czaty na żywo w serwisach Niconico, YouTube i Bilibili. DanLingo działa tylko w tych obsługiwanych obszarach i nie tłumaczy całych stron internetowych. Aby korzystać z tłumaczenia online, skonfiguruj usługę zgodną z Chat Completions i podaj własny klucz API. Wybrany tekst lub chronione symbole zastępcze oraz informacje o języku i modelu są wysyłane do tej usługi; korzystanie z niej może wiązać się z opłatami. Do tłumaczenia lokalnego wybierz zgodny model GGUF zapisany na urządzeniu. Klucz API ani wagi modelu nie są dołączone. Szybkość i jakość zależą od usługi lub modelu, przeglądarki i sprzętu i nie są gwarantowane. DanLingo oferuje 20 języków interfejsu, niezależnych od języków źródłowego i docelowego. Gdy tłumaczenie się nie powiedzie, oryginalny tekst pozostaje dostępny."
+    },
+    "pt_BR": {
+      "name": "DanLingo",
+      "shortDescription": "Traduza danmaku e chats ao vivo compatíveis com seu serviço ou um modelo GGUF local.",
+      "description": "Traduza danmaku em vídeos do Niconico e Bilibili e chats ao vivo no Niconico, YouTube e Bilibili. O DanLingo funciona nessas áreas compatíveis e não traduz páginas inteiras. Para tradução online, configure um serviço compatível com Chat Completions e informe sua própria chave de API. O texto selecionado ou marcadores protegidos, junto com informações de idioma e modelo, é enviado a esse serviço; o uso pode gerar cobranças. Para tradução local, selecione um modelo GGUF compatível armazenado no dispositivo. Nenhuma chave de API ou peso de modelo está incluído. A velocidade e a qualidade dependem do serviço ou modelo, do navegador e do hardware e não são garantidas. O DanLingo oferece 20 idiomas de interface, separados dos idiomas de origem e destino da tradução. Se a tradução falhar, o texto original continua disponível."
+    },
+    "ru": {
+      "name": "DanLingo",
+      "shortDescription": "Переводите поддерживаемые данмаку и чаты с выбранным вами сервисом или локальной моделью GGUF.",
+      "description": "Переводите данмаку в видео Niconico и Bilibili, а также чаты в прямом эфире на Niconico, YouTube и Bilibili. DanLingo работает только в этих поддерживаемых разделах и не переводит веб-страницы целиком. Для онлайн-перевода настройте сервис, совместимый с Chat Completions, и укажите собственный API-ключ. Выбранный текст или защищённые заполнители вместе со сведениями о языке и модели отправляются этому сервису; за его использование может взиматься плата. Для локального перевода выберите совместимую модель GGUF на своём устройстве. API-ключи и веса моделей не включены. Скорость и качество зависят от сервиса или модели, браузера и оборудования и не гарантируются. DanLingo предлагает 20 языков интерфейса, отдельно от исходного и целевого языков перевода. При сбое перевода исходный текст остаётся доступен."
+    },
+    "th": {
+      "name": "DanLingo",
+      "shortDescription": "แปลแดนมากุและแชตสดที่รองรับด้วยบริการที่คุณเลือกหรือโมเดล GGUF ในเครื่อง",
+      "description": "แปลแดนมากุในวิดีโอ Niconico และ Bilibili รวมถึงแชตสดบน Niconico, YouTube และ Bilibili DanLingo ทำงานเฉพาะส่วนที่รองรับเหล่านี้ ไม่ได้แปลทั้งหน้าเว็บ หากต้องการแปลออนไลน์ ให้ตั้งค่าบริการที่รองรับ Chat Completions และใส่ API key ของคุณเอง ข้อความที่เลือกหรือข้อความแทนที่ที่ได้รับการปกป้อง พร้อมข้อมูลภาษาและโมเดล จะถูกส่งไปยังบริการนั้น และอาจมีค่าบริการ หากต้องการแปลในเครื่อง ให้เลือกโมเดล GGUF ที่เข้ากันได้และจัดเก็บไว้ในอุปกรณ์ ไม่มี API key หรือไฟล์น้ำหนักโมเดลรวมมาให้ ความเร็วและคุณภาพขึ้นอยู่กับบริการหรือโมเดล เบราว์เซอร์ และฮาร์ดแวร์ จึงไม่มีการรับประกัน DanLingo มีภาษาส่วนติดต่อ 20 ภาษา ซึ่งแยกจากภาษาต้นทางและปลายทางของการแปล หากแปลไม่สำเร็จ ยังดูข้อความต้นฉบับได้"
+    },
+    "tr": {
+      "name": "DanLingo",
+      "shortDescription": "Desteklenen danmaku ve canlı sohbeti kendi hizmetinizle veya yerel GGUF modeliyle çevirin.",
+      "description": "Niconico ve Bilibili videolarındaki danmaku'yu, ayrıca Niconico, YouTube ve Bilibili'deki canlı sohbeti çevirin. DanLingo yalnızca desteklenen bu alanlarda çalışır; tüm web sayfalarını çevirmez. Çevrimiçi çeviri için Chat Completions uyumlu bir hizmet yapılandırıp kendi API anahtarınızı girin. Seçilen metin veya korumalı yer tutucular ile dil ve model bilgileri bu hizmete gönderilir; hizmet kullanımı ücret doğurabilir. Yerel çeviri için cihazınızda bulunan uyumlu bir GGUF modeli seçin. API anahtarı ve model ağırlıkları pakete dahil değildir. Hız ve çeviri kalitesi hizmete veya modele, tarayıcıya ve donanıma bağlıdır ve garanti edilmez. DanLingo, çeviri kaynak ve hedef dillerinden ayrı 20 arayüz dili sunar. Çeviri başarısız olursa özgün metin kullanılabilir durumda kalır."
+    },
+    "uk": {
+      "name": "DanLingo",
+      "shortDescription": "Перекладайте підтримувані данмаку й чати власним сервісом або локальною моделлю GGUF.",
+      "description": "Перекладайте данмаку у відео Niconico та Bilibili, а також чати наживо на Niconico, YouTube і Bilibili. DanLingo працює лише в цих підтримуваних розділах і не перекладає вебсторінки повністю. Для онлайн-перекладу налаштуйте сервіс, сумісний із Chat Completions, і введіть власний ключ API. Вибраний текст або захищені заповнювачі разом із даними про мову та модель надсилаються цьому сервісу; його використання може бути платним. Для локального перекладу виберіть сумісну модель GGUF на своєму пристрої. Ключ API та ваги моделі не входять до пакета. Швидкість і якість залежать від сервісу або моделі, браузера й обладнання та не гарантуються. DanLingo має 20 мов інтерфейсу, окремих від вихідної та цільової мов перекладу. Якщо переклад не вдається, оригінальний текст залишається доступним."
+    },
+    "vi": {
+      "name": "DanLingo",
+      "shortDescription": "Dịch danmaku và trò chuyện trực tiếp được hỗ trợ bằng dịch vụ riêng hoặc mô hình GGUF cục bộ.",
+      "description": "Dịch danmaku trong video Niconico và Bilibili, cùng trò chuyện trực tiếp trên Niconico, YouTube và Bilibili. DanLingo chỉ hoạt động ở những khu vực này, không dịch toàn bộ trang web. Để dùng dịch vụ trực tuyến tương thích Chat Completions, hãy cấu hình dịch vụ và API key của bạn. Văn bản đã chọn hoặc chỗ giữ chỗ được bảo vệ, cùng ngôn ngữ và mô hình, được gửi đến dịch vụ; có thể phát sinh phí. Chọn GGUF tương thích lưu trên thiết bị để dịch cục bộ. Không kèm API key hoặc trọng số mô hình. Tốc độ và chất lượng phụ thuộc dịch vụ hoặc mô hình, trình duyệt và phần cứng; không được bảo đảm. DanLingo có 20 ngôn ngữ giao diện, độc lập với ngôn ngữ nguồn và đích dịch. Nếu dịch thất bại, văn bản gốc vẫn có thể xem được."
+    },
+    "zh_CN": {
+      "name": "DanLingo",
+      "shortDescription": "使用自选在线服务或本地 GGUF 模型翻译支持平台的弹幕与直播聊天。",
+      "description": "翻译 Niconico 和 Bilibili 视频中的弹幕，以及 Niconico、YouTube 和 Bilibili 的直播聊天。DanLingo 仅在这些支持的页面区域运行，不翻译整个网页。在线翻译需要配置兼容 Chat Completions 的服务并提供自己的 API Key。所选文字或受保护的占位符，以及语言和模型信息会发送给该服务；服务商可能据此收费。本地翻译需要选择存储在设备上的兼容 GGUF 模型。扩展不包含 API Key 或模型权重。速度和翻译质量取决于服务或模型、浏览器和硬件，不作保证。DanLingo 提供 20 种界面语言，与翻译源语言和目标语言相互独立。翻译失败时仍可查看原文。"
+    },
+    "zh_TW": {
+      "name": "DanLingo",
+      "shortDescription": "使用自選線上服務或本機 GGUF 模型翻譯支援平台的彈幕與直播聊天。",
+      "description": "翻譯 Niconico 和 Bilibili 影片中的彈幕，以及 Niconico、YouTube 和 Bilibili 的直播聊天。DanLingo 僅在這些支援的頁面區域運作，不會翻譯整個網頁。線上翻譯需要設定相容於 Chat Completions 的服務，並提供自己的 API 金鑰。所選文字或受保護的佔位符，以及語言和模型資訊會傳送給該服務；服務商可能據此收費。本機翻譯需要選擇儲存在裝置上的相容 GGUF 模型。擴充功能不包含 API 金鑰或模型權重。速度和翻譯品質取決於服務或模型、瀏覽器及硬體，不作保證。DanLingo 提供 20 種介面語言，與翻譯來源語言和目標語言彼此獨立。翻譯失敗時仍可查看原文。"
+    }
+  }
+}

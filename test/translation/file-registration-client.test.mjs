@@ -28,11 +28,11 @@ test('file registration client forwards worker progress and returns only the mat
     assert.equal(request.expectedId, 'existing-model');
     assert.equal(request.handles, handles);
     worker.reply({ requestId: 'other-request', progress: { phase: 'scanning' } });
-    worker.reply({ requestId: request.requestId, progress: { phase: 'scanning', stage: 'fingerprinting', fingerprintedBytes: 4 } });
+    worker.reply({ requestId: request.requestId, progress: { phase: 'scanning', stage: 'reading-header', currentFile: 'model.gguf' } });
     const result = { models: [{ id: 'new-model' }], issues: [] };
     worker.reply({ requestId: request.requestId, ok: true, result });
     assert.equal(await resultPromise, result);
-    assert.deepEqual(progress, [{ phase: 'scanning', stage: 'fingerprinting', fingerprintedBytes: 4 }]);
+    assert.deepEqual(progress, [{ phase: 'scanning', stage: 'reading-header', currentFile: 'model.gguf' }]);
     assert.equal(worker.options.type, 'module');
     assert.equal(worker.terminated, true);
   } finally { globalThis.Worker = previous; }

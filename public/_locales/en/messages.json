@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · Danmaku Translation"
+  },
+  "extensionDescription": {
+    "message": "Translate danmaku and live chat on Niconico, YouTube, and Bilibili."
+  },
+  "extensionShortcut": {
+    "message": "Toggle danmaku translation"
+  }
+}

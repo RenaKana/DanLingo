@@ -19,7 +19,11 @@ export async function localControl(control: LocalControl): Promise<LocalReply> {
 }
 
 /** Provider fetch adapter: strictly IPC, never calls the browser/network fetch. */
-export function createLocalFetch(modelId: string): typeof fetch {
+export function createLocalFetch(modelId: string, gate?: {
+  /** Runs after offscreen readiness, immediately before the real complete IPC. Failure sends nothing. */
+  beforeSend: (id: string, signal?: AbortSignal | null) => Promise<void>;
+  sent?: (id: string) => void;
+}): typeof fetch {
   return (async (_input: RequestInfo | URL, init?: RequestInit) => {
     const signal = init?.signal; if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     await ensureLocalOffscreen().catch(() => { throw new ProviderError('LOCAL_OFFSCREEN_UNAVAILABLE'); });
@@ -30,12 +34,18 @@ export function createLocalFetch(modelId: string): typeof fetch {
     if (!body || !Array.isArray(body.messages) || body.messages.some((entry: any) => !entry || !['system', 'user', 'assistant'].includes(entry.role) || typeof entry.content !== 'string') || JSON.stringify(body.messages).length > 100_000) throw new ProviderError('LOCAL_REQUEST_INVALID');
     let rejectAbort: (error: Error) => void = () => {};
     const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
+    // The durable send gate may await storage while cancellation arrives.
+    // Observe that rejection now; the race below still receives it if sent.
+    void aborted.catch(() => {});
     const onAbort = () => {
       void browser.runtime.sendMessage({ channel: LOCAL_CHANNEL, action: 'abort', id }).catch(() => {});
       rejectAbort(new DOMException('Aborted', 'AbortError'));
     };
     signal?.addEventListener('abort', onAbort, { once: true });
     try {
+      if (gate) await gate.beforeSend(id, signal);
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      gate?.sent?.(id);
       const response: LocalReply = await Promise.race([browser.runtime.sendMessage({ channel: LOCAL_CHANNEL, action: 'complete', id, modelId, body: { messages: body.messages, max_tokens: body.max_tokens ?? body.max_completion_tokens,
         strategy: body.danlingo_strategy ?? 'normal', temperature: body.temperature, reasoning: body.reasoning,
         cache_prompt: body.cache_prompt } }).catch(() => { throw new ProviderError('LOCAL_OFFSCREEN_UNAVAILABLE'); }), aborted]);

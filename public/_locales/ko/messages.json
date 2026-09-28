@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · Danmaku 번역"
+  },
+  "extensionDescription": {
+    "message": "Niconico, YouTube 및 Bilibili 기본 페이지에서 사격과 실시간 채팅을 번역하세요."
+  },
+  "extensionShortcut": {
+    "message": "사격 번역 켜기 또는 끄기"
+  }
+}

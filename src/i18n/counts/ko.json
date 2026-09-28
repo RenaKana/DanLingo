@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "작업 {count}개",
+  "count.tasks.one": "작업 {count}개",
+  "count.tasks.two": "작업 {count}개",
+  "count.tasks.few": "작업 {count}개",
+  "count.tasks.many": "작업 {count}개",
+  "count.tasks.other": "작업 {count}개"
+}

@@ -55,8 +55,10 @@ try {
     if (!globalThis.chrome?.runtime?.id) return;
     const original = chrome.runtime.sendMessage.bind(chrome.runtime);
     let pendingLoad, pendingStop, pendingTest;
+    const fixtureModels = [model, {...model, id:'other', name:'Other fixture.gguf'}];
+    let activeModel = model;
     const fixture = globalThis.__localFixture = { state: structuredClone(initial), calls: [], report: null, failLoad: false, failStart: false,
-      ready() { this.state = { ...this.state, phase: 'ready', stage: 'loaded', model, runtime,
+      ready() { this.state = { ...this.state, phase: 'ready', stage: 'loaded', model:activeModel, runtime,
         contextTokens: runtime.contextTokens, nativeSlots: runtime.parallel, warmupMs: 100,
         gpu: { vendor: 'fixture', architecture: 'simulated', verified: true, offloadedLayers: 33, totalLayers: 33, allocatedBytes: 2100000000, flashAttention: true } };
         pendingLoad?.({ ok: true, state: this.state }); pendingLoad = undefined; },
@@ -66,12 +68,19 @@ try {
         pendingStop?.({ ok: true, state: structuredClone(this.state), report: structuredClone(this.report) }); pendingStop = undefined; },
     };
     chrome.runtime.sendMessage = function (message, ...rest) {
+      if (message?.type === 'select-local-model') return (async () => {
+        const settings = {...(await original({type:'overview'})).settings, localModelId:message.modelId};
+        await chrome.storage.local.set({'settings.v1':settings});
+        const reply = message.load ? await chrome.runtime.sendMessage({type:'local-control',control:{action:'load',modelId:message.modelId,config:message.config}}) : {ok:true};
+        return {...reply, settings};
+      })();
       if(message?.type==='test-model')return new Promise(resolve=>{pendingTest=resolve;});
       if (message?.type !== 'local-control') return original(message, ...rest);
       const control = message.control; fixture.calls.push(structuredClone(control));
       if (control.action === 'load') {
         if (fixture.failLoad) return Promise.resolve({ ok: false, error: 'LOCAL_FLASH_ATTENTION_UNAVAILABLE' });
-        fixture.state = { ...fixture.state, model, phase: 'warming', stage: 'warming', generation: fixture.state.generation + 1 };
+        activeModel = fixtureModels.find(item => item.id === control.modelId) ?? model;
+        fixture.state = { ...fixture.state, model: activeModel, phase: 'warming', stage: 'warming', generation: fixture.state.generation + 1 };
         return new Promise(resolve => { pendingLoad = resolve; });
       }
       if (control.action === 'cancel' || control.action === 'unload') {
@@ -86,7 +95,7 @@ try {
         fixture.report = { ...fixture.report, status: 'stopping', phase: 'restoring', recommendedVariant: null };
         return new Promise(resolve => { pendingStop = resolve; });
       }
-      return Promise.resolve({ ok: true, models: [model], state: structuredClone(fixture.state), report: structuredClone(fixture.report) });
+      return Promise.resolve({ ok: true, models: fixtureModels, state: structuredClone(fixture.state), report: structuredClone(fixture.report) });
     };
   }, { model, initial, runtime, benchmark });
   page = await context.newPage();
@@ -95,7 +104,8 @@ try {
   await page.goto(url); await page.locator('#backend').waitFor();
   await page.evaluate(settings => chrome.runtime.sendMessage({ type: 'save', settings, apiKey: '', remember: false }), {
     ...DEFAULT_SETTINGS, backend: 'local', localModelId: model.id, endpoint: 'https://fixture.invalid/v1', model: 'retained-online-model' });
-  await page.reload(); await page.locator('#local-model').selectOption(model.id);
+  await page.evaluate(async id => { const value = (await chrome.storage.local.get('settings.v1'))['settings.v1']; await chrome.storage.local.set({'settings.v1':{...value,localModelId:id},'ui.locale.v1':'zh-CN'}); }, model.id);
+  await page.reload(); await page.locator('[data-model-id="fixture-local-model"] [data-model-action="load"]').waitFor();
   for (const width of [1360, 560, 360]) {
     await page.setViewportSize({ width, height: 900 });
     const path = resolve(directory, `local-${width}.png`);
@@ -122,12 +132,12 @@ try {
     await check('local-defaults-and-preset-resolution', async () => {
       await settingsSection(page, 'advanced');
       assert.equal(await page.locator('#lp-mode').inputValue(), 'auto');
-      assert.match(await page.locator('#lp-summary').textContent(), /计划 4 序列.*上下文 2048/);
+      assert.match(await page.locator('#lp-summary').textContent(), /计划 4 序列.*上下文 2,048/);
       await settingsSection(page, 'performance');
       assert.equal(await page.locator('#performance-start').isVisible(), true); // Production latency/load replay is also available locally.
       await settingsSection(page, 'advanced');
       await page.locator('#lp-mode').selectOption('high-performance');
-      assert.match(await page.locator('#lp-summary').textContent(), /计划 8 序列.*上下文 4096.*512\/256/);
+      assert.match(await page.locator('#lp-summary').textContent(), /计划 8 序列.*上下文 4,096.*512\/256/);
       await page.locator('#lp-mode').selectOption('custom'); await open('#lp-capacity');
       assert.equal(await page.locator('#lp-parallel').isEnabled(), true);
     });
@@ -170,21 +180,22 @@ try {
         const path=resolve(directory,`custom-controls-${width}.png`); await page.locator('#local-performance-host').screenshot({path}); report.screenshots.push(path);
         assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
       }
-      await settingsSection(page,'service'); await page.locator('#model-test-text').fill('今天的直播很有趣。');
+      await settingsSection(page,'service'); await page.locator('#model-test-options').evaluate(el => { el.open = true; }); await page.locator('#model-test-text').fill('今天的直播很有趣。');
       const path=resolve(directory,'custom-test-360.png'); await page.locator('label').filter({has:page.locator('#model-test-text')}).screenshot({path}); report.screenshots.push(path);
     });
     await check('unsaved-load-config-warmup-cancellation-and-ready', async () => {
       await open('#lp-capacity'); await page.locator('#lp-parallel').fill('4');
       await settingsSection(page, 'service');
-      await page.locator('#local-load').click();
+      await page.locator('[data-model-id="fixture-local-model"] [data-model-action="load"]').click();
       await page.waitForFunction(() => document.querySelector('#local-state').textContent.includes('预热中'));
       const load = await page.evaluate(() => __localFixture.calls.filter(c => c.action === 'load').at(-1));
       assert.equal(load.config.parallel, 4); assert.equal((await saved()).localPerformance.parallel, 40);
-      assert.equal(await page.locator('#local-load').isEnabled(), false);
-      assert.equal(await page.locator('#local-cancel').isEnabled(), true);
-      await page.locator('#local-cancel').click();
+      assert.equal(await page.locator('[data-model-id="fixture-local-model"] [data-model-action="load"]').isEnabled(), false);
+      assert.equal(await page.locator('#local-stop').isEnabled(), true);
+      assert.equal(await page.locator('#lb-start').isEnabled(), false);
+      await page.locator('#local-stop').click();
       await page.waitForFunction(() => document.querySelector('#local-state').textContent.includes('未加载'));
-      await page.locator('#local-load').click(); await page.evaluate(() => __localFixture.ready());
+      await page.locator('[data-model-id="fixture-local-model"] [data-model-action="load"]').click(); await page.waitForFunction(() => __localFixture.state.phase === 'warming'); await page.evaluate(() => __localFixture.ready());
       await page.waitForFunction(() => document.querySelector('#local-state').textContent.includes('已就绪'));
       assert.match(await page.locator('#local-state').textContent(), /原生槽位 4/);
     });
@@ -196,10 +207,10 @@ try {
       await page.waitForFunction(() => document.activeElement.id === 'lp-microBatch');
       assert.equal(new URL(page.url()).hash, '#advanced', 'semantic config errors reveal their field');
       const before = await page.evaluate(() => __localFixture.calls.filter(c => c.action === 'load').length);
-      await settingsSection(page, 'service'); await page.locator('#local-load').click();
+      await settingsSection(page, 'service'); await page.locator('[data-model-id="fixture-local-model"] [data-model-action="load"]').click();
       assert.equal(await page.evaluate(() => __localFixture.calls.filter(c => c.action === 'load').length), before);
       await open('#lp-capacity'); await page.locator('#lp-microBatch').fill('128'); await settingsSection(page, 'service');
-      await page.evaluate(() => { __localFixture.failLoad = true; }); await page.locator('#local-load').click();
+      await page.evaluate(() => { __localFixture.failLoad = true; }); await page.locator('[data-model-id="fixture-local-model"] [data-model-action="load"]').click();
       await page.waitForFunction(() => document.querySelector('#local-result').classList.contains('error'));
       assert.match(await page.locator('#local-result').textContent(), /Flash Attention|FA|本地模型操作失败/);
       await page.evaluate(() => { __localFixture.failLoad = false; });
@@ -210,7 +221,9 @@ try {
       await start(); const call = await page.evaluate(() => __localFixture.calls.filter(c => c.action === 'benchmark-start').at(-1));
       assert.deepEqual(call.options.parallels, [1,2,4,8,16]); assert.equal(call.options.count, 32);
       assert.deepEqual(call.options.workloads, ['short','normal','long']); assert.equal(call.options.baseConfig.parallel, 4);
-      assert.equal(await page.locator('#local-load').isEnabled(), false);
+      assert.equal(await page.locator('[data-model-id="fixture-local-model"] [data-model-action="load"]').isEnabled(), false);
+      assert.equal(await page.locator('#test-model').isEnabled(), false);
+      assert.equal(await page.locator('#local-stop').isEnabled(), false);
       await settingsSection(page, 'service'); await page.locator('#backend').selectOption('online'); await page.locator('#running-task').click();
       assert.equal(await page.locator('#lb-stop').isEnabled(), true, 'running local test keeps its stop control after backend draft changes');
       await page.locator('#lb-stop').click();
@@ -221,7 +234,7 @@ try {
       assert.equal(await page.locator('#lb-apply').isEnabled(), false);
       await settingsSection(page, 'service'); await page.locator('#backend').selectOption('local'); await settingsSection(page, 'performance');
       await page.evaluate(() => { __localFixture.failStart = true; }); await page.locator('#lb-start').click();
-      await page.waitForFunction(() => document.querySelector('#lb-status').textContent.includes('LOCAL_BENCHMARK_BUSY'));
+      await page.waitForFunction(() => document.querySelector('#lb-status').textContent.includes('本地模型正在使用中'));
       await page.evaluate(() => { __localFixture.failStart = false; });
     });
     await check('benchmark-curves-export-and-model-scoped-recommendation', async () => {
@@ -243,9 +256,10 @@ try {
       assert.equal(value.localPerformance.autoRecommendation.parallel, 4);
       assert.equal(value.localPerformance.superChatReasoning, 'on');
       // Switching the selected model immediately blocks applying another model's advice.
-      await page.locator('#local-model').evaluate(el => { el.add(new Option('Other fixture', 'other')); el.value = 'other'; el.dispatchEvent(new Event('change', {bubbles:true})); });
+      await settingsSection(page,'service'); await page.locator('[data-model-id="other"] [data-model-action="load"]').click(); await page.waitForFunction(() => __localFixture.state.phase === 'warming'); await page.evaluate(() => __localFixture.ready());
+      await page.waitForFunction(() => !document.querySelector('[data-model-action="load"]').disabled); await settingsSection(page,'performance');
       assert.equal(await page.locator('#lb-apply').isEnabled(), false);
-      await settingsSection(page, 'service'); await page.locator('#local-model').selectOption(model.id); await settingsSection(page, 'performance');
+      await settingsSection(page, 'service'); await page.locator('[data-model-id="fixture-local-model"] [data-model-action="load"]').click(); await page.waitForFunction(() => __localFixture.state.phase === 'warming'); await page.evaluate(() => __localFixture.ready()); await page.waitForFunction(() => !document.querySelector('[data-model-action="load"]').disabled); await settingsSection(page, 'performance');
       await page.locator('#theme').selectOption('dark');
       for (const width of [1360,560,360]) {
         await page.setViewportSize({width,height:900});

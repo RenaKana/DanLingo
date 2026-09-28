@@ -31,13 +31,16 @@ export const videoHtml = `<!doctype html>
 </style>
 <main>
   <section id="player-column">
-    <div id="playerWrap"><video id="fixture-video" muted></video><div id="danmaku-stage"></div><div class="caption">Synthetic Bilibili native player (paused by default)</div></div>
+    <div id="playerWrap" class="bpx-player-container"><video id="fixture-video" muted></video>
+      <div class="bpx-player-dm-root"><div class="bpx-player-dm-switch bui bui-danmaku-switch bui-danmaku-switch-state-1"><div class="bui-area"><input class="bui-danmaku-switch-input" type="checkbox" checked="" aria-checked="true"></div></div></div>
+      <div id="danmaku-stage"></div><div class="caption">Synthetic Bilibili native player (paused by default)</div></div>
     <div id="fixture-controls"><strong>Fixture controls</strong><div>
       <button id="fixture-play" type="button">play</button>
       <button id="fixture-pause" type="button">pause</button>
       <button id="fixture-seek" type="button">seek 42s</button>
       <button id="fixture-rate" type="button">rate 1.5×</button>
       <button id="fixture-fullscreen" type="button">fullscreen</button>
+      <button id="fixture-danmaku-switch" type="button">danmaku off/on</button>
     </div></div>
   </section>
   <aside><h2>Native evidence</h2><pre id="native-evidence"></pre><h2>Rendered</h2><div id="rendered"></div></aside>
@@ -49,6 +52,7 @@ export const videoHtml = `<!doctype html>
   const rendered = document.querySelector('#rendered');
   const evidenceNode = document.querySelector('#native-evidence');
   const video = document.querySelector('#fixture-video');
+  const danmakuSwitch = document.querySelector('.bpx-player-dm-switch input.bui-danmaku-switch-input[type="checkbox"]');
   const state = { page: 1, bvid: ${JSON.stringify(BVID)}, aid: ${JSON.stringify(AID)}, cid: ${JSON.stringify(FIRST_CID)}, time: 0, paused: true, rate: 1, duration: 600, played: 0 };
   const history = { players: [], getDanmakuCalls: 0, hookCalls: 0, insertCalls: 0, measurements: [], renders: [], events: [], playCalls: 0, pauseCalls: 0 };
   const prefix = '【模拟译文】';
@@ -207,17 +211,19 @@ export const videoHtml = `<!doctype html>
   function setRate(value) { state.rate = Number(value) || 1; dispatch('ratechange'); }
   function play() { video.play(); }
   function pause() { video.pause(); }
+  function setDanmakuVisible(visible) { danmakuSwitch.checked = !!visible; danmakuSwitch.setAttribute('aria-checked', String(danmakuSwitch.checked)); }
   function spaDisableEnable() { window.dispatchEvent(new Event('pagehide')); window.dispatchEvent(new Event('pageshow')); return nativeEvidence(); }
   function clearActive(id) { removeRendered(id); }
 
   defineVideoSurface();
   const first = createNative({ page: 1, cid: ${JSON.stringify(FIRST_CID)} });
-  window.__BILI_FIXTURE__ = { metadata, state, history, player: () => window.player, nativeEvidence, snapshot: fixtureSnapshot, restorations, itemFor, sourceId: sourceIdFor, render, addPool, addLongAndActive, prepareSwapItem, switchPage, rebuildCid, setTime, setRate, play, pause, spaDisableEnable, clearActive, prefix };
+  window.__BILI_FIXTURE__ = { metadata, state, history, player: () => window.player, nativeEvidence, snapshot: fixtureSnapshot, restorations, itemFor, sourceId: sourceIdFor, render, addPool, addLongAndActive, prepareSwapItem, switchPage, rebuildCid, setTime, setRate, play, pause, setDanmakuVisible, spaDisableEnable, clearActive, prefix };
   document.querySelector('#fixture-play').onclick = play;
   document.querySelector('#fixture-pause').onclick = pause;
   document.querySelector('#fixture-seek').onclick = () => setTime(42);
   document.querySelector('#fixture-rate').onclick = () => setRate(1.5);
   document.querySelector('#fixture-fullscreen').onclick = () => document.querySelector('#playerWrap').requestFullscreen();
+  document.querySelector('#fixture-danmaku-switch').onclick = () => setDanmakuVisible(!danmakuSwitch.checked);
   setInterval(() => { evidenceNode.textContent = JSON.stringify(nativeEvidence(), null, 2); }, 250);
 })();
 </script>`;

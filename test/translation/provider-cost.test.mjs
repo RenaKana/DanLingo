@@ -1,10 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS } from '../../src/core/config.ts';
 import { ChatCompletionsProvider, ProviderError, buildProviderPayload, estimateProviderPayload, readUsage, addUsage } from '../../src/translation/provider.ts';
 import { protectText } from '../../src/translation/text.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
-const settings = { ...DEFAULT_SETTINGS, profile: 'deepseek', model: 'deepseek-v4-pro', thinkingEffort: 'off' };
+const settings = onlineSettings({ profile: 'deepseek', model: 'deepseek-v4-pro', thinkingEffort: 'off' });
 const inputs = [{ id: 'local-long-original-id-A', text: 'That was not 12, Miku!' }, { id: 'local-long-original-id-B', text: 'おつかれ！' }];
 const request = (extra = {}) => ({ settings, apiKey: 'test-only', items: inputs, budgetMs: 2000, mode: 'deadline', ...extra });
 const response = (content, usage) => Response.json({ choices: [{ message: { content } }], ...(usage ? { usage } : {}) });

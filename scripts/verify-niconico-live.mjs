@@ -553,7 +553,7 @@ try {
     assert.ok(['minimax', 'deepseek', 'gemini', 'chat-completions'].includes(process.env.DANLINGO_E2E_PROFILE), 'Invalid explicit Provider profile');
     config = normalizeSettings({ ...DEFAULT_SETTINGS, ...languageSettings, enabled: false, endpoint: process.env.DANLINGO_E2E_ENDPOINT,
       model: process.env.DANLINGO_E2E_MODEL, profile: process.env.DANLINGO_E2E_PROFILE, thinkingEffort: process.env.DANLINGO_E2E_THINKING,
-      concurrency: Number(process.env.DANLINGO_E2E_CONCURRENCY || DEFAULT_SETTINGS.concurrency),
+      onlineConcurrency: Number(process.env.DANLINGO_E2E_CONCURRENCY || DEFAULT_SETTINGS.onlineConcurrency),
       batchSize: Number(process.env.DANLINGO_E2E_BATCH_SIZE || DEFAULT_SETTINGS.batchSize), allowLocalHttp: true });
     const { readTestKey } = await import('./verify-real-provider.mjs'); key = await readTestKey();
   } else {

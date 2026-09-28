@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resourceFromUrl, sameResource, sameSession, validSession, cacheResource, liveEventId, localDeadline } from '../../src/core/resource.ts';
-import { DEFAULT_SETTINGS, normalizeSettings, SETTINGS_KEY, KEY_STORAGE_KEY } from '../../src/core/config.ts';
+import { normalizeSettings, SETTINGS_KEY, KEY_STORAGE_KEY } from '../../src/core/config.ts';
 import { MemoryTranslationCache, translationCacheKey } from '../../src/translation/cache.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 test('exact platform URL candidates distinguish ordinary video and live scenarios', () => {
   const cases = [
@@ -47,7 +48,7 @@ test('live event IDs and cache namespaces cannot collide across platform or scen
 });
 
 test('schema migration preserves usable sm cache entries while live cache is isolated', async () => {
-  const settings = normalizeSettings({ ...DEFAULT_SETTINGS, schemaVersion: 2, model: 'saved-model', thinkingEffort:'default' });
+  const settings = normalizeSettings(onlineSettings({ schemaVersion: 2, model: 'saved-model', thinkingEffort:'default' }));
   const resource = { platform: 'niconico', scenario: 'video', resourceId: 'sm9' };
   const cache = new MemoryTranslationCache({ now: () => 10000 });
   const text = 'これはテストです';
@@ -86,7 +87,7 @@ test('schema 2 upgrades to 3 without changing provider preferences or credential
   const migrated = normalizeSettings(previous, {stored:true});
   assert.equal(migrated.schemaVersion, 3);
   for (const [key, value] of Object.entries(previous)) if (key !== 'schemaVersion') assert.equal(migrated[key], value, key);
-  assert.deepEqual([migrated.liveBufferMs, migrated.liveSourceLanguage, migrated.liveFontSize, migrated.liveSpeed, migrated.liveOpacity, migrated.liveDensity], [2000, 'auto', 24, 120, 0.85, 6]);
+  assert.deepEqual([migrated.liveBufferMs, migrated.liveSourceLanguage, migrated.liveFontSize, migrated.liveSpeed, migrated.liveOpacity, migrated.liveDensity], [3000, 'auto', 24, 120, 0.85, 6]);
   assert.equal(SETTINGS_KEY, 'settings.v1'); assert.equal(KEY_STORAGE_KEY, 'providerKey.v1');
   assert.deepEqual(normalizeSettings(migrated, {stored:true}), migrated);
   assert.equal('apiKey' in migrated, false);
@@ -94,7 +95,7 @@ test('schema 2 upgrades to 3 without changing provider preferences or credential
 
 test('live settings retain custom buffer choices and clamp bounded visual values', () => {
   for (const liveBufferMs of [500, 1000, 1500, 2000, 3000, 7500]) assert.equal(normalizeSettings({ liveBufferMs }).liveBufferMs, liveBufferMs);
-  for (const liveBufferMs of [0, -1500, '500', Infinity]) assert.equal(normalizeSettings({ liveBufferMs }).liveBufferMs, 2000);
+  for (const liveBufferMs of [0, -1500, '500', Infinity]) assert.equal(normalizeSettings({ liveBufferMs }).liveBufferMs, 3000);
   const low = normalizeSettings({ liveFontSize: 0, liveSpeed: 0, liveDensity: 0, liveOpacity: 0 });
   assert.deepEqual([low.liveFontSize, low.liveSpeed, low.liveDensity, low.liveOpacity], [16, 60, 1, 0.2]);
   const high = normalizeSettings({ liveFontSize: 100, liveSpeed: 900, liveDensity: 50, liveOpacity: 5, liveSourceLanguage: 'fr' });

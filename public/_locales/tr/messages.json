@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · Danmaku Çeviri"
+  },
+  "extensionDescription": {
+    "message": "Niconico, YouTube ve Bilibili yerel sayfalarındaki barajları ve canlı sohbetleri çevirin."
+  },
+  "extensionShortcut": {
+    "message": "Baraj çevirisini açın veya kapatın"
+  }
+}

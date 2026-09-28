@@ -1,0 +1,21 @@
+{
+  "m_549ef7f261be": "Le compteur de requêtes est partagé entre tous les onglets et services et est calculé par jour calendaire local sur cet appareil. Les nouvelles tentatives, les traductions de rattrapage et les tests sont également comptés. Il s'agit d'une limite du nombre de requêtes ; définissez le plafond monétaire auprès du service.",
+  "m_4e377b8b93c0": "Supprimer l'enregistrement de « {p0} » ? Le fichier GGUF d'origine ne sera pas affecté. Si le modèle est utilisé, il sera d'abord déchargé de la mémoire et désélectionné. {p1}",
+  "m_e9d46d8e3ec9": "Supprimer la copie de l'extension de « {p0} » ? Le fichier GGUF d'origine ne sera pas affecté. Si le modèle est utilisé, il sera d'abord déchargé de la mémoire.",
+  "m_779638a3aad8": "Supprimer l'enregistrement de « {p0} » ? Le fichier d'origine ne sera pas affecté. Si le modèle est utilisé, il sera d'abord déchargé de la mémoire et désélectionné.",
+  "m_b4fe85db78aa": "Ce modèle ne réapparaîtra pas lors de l'actualisation du dossier.",
+  "m_da84b511f856": "Enregistrer et autoriser le service",
+  "m_ffad0837a6bc": "Ce service n'est pas encore autorisé. Pour fermer les paramètres, cliquez sur « Enregistrer et autoriser le service ».",
+  "m_592a688fb6d4": "Le test enverra le nombre de requêtes sélectionné et peut entraîner une utilisation du service. Pendant le test, la traduction de la page de visionnage sera suspendue, puis reprise à la fin, sans modifier le réglage d'activation de la traduction.",
+  "m_41ed2767d1c6": "Réglages de visionnage",
+  "m_217cfe7db1e3": "Thème du système",
+  "m_92618f81aee5": "Désactiver le raisonnement",
+  "m_9c41b3a9e12a": "Niveau de raisonnement",
+  "m_45da2d9c85d1": "Ajouter un dossier",
+  "m_9b826346239e": "Moteur de traduction",
+  "m_aa0819dfc4d8": "Thème clair",
+  "m_a6b75d068032": "Thème sombre",
+  "locale.label": "Langue de l’interface",
+  "m_9dac295e3b09": "Comprenez une autre langue grâce aux danmaku.",
+  "m_03287b455f2d": "Danmaku ordinaire"
+}

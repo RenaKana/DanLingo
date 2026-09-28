@@ -104,11 +104,16 @@ test('empty overview produces a stable schema with no untrusted runtime values',
   });
 });
 
-test('live status removes obsolete overlay density and speed advice', () => {
+test('live status hides obsolete unknown advice and preserves current owned diagnostics', () => {
   const text = liveStatusText({ state: 'degraded', connection: 'connected',
     note: '近期译文未达90%；超时可调整翻译配置，过载可调整弹幕密度或速度', messages: 0,
     translated: 0, original: 0, cacheHits: 0, queued: 0 });
-  assert.equal(text.state, '已连接 · 近期译文未达90%；超时可调整翻译配置');
+  // This obsolete composite is not in the owned message catalog; raw external details must not leak.
+  assert.equal(text.state, '已连接 · 操作未完成，请检查设置后重试。');
   assert.equal(text.state.includes('密度'), false);
   assert.equal(text.state.includes('速度'), false);
+  const current = liveStatusText({ state: 'degraded', connection: 'connected',
+    note: '近期译文未达90%；可检查翻译服务与请求配置', messages: 0,
+    translated: 0, original: 0, cacheHits: 0, queued: 0 });
+  assert.equal(current.state, '已连接 · 近期译文未达90%；可检查翻译服务与请求配置');
 });

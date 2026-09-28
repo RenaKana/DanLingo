@@ -141,7 +141,7 @@ try {
   const initial=(await rpc({type:'settings'})).settings;
   const configured=await rpc({type:'save',settings:{...initial,endpoint,model:'vod-deterministic-mock',profile:'chat-completions',thinkingEffort:'default',
     allowLocalHttp:true,enabled:true,sourceLanguage:'ja',targetLanguage:'zh-Hans',translationScope:'all',prefetchSeconds:60,urgentSeconds:5,
-    concurrency:4,batchSize:100,maxBatchChars:12000,requestTimeoutMs:12000,cacheMaxEntries:20000},apiKey:'danlingo-vod-local-test-only',remember:false});
+    onlineConcurrency:4,batchSize:100,maxBatchChars:12000,requestTimeoutMs:12000,cacheMaxEntries:20000},apiKey:'danlingo-vod-local-test-only',remember:false});
   assert.equal(configured.ok,true,configured.error);
   assert.equal(configured.hasKey,true);
   report.settings=configured.settings;
@@ -296,22 +296,23 @@ try {
     assert.deepEqual(await page.evaluate(()=>({play:window.__DL_FIXTURE__.state.playCalls,pause:window.__DL_FIXTURE__.state.pauseCalls})),{play:0,pause:0});
     report.fixture.checks.windowControl={scope:'window',seconds:5,requests:windowRequests.length,remoteBulkExcluded:true,screenshot:await screenshot('fixture-window-progress')};
     const progress=page.locator('#danlingo-progress');
-    await progress.locator('#dismiss-progress').click();
+    const progressDetails=progress.locator('#progress-details');
+    assert.equal(await progress.locator('#dismiss-progress, #restore-progress').count(),0);
+    assert.equal(await progressDetails.evaluate(node=>node.open),false);
     await rpc({type:'toggle',targetLanguage:'zh-Hant'});
-    await until(page,()=>document.querySelector('#danlingo-progress')?.shadowRoot.querySelector('#restore-progress')?.hidden===false);
-    assert.equal(await progress.locator('#panel').isVisible(),false);
+    assert.equal(await progressDetails.evaluate(node=>node.open),false);
     await page.evaluate(()=>document.getElementById('danlingo-progress').remove());
     await progress.waitFor({state:'visible'});
-    assert.equal(await progress.locator('#panel').isVisible(),false,'Reattaching must preserve the current video dismissal');
+    assert.equal(await progressDetails.evaluate(node=>node.open),false,'Reattaching must preserve the collapsed state');
     assert.equal(await page.locator('#danlingo-progress').count(),1);
-    await progress.locator('#restore-progress').click();
     await progress.locator('#progress-summary').click();
-    assert.equal(await progress.locator('details').evaluate(node=>node.open),true);
-    await progress.locator('#dismiss-progress').click();
+    assert.equal(await progressDetails.evaluate(node=>node.open),true);
+    await progress.locator('#progress-summary').click();
+    assert.equal(await progressDetails.evaluate(node=>node.open),false);
     await page.locator('#fixture-fullscreen').click();await until(page,()=>!!document.fullscreenElement);
     await progress.waitFor({state:'hidden'});await page.evaluate(()=>document.exitFullscreen());
-    await progress.locator('#restore-progress').waitFor({state:'visible'});
-    assert.equal(await progress.locator('#panel').isVisible(),false,'Exiting fullscreen must preserve dismissal');
+    await progress.waitFor({state:'visible'});
+    assert.equal(await progressDetails.evaluate(node=>node.open),false,'Exiting fullscreen must preserve the collapsed state');
     await page.evaluate(()=>{
       history.pushState({},'', '/watch/sm999999992');
       window.__DL_FIXTURE__.player.watch.video.id='sm999999992';
@@ -325,7 +326,7 @@ try {
     await progress.waitFor({state:'detached'});
     await page.evaluate(()=>document.getElementById('fixture-stage').style.position='relative');
     await progress.waitFor({state:'visible'});
-    report.fixture.checks.progressLifecycle={dismissedAcrossUpdatesAndRemount:true,restoredOnNewVideo:true,fullscreenHidden:true,singleInstance:true,unsafeLayoutHidden:true};
+    report.fixture.checks.progressLifecycle={collapsedAcrossUpdatesAndRemount:true,collapsedOnNewVideo:true,fullscreenHidden:true,singleInstance:true,unsafeLayoutHidden:true};
     report.fixture.status='passed';report.fixture.final=await bridgeState();
     await rpc({type:'toggle',enabled:false});await page.close();page=null;
     console.log('PASS: fixture player scope/window controls persist and bound translation work');
@@ -406,17 +407,18 @@ try {
       report.real.checks.fullscreenHidden={hidden:true,screenshot:await screenshot('real-fullscreen-no-progress')};
       await page.evaluate(()=>document.exitFullscreen());
       await assertProgress('real-exit-fullscreen-progress');
-      await page.locator('#danlingo-progress #dismiss-progress').click();
-      await page.locator('#danlingo-progress #restore-progress').waitFor({state:'visible'});
-      await page.locator('#danlingo-progress #restore-progress').click();
+      assert.equal(await page.locator('#danlingo-progress #dismiss-progress, #danlingo-progress #restore-progress').count(),0);
       await page.locator('#danlingo-progress #progress-summary').click();
       assert.equal(await page.locator('#danlingo-progress details').evaluate(node=>node.open),true);
-      report.real.checks.progressControls={closeAndRestore:true,details:true,screenshot:await screenshot('real-progress-details')};
+      const detailsScreenshot=await screenshot('real-progress-details');
+      await page.locator('#danlingo-progress #progress-summary').click();
+      assert.equal(await page.locator('#danlingo-progress details').evaluate(node=>node.open),false);
+      report.real.checks.progressControls={detailsToggle:true,screenshot:detailsScreenshot};
       const afterSources=new Map((await native(page,"return p.commentRenderer.layerProcessorList.flatMap(l=>(l.stagingChatManager?.chatList??[]).slice(0,150).map(c=>({id:String(c.id),text:c.comment?.body,vposMs:c.vposMs}))); ")).map(row=>[row.id,row]));
       assert.ok(originals.length && originals.every(row=>row.text===afterSources.get(row.id)?.text && row.vposMs===afterSources.get(row.id)?.vposMs));
       report.real.checks.originalPoolPreserved=true;
       report.real.status='passed';report.real.final=await bridgeState();
-      console.log(progressOnly?'PASS: real Niconico progress placement, close/restore/details, fullscreen hiding and original preservation; LOCAL MOCK provider':'PASS: real anonymous Niconico pool, native short play/prepared seek, original preservation and non-overlapping progress with local mock');
+      console.log(progressOnly?'PASS: real Niconico progress placement, details toggle, fullscreen hiding and original preservation; LOCAL MOCK provider':'PASS: real anonymous Niconico pool, native short play/prepared seek, original preservation and non-overlapping progress with local mock');
     }
   }
   assert.equal(report.errors.length,0);

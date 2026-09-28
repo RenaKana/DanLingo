@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · การแปล Danmaku"
+  },
+  "extensionDescription": {
+    "message": "แปลเขื่อนกั้นน้ำและการแชทสดบนหน้าเนทิฟของ Niconico, YouTube และ Bilibili"
+  },
+  "extensionShortcut": {
+    "message": "เปิดหรือปิดการแปลเขื่อน"
+  }
+}

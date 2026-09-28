@@ -9,68 +9,56 @@
     <main class="popup popup-shell" aria-labelledby="popup-title">
       <header class="popup-header">
         <div class="brand">
-          <span class="mark" aria-hidden="true">译</span>
+          <img class="mark" src="/icon/48.png" width="28" height="28" alt="">
           <h1 id="popup-title">DanLingo</h1>
         </div>
-        <span id="scenario" class="badge">视频与直播</span>
+        <span id="scenario" class="badge" data-i18n="m_0e541bff221e">视频与直播</span>
       </header>
 
-      <section class="status-panel" aria-label="当前翻译状态">
+      <section class="status-panel" aria-label="当前翻译状态" data-i18n-aria-label="m_6477a1221b94">
         <div class="status-heading">
           <span class="status-led" aria-hidden="true"></span>
-          <p id="status" class="status" role="status" aria-live="polite">正在读取状态…</p>
+          <p id="status" class="status" role="status" aria-live="polite" data-i18n="m_4ad4d63474ae">正在读取状态…</p>
         </div>
         <p id="metrics" class="metrics"></p>
         <p id="coverage" class="coverage" hidden></p>
       </section>
 
-      <section class="popup-controls" aria-label="快速设置">
-        <label class="toggle-row check" for="enabled">
-          <input id="enabled" type="checkbox">
-          <span class="toggle-copy">
-            <strong>启用弹幕翻译</strong>
-            <small>支持的视频/直播页面</small>
-          </span>
-        </label>
+      <section class="popup-controls" aria-label="快速设置" data-i18n-aria-label="m_be2cc505b162">
+        <div class="popup-toolbar" data-theme-control>
+          <label class="toggle-row check" for="enabled">
+            <input id="enabled" type="checkbox">
+            <span class="toggle-copy">
+              <strong data-i18n="m_a62128615126">启用翻译</strong>
+            </span>
+          </label>
+          <div class="popup-actions">
+            <button id="theme" class="theme-cycle" type="button" data-theme-preference="system" aria-label="外观" aria-describedby="theme-status">
+              <svg class="theme-icon theme-icon-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M5 19l1.5-1.5m11-11L19 5"/></svg>
+              <svg class="theme-icon theme-icon-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.3 15.2A8.8 8.8 0 0 1 8.8 3.7a9 9 0 1 0 11.5 11.5Z"/></svg>
+              <svg class="theme-icon theme-icon-system" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>
+            </button>
+            <button id="settings" type="button"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 3-.7 2.4-2 .9-2.3-.6L2 10l1.8 1.8v2.4L2 16l2.5 4.3 2.3-.6 2 .9.7 2.4h5l.7-2.4 2-.9 2.3.6L22 16l-1.8-1.8v-2.4L22 10l-2.5-4.3-2.3.6-2-.9-.7-2.4Z" transform="translate(1.2 .3) scale(.9)"/><circle cx="12" cy="12" r="3"/></svg><span data-i18n="m_df3d58c7d84b">设置</span></button>
+          </div>
+          <span id="theme-status" class="theme-status" data-theme-status role="status" aria-live="polite" hidden></span>
+        </div>
 
         <div class="popup-field-grid">
-          <label for="language">
-            目标语言
-            <select id="language">
-              <option value="zh-Hans">简体中文</option>
-              <option value="zh-Hant">繁体中文</option>
-              <option value="en">英语</option>
-              <option value="ja">日语</option>
-              <option value="ko">韩语</option>
-            </select>
+          <label for="language"><span data-i18n="m_966a23e84aed">目标语言</span>
+            <select id="language" required></select>
           </label>
-          <label for="mode">
+          <label for="mode"><span data-i18n="m_8d3d73a18aff">
             显示方式
-            <select id="mode">
-              <option value="translated">译文优先</option>
-              <option value="original">原文</option>
+            </span><select id="mode">
+              <option value="translated" data-i18n="m_413d0de8b6d6">译文优先</option>
+              <option value="original" data-i18n="m_354b28c85333">原文</option>
             </select>
           </label>
         </div>
       </section>
 
       <footer class="popup-footer">
-        <p id="online-budget-status" class="subtle" role="status" aria-live="polite">正在读取在线请求计数…</p>
-        <div class="popup-footer-actions">
-          <p class="subtle">超时保留原文</p>
-          <button id="settings" type="button">服务与设置</button>
-        </div>
-
-        <label class="theme-control" data-theme-control for="theme">
-          <span>外观</span>
-          <select id="theme" aria-label="外观">
-            <option value="system">跟随系统</option>
-            <option value="light">浅色</option>
-            <option value="dark">深色</option>
-          </select>
-          <span id="theme-status" class="theme-status" data-theme-status role="status" aria-live="polite" hidden></span>
-        </label>
-
+        <p id="online-budget-status" class="subtle" role="status" aria-live="polite" data-i18n="m_00c1d49d7e67">正在读取在线请求计数…</p>
       </footer>
     </main>
     <script type="module" src="./main.ts"></script>

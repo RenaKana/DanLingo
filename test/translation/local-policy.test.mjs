@@ -37,7 +37,7 @@ test('runtime stamp ignores stale saved model display name but preserves user pe
   assert.equal(stamped.localModelName, state.model.name); assert.equal(localPromptMode(stamped), 'json');
   assert.equal(stamped.localPerformance.languageValidation, 'off');
   assert.equal(normalizeSettings(settings).localModelName, undefined);
-  assert.equal(normalizeSettings({ ...settings, concurrency: 65 }).concurrency, 65);
+  assert.equal(normalizeSettings({ ...settings, localConcurrency: 65 }).concurrency, 65);
 });
 
 test('language guard rejects obvious wrong-language and untranslated sentences but preserves inconclusive names and symbols', () => {
