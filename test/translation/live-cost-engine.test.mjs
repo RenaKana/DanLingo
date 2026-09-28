@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS, normalizeSettings } from '../../src/core/config.ts';
+import { normalizeSettings } from '../../src/core/config.ts';
 import { cacheResource } from '../../src/core/resource.ts';
 import { TranslationEngine } from '../../src/translation/index.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 async function flush() { for (let turn = 0; turn < 100; turn++) await Promise.resolve(); }
 class Clock {
@@ -24,7 +25,7 @@ class Clock {
     this.time = target; await flush();
   }
 }
-const settings = overrides => ({ ...DEFAULT_SETTINGS, enabled: true, batchSize: 2, concurrency: 8,
+const settings = overrides => onlineSettings({ enabled: true, batchSize: 2, concurrency: 8,
   liveAdaptiveConcurrency: false, ...overrides });
 const room = id => cacheResource({ platform: 'youtube', scenario: 'live', resourceId: id });
 function request(clock, count = 2, overrides = {}) {
@@ -71,7 +72,7 @@ function harness(t) {
 }
 
 test('saved 250ms aggregation migrates to 150ms and an incomplete batch is dispatched by that boundary', async t => {
-  const h = harness(t), previous = settings({ batchSize: 10, concurrency: 64, liveMaxBatchWaitMs: 250 });
+  const h = harness(t), previous = settings({ batchSize: 10, concurrency: 64, onlineConcurrency: 64, liveMaxBatchWaitMs: 250 });
   const migrated = normalizeSettings(previous);
   assert.equal(migrated.liveMaxBatchWaitMs, 150);
   for (const key of Object.keys(previous)) if (key !== 'liveMaxBatchWaitMs') assert.deepEqual(migrated[key], previous[key], key);

@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS } from '../../src/core/config.ts';
 import { ChatCompletionsProvider } from '../../src/translation/provider.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 const items=[{id:'original-7',text:'原文'}];
 const models={minimax:'MiniMax-M3',deepseek:'deepseek-v4-pro',gemini:'gemini-2.5-pro','chat-completions':'unknown-model'};
+const baseSettings=onlineSettings();
 const request=(profile,thinkingEffort)=>({
-  settings:{...DEFAULT_SETTINGS,model:models[profile],profile,thinkingEffort},apiKey:'test-only-key',items,budgetMs:1000,
+  settings:onlineSettings({model:models[profile],profile,thinkingEffort}),apiKey:'test-only-key',items,budgetMs:1000,
 });
 const response=()=>Response.json({choices:[{message:{content:JSON.stringify({items:[{id:'original-7',text:'译文'}]})}}]});
 
@@ -26,7 +27,7 @@ test('thinking profiles emit only their documented wire fields',async t=>{
     let calls=0;
     const provider=new ChatCompletionsProvider({fetch:async(url,init)=>{
       calls++;
-      assert.equal(url,DEFAULT_SETTINGS.endpoint);
+      assert.equal(url,baseSettings.endpoint);
       assert.equal(init.method,'POST');
       assert.equal(init.headers.Authorization,'Bearer test-only-key');
       assert.equal(init.redirect,'error');

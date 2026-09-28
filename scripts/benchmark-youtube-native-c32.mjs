@@ -142,7 +142,7 @@ export async function main(args) {
   }
   const authorized = await readAuthorizedLiveConfig(options.configFile).catch(() => { throw new Error('authorized-config-invalid'); });
   const settings = normalizeSettings({ ...authorized.settings, enabled: true, displayMode: 'translated',
-    model: options.model, profile: options.profile, thinkingEffort: options.thinkingEffort, concurrency: 32,
+    model: options.model, profile: options.profile, thinkingEffort: options.thinkingEffort, onlineConcurrency: 32,
     sourceLanguage: 'auto', liveSourceLanguage: 'auto', targetLanguage: 'zh-Hans', translationStream: false });
   check(settings.endpoint === authorized.settings.endpoint && settings.model === 'deepseek-v4-flash'
     && settings.profile === 'deepseek' && settings.thinkingEffort === 'off', 'authorized-settings-not-preserved');

@@ -1,4 +1,5 @@
 import { browser } from 'wxt/browser';
+import { localizeMessage, onLocaleChange, t } from '../i18n/text.ts';
 
 export const UI_PREFERENCES_KEY = 'ui.preferences.v1';
 
@@ -21,31 +22,59 @@ function systemTheme(): Exclude<ThemePreference, 'system'> {
     && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
 }
 
-function adjacentStatus(select?: HTMLSelectElement): HTMLElement | null {
-  if (!select) return null;
-  const parent = select.closest<HTMLElement>('[data-theme-control]') ?? select.parentElement;
+function adjacentStatus(control?: HTMLSelectElement | HTMLButtonElement): HTMLElement | null {
+  if (!control) return null;
+  const parent = control.closest<HTMLElement>('[data-theme-control]') ?? control.parentElement;
   return parent?.querySelector<HTMLElement>('[data-theme-status]') ?? null;
 }
+
+const themeLabels: Record<ThemePreference, string> = {
+  system: 'm_217cfe7db1e3',
+  light: 'm_aa0819dfc4d8',
+  dark: 'm_a6b75d068032',
+};
+
+const nextTheme: Record<ThemePreference, ThemePreference> = {
+  system: 'light',
+  light: 'dark',
+  dark: 'system',
+};
 
 /**
  * Apply and persist the UI theme without touching translation settings.
  * The returned disposer removes local listeners; it does not revert the theme.
  */
-export function initTheme(select?: HTMLSelectElement): () => void {
+export function initTheme(control?: HTMLSelectElement | HTMLButtonElement): () => void {
+  const button = control?.tagName === 'BUTTON' ? control as HTMLButtonElement : undefined;
+  const select = button ? undefined : control as HTMLSelectElement | undefined;
   let preference: ThemePreference = 'system';
   let disposed = false;
   let interactionRevision = 0;
   let pendingWriteRevision: number | undefined;
+  let writeQueue: Promise<void> = Promise.resolve();
   let storageRevision = 0;
   let mediaQuery: MediaQueryList | undefined;
-  const status = adjacentStatus(select);
+  const status = adjacentStatus(control);
+  let currentStatus = '';
+  let currentError = false;
 
   const setStatus = (message: string, error = false) => {
+    currentStatus = message; currentError = error;
     if (!status) return;
-    status.textContent = message;
+    status.textContent = localizeMessage(message);
     status.hidden = !message;
     status.classList.toggle('error', error);
   };
+  const updateButtonLabel = () => {
+    if (!button) return;
+    const label = `${t('m_86a63f23a076')}: ${t(themeLabels[preference])} → ${t(themeLabels[nextTheme[preference]])}`;
+    button.setAttribute('aria-label', label);
+    button.setAttribute('title', label);
+  };
+  const stopLocale = onLocaleChange(() => {
+    setStatus(currentStatus, currentError);
+    updateButtonLabel();
+  });
 
   const apply = (next: ThemePreference) => {
     preference = next;
@@ -53,6 +82,8 @@ export function initTheme(select?: HTMLSelectElement): () => void {
       document.documentElement.dataset.theme = next === 'system' ? systemTheme() : next;
     }
     if (select && select.value !== next) select.value = next;
+    if (button) button.dataset.themePreference = next;
+    updateButtonLabel();
   };
 
   const onMediaChange = () => {
@@ -70,23 +101,28 @@ export function initTheme(select?: HTMLSelectElement): () => void {
   };
 
   const onChange = () => {
-    if (!select) return;
-    const next: ThemePreference = isThemePreference(select.value) ? select.value : 'system';
+    if (!control) return;
+    const next: ThemePreference = button ? nextTheme[preference]
+      : isThemePreference(select?.value) ? select.value : 'system';
     const revision = ++interactionRevision;
     pendingWriteRevision = revision;
     apply(next);
     setStatus('');
-    void browser.storage.local.set({ [UI_PREFERENCES_KEY]: { theme: next } }).catch(() => {
+    writeQueue = writeQueue.catch(() => {}).then(() => browser.storage.local.set({
+      [UI_PREFERENCES_KEY]: { theme: next },
+    }));
+    void writeQueue.then(() => {
+      if (revision === interactionRevision) pendingWriteRevision = undefined;
+    }, () => {
       if (revision !== interactionRevision) return;
       pendingWriteRevision = undefined;
       if (!disposed) setStatus('外观设置未能保存，请重试', true);
-    }).then(() => {
-      if (revision === interactionRevision) pendingWriteRevision = undefined;
     });
   };
 
   apply('system');
   select?.addEventListener('change', onChange);
+  button?.addEventListener('click', onChange);
   browser.storage.onChanged.addListener(onStorageChange);
 
   if (typeof window !== 'undefined' && typeof window.matchMedia === 'function') {
@@ -106,7 +142,9 @@ export function initTheme(select?: HTMLSelectElement): () => void {
 
   return () => {
     disposed = true;
+    stopLocale();
     select?.removeEventListener('change', onChange);
+    button?.removeEventListener('click', onChange);
     browser.storage.onChanged.removeListener(onStorageChange);
     if (mediaQuery) {
       if (typeof mediaQuery.removeEventListener === 'function') mediaQuery.removeEventListener('change', onMediaChange);

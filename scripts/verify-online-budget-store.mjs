@@ -307,6 +307,22 @@ try {
   }, { name: versionDatabase, instant: beforeMidnight });
   assert.deepEqual([oldVersionRead.status, oldVersionRead.used], ['unavailable', null]);
 
+  const unlimited = await pages[0].evaluate(async ({ name }) => {
+    const { OnlineRequestBudget } = globalThis.__onlineBudgetModule;
+    const budget = new OnlineRequestBudget({ databaseName: name });
+    const states = await Promise.all(Array.from({ length: 12 }, () => budget.reserve(0)));
+    const count = await budget.read(0);
+    let capped;
+    try { await budget.reserve(12); } catch (error) { capped = error.code; }
+    const again = await budget.reserve(0);
+    return { states, count, capped, again };
+  }, { name: `${databaseName}-unlimited` });
+  assert.ok(unlimited.states.every(state => state.status === 'available' && state.remaining === null));
+  assert.equal(unlimited.count.used, 12);
+  assert.equal(unlimited.capped, 'online-daily-limit-reached');
+  assert.equal(unlimited.again.used, 13);
+  assert.equal(unlimited.again.status, 'available');
+
   await context.close();
   console.log('PASS: real IndexedDB concurrency, persistence, limit changes, local-day partitioning and queued-midnight rollover, corruption, cancellation, open failure, schema validation, and versionchange handling.');
 } finally {

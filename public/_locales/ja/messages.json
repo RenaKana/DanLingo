@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · 弾幕翻訳"
+  },
+  "extensionDescription": {
+    "message": "ニコニコ、YouTube、Bilibili のネイティブ ページでの弾幕やライブ チャットを翻訳します。"
+  },
+  "extensionShortcut": {
+    "message": "弾幕翻訳をオンまたはオフにします"
+  }
+}

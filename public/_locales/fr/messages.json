@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · Traduction Danmaku"
+  },
+  "extensionDescription": {
+    "message": "Traduisez les barrages et les chats en direct sur les pages natives Niconico, YouTube et Bilibili."
+  },
+  "extensionShortcut": {
+    "message": "Activer ou désactiver la traduction du barrage"
+  }
+}

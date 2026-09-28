@@ -219,7 +219,7 @@ try {
   const settings = normalizeSettings({ ...DEFAULT_SETTINGS, enabled: true, backend: 'local', localModelId: modelId,
     model: 'HY-MT1.5-1.8B-Q8_0', profile: 'chat-completions', thinkingEffort: 'default', superChatThinkingEffort: 'inherit',
     superChatTimeoutMs: 120_000, requestTimeoutMs: 120_000, thinkingRequestTimeoutMs: 120_000,
-    sourceLanguage: chineseSource ? 'zh' : 'ja', liveSourceLanguage: chineseSource ? 'zh' : 'ja', targetLanguage: chineseSource ? 'ja' : 'zh-Hans', batchSize: 100, concurrency: 32,
+    sourceLanguage: chineseSource ? 'zh' : 'ja', liveSourceLanguage: chineseSource ? 'zh' : 'ja', targetLanguage: chineseSource ? 'ja' : 'zh-Hans', batchSize: 100, localConcurrency: 32,
     liveAdaptiveConcurrency: false, liveMaxBatchWaitMs: 0, liveBufferMs: deadlineMs, localPerformance: { ...LOCAL_DEFAULT_CONFIG },
   });
   assert.equal((await rpc({ type: 'save', settings, apiKey: '', remember: false })).ok, true);

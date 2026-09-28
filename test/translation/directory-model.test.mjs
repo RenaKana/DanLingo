@@ -135,17 +135,17 @@ async function browserChecks() {
     await storage.removeDirectory(parentFirstInfo.id);
   });
 
-  await check('recursive scan keeps local issues, reuses unchanged identity, and changes identity on file replacement', async () => {
+  await check('recursive scan keeps local issues, skips unchanged headers, and replaces identity when the file snapshot changes', async () => {
     const root = await newRoot('scan');
     const nested = await root.getDirectoryHandle('nested', { create: true });
     await writeFile(nested, 'model.gguf', gguf('aaaa'));
     await writeFile(root, 'broken.gguf', new Uint8Array([1, 2, 3]));
     const modelHandle = await nested.getFileHandle('model.gguf');
     const fileHandlePrototype = Object.getPrototypeOf(modelHandle), originalGetFile = fileHandlePrototype.getFile;
-    let sourceReads = 0;
+    let sourceReads = 0, sourceTimestamp = 1_700_000_000_000, originalArrayBuffer;
     fileHandlePrototype.getFile = async function (...args) {
       const file = await originalGetFile.apply(this, args);
-      if (this.name === 'model.gguf') { sourceReads++; return new File([file], file.name, { lastModified: 1_700_000_000_000 }); }
+      if (this.name === 'model.gguf') { sourceReads++; return new File([file], file.name, { lastModified: sourceTimestamp }); }
       return file;
     };
     const directory = await storage.registerDirectory(root);
@@ -162,31 +162,47 @@ async function browserChecks() {
       const resolved = await storage.resolveModelFiles(firstModel.id);
       equal(resolved.files.length, 1, 'directory model resolves its current file');
 
+      originalArrayBuffer = Blob.prototype.arrayBuffer;
+      let headerReads = 0;
+      Blob.prototype.arrayBuffer = async function () { headerReads++; return originalArrayBuffer.call(this); };
       const second = await scanDirectory(directory.id);
       equal(second.status.phase, 'complete', 'unchanged directory rescans');
       const reused = (await storage.listModels()).find(model => model.source?.directoryId === directory.id);
       equal(reused.id, firstModel.id, 'unchanged content keeps model identity');
+      equal(headerReads, 0, 'unchanged snapshot reuses parsed metadata without reading headers');
+      equal(second.status.stage, 'persisting', 'scan reports the persistence stage');
+      equal(Object.keys(second.status.timings).sort(), ['enumerationMs', 'fileAccessMs', 'headerMs', 'registrationMs'], 'scan reports all stage timings');
 
       sourceReads = 0;
       await storage.listModels();
       equal(sourceReads, 0, 'listing does not read model source files');
 
       await writeFile(nested, 'model.gguf', gguf('bbbb'));
+      headerReads = 0;
+      const sameSnapshotChange = await scanDirectory(directory.id);
+      equal(sameSnapshotChange.status.phase, 'complete', 'same-size same-timestamp content change follows the approved snapshot policy');
+      equal(headerReads, 0, 'same snapshot does not trigger a content or header read');
+      const sameSnapshotModel = (await storage.listModels()).find(model => model.source?.directoryId === directory.id);
+      equal(sameSnapshotModel.id, firstModel.id, 'same snapshot preserves model identity');
+
+      sourceTimestamp++;
       const changed = await scanDirectory(directory.id);
-      equal(changed.status.phase, 'complete', 'same-size content change rescans');
+      equal(changed.status.phase, 'complete', 'changed timestamp gets a fresh snapshot');
       if (!changed.invalidatedIds.includes(firstModel.id)) throw new Error('old identity was not invalidated');
       const replacement = (await storage.listModels()).find(model => model.source?.directoryId === directory.id);
       if (!replacement) throw new Error('replacement model missing');
-      if (replacement.id === firstModel.id) throw new Error('same-size content change reused the old identity');
+      if (replacement.id === firstModel.id) throw new Error('changed snapshot reused the old identity');
       equal(replacement.source.files[0].size, firstModel.source.files[0].size, 'replacement has the same file size');
-      equal(replacement.source.files[0].lastModified, firstModel.source.files[0].lastModified, 'replacement has the same timestamp');
+      equal(replacement.source.files[0].lastModified, sourceTimestamp, 'replacement records the changed timestamp');
+      Blob.prototype.arrayBuffer = originalArrayBuffer;
     } finally {
+      if (originalArrayBuffer) Blob.prototype.arrayBuffer = originalArrayBuffer;
       fileHandlePrototype.getFile = originalGetFile;
       await storage.removeDirectory(directory.id);
     }
   });
 
-  await check('same-name paths stay separate, content is fingerprinted, and listings do not read source files', async () => {
+  await check('same-name paths stay separate and unchanged scans do not read headers or model contents', async () => {
     const root = await newRoot('independent');
     const left = await root.getDirectoryHandle('left', { create: true });
     const right = await root.getDirectoryHandle('right', { create: true });
@@ -205,7 +221,7 @@ async function browserChecks() {
     try {
       const second = await scanDirectory(directory.id);
       equal(second.status.phase, 'complete', 'unchanged scan completes');
-      if (contentReads === 0) throw new Error('unchanged source content must still be fingerprinted');
+      equal(contentReads, 0, 'unchanged source headers and contents are not read');
       contentReads = 0;
       await storage.listModels();
       equal(contentReads, 0, 'model listing does not read source bytes');
@@ -297,20 +313,20 @@ async function browserChecks() {
     await storage.removeDirectory(directory.id);
   });
 
-  await check('cancellation and permission loss during fingerprinting do not commit directory candidates', async () => {
-    const root = await newRoot('fingerprint-cancel');
+  await check('cancellation and permission loss during header reading do not commit directory candidates', async () => {
+    const root = await newRoot('header-cancel');
     await writeFile(root, 'model.gguf', gguf('aaaa'));
     const directory = await storage.registerDirectory(root);
     await scanDirectory(directory.id);
     const before = (await storage.listModels()).find(model => model.source?.directoryId === directory.id);
     const revision = (await storage.readDirectory(directory.id)).revision;
-    await writeFile(root, 'model.gguf', gguf('bbbb'));
+    await writeFile(root, 'new-model.gguf', gguf('bbbb'));
     let cancelled = false;
     const result = await scanDirectory(directory.id, { shouldCancel: () => cancelled,
-      onProgress: status => { if (status.stage === 'fingerprinting' && status.fingerprintedBytes > 0) cancelled = true; } });
-    equal(result.status.phase, 'cancelled', 'hash cancellation is reported');
-    equal((await storage.readDirectory(directory.id)).revision, revision, 'cancelled hash does not advance revision');
-    equal((await storage.listModels()).find(model => model.source?.directoryId === directory.id).id, before.id, 'cancelled hash keeps previous model identity');
+      onProgress: status => { if (status.stage === 'reading-header') cancelled = true; } });
+    equal(result.status.phase, 'cancelled', 'header-stage cancellation is reported');
+    equal((await storage.readDirectory(directory.id)).revision, revision, 'cancelled header read does not advance revision');
+    equal((await storage.listModels()).find(model => model.source?.directoryId === directory.id).id, before.id, 'cancelled header read keeps previous model identity');
 
     const proto = Object.getPrototypeOf(root), originalPermission = proto.queryPermission;
     let denied = false;
@@ -320,9 +336,9 @@ async function browserChecks() {
       equal(await (await storage.readDirectory(directory.id)).handle.queryPermission({ mode: 'read' }), 'prompt', 'permission mock reaches stored directory handles');
       denied = false;
       const permission = await scanDirectory(directory.id, { onProgress: status => {
-        if (status.stage === 'fingerprinting' && status.fingerprintedBytes > 0) denied = true;
+        if (status.stage === 'reading-header' && status.currentFile === 'new-model.gguf') denied = true;
       } });
-      equal(permission.status.phase, 'error', 'mid-hash permission loss is reported');
+      equal(permission.status.phase, 'error', 'permission loss during header reading is reported');
       equal(permission.status.error, 'LOCAL_DIRECTORY_PERMISSION_REQUIRED', 'permission error is preserved');
       const afterPermission = await storage.readDirectory(directory.id);
       equal(afterPermission.revision, revision + 1, 'only the directory status update advances revision');
@@ -484,7 +500,13 @@ async function browserChecks() {
     }
     const again = await registerModelFiles(handles.slice(0, 2));
     equal(again.models.map(model => model.id), result.models.map(model => model.id), 'reselection reuses unchanged identities');
-    equal(await refreshFileReferences(), [], 'manual refresh accepts unchanged files');
+    const originalArrayBuffer = Blob.prototype.arrayBuffer;
+    let headerReads = 0;
+    Blob.prototype.arrayBuffer = async function () { headerReads++; return originalArrayBuffer.call(this); };
+    try {
+      equal(await refreshFileReferences(), [], 'manual refresh accepts unchanged files');
+      equal(headerReads, 0, 'unchanged file references reuse parsed metadata without reading headers');
+    } finally { Blob.prototype.arrayBuffer = originalArrayBuffer; }
     for (const model of result.models) await storage.deleteModel(model.id);
     equal((await (await root.getFileHandle('one.gguf')).getFile()).size, gguf().length, 'removal preserves original');
   });
@@ -505,51 +527,66 @@ async function browserChecks() {
   await check('changed direct file retires its cache identity and manual refresh registers a new snapshot', async () => {
     const root = await newRoot('file-change'); await writeFile(root, 'changing.gguf', gguf('aaaa'));
     const handle = await root.getFileHandle('changing.gguf'), proto = Object.getPrototypeOf(handle), original = proto.getFile;
+    let sourceTimestamp = 1_700_000_000_000;
     proto.getFile = async function (...args) {
       const file = await original.apply(this, args);
-      return this.name === 'changing.gguf' ? new File([file], file.name, { lastModified: 1_700_000_000_000 }) : file;
+      return this.name === 'changing.gguf' ? new File([file], file.name, { lastModified: sourceTimestamp }) : file;
     };
     try {
       const first = (await registerModelFiles([handle])).models[0];
       await writeFile(root, 'changing.gguf', gguf('bbbb'));
+      sourceTimestamp++;
       await rejectCode(storage.resolveModelFiles(first.id), 'LOCAL_SOURCE_CHANGED');
       equal(await refreshFileReferences(), [], 'refresh succeeds');
       equal(await rawModel(first.id), undefined, 'old identity removed');
       const next = (await storage.listModels()).find(model => model.name === 'changing.gguf');
       if (!next || next.id === first.id) throw new Error('same-size content replacement must get a fresh ID');
       equal(next.source.files[0].size, first.source.files[0].size, 'replacement has the same file size');
-      equal(next.source.files[0].lastModified, first.source.files[0].lastModified, 'replacement has the same timestamp');
+      equal(next.source.files[0].lastModified, sourceTimestamp, 'replacement records the changed timestamp');
       equal((await storage.resolveModelFiles(next.id)).files[0].size, gguf('bbbb').length, 'new snapshot loads');
       await storage.deleteModel(next.id);
     } finally { proto.getFile = original; }
   });
 
-  await check('legacy external references are fingerprinted once and moved to a new identity', async () => {
+  await check('legacy file metadata is hydrated once while preserving the model identity', async () => {
     const root = await newRoot('file-legacy'); await writeFile(root, 'legacy.gguf', gguf());
     const handle = await root.getFileHandle('legacy.gguf'), legacy = (await registerModelFiles([handle])).models[0];
-    const record = await rawModel(legacy.id); delete record.info.fingerprint;
+    const record = await rawModel(legacy.id);
+    delete record.info.fingerprint; delete record.info.metadataVersion; delete record.info.metadataComplete; delete record.info.templateCapability;
     await putRawModel(record);
-    await rejectCode(storage.resolveModelFiles(legacy.id), 'LOCAL_SOURCE_CHANGED');
-    equal(await rawModel(legacy.id), undefined, 'legacy identity is retired');
-    const migrated = (await storage.listModels()).find(model => model.name === 'legacy.gguf');
-    if (!migrated || migrated.id === legacy.id || !migrated.fingerprint) throw new Error('legacy external source must get a fingerprinted identity');
-    equal((await storage.resolveModelFiles(migrated.id)).files.length, 1, 'migrated source resolves');
-    await storage.deleteModel(migrated.id);
+    const originalArrayBuffer = Blob.prototype.arrayBuffer;
+    let headerReads = 0;
+    Blob.prototype.arrayBuffer = async function () { headerReads++; return originalArrayBuffer.call(this); };
+    try {
+      equal(await refreshFileReferences(), [], 'legacy metadata refresh succeeds');
+      const hydrated = await rawModel(legacy.id);
+      equal(hydrated.info.id, legacy.id, 'metadata hydration preserves identity');
+      equal(hydrated.info.metadataVersion, 1, 'metadata is upgraded');
+      equal(hydrated.info.fingerprint, undefined, 'refresh does not create a content fingerprint');
+      if (headerReads === 0) throw new Error('legacy metadata was not read');
+      headerReads = 0;
+      equal(await refreshFileReferences(), [], 'subsequent refresh succeeds');
+      equal(headerReads, 0, 'hydrated metadata avoids future header reads');
+      equal((await rawModel(legacy.id)).info.id, legacy.id, 'subsequent refresh keeps the same identity');
+    } finally { Blob.prototype.arrayBuffer = originalArrayBuffer; }
+    await storage.deleteModel(legacy.id);
   });
 
-  await check('cancelling source verification preserves a legacy external identity', async () => {
+  await check('cancelling legacy metadata hydration preserves its identity and record', async () => {
     const root = await newRoot('file-legacy-cancel'); await writeFile(root, 'legacy.gguf', gguf());
     const handle = await root.getFileHandle('legacy.gguf'), legacy = (await registerModelFiles([handle])).models[0];
-    const record = await rawModel(legacy.id); delete record.info.fingerprint; await putRawModel(record);
+    const record = await rawModel(legacy.id);
+    delete record.info.metadataVersion; delete record.info.metadataComplete; delete record.info.templateCapability;
+    await putRawModel(record);
     let cancelled = false; const progress = [];
-    await rejectCode(storage.resolveModelFiles(legacy.id, {
-      shouldCancel: () => cancelled,
-      onProgress: value => { progress.push(value); if (value.bytesProcessed > 0) cancelled = true; },
-    }), 'LOCAL_CANCELLED');
-    if (!progress.some(value => value.bytesProcessed > 0)) throw new Error('source verification did not report byte progress');
+    await rejectCode(refreshFileReferences(() => cancelled, value => {
+      progress.push(value);
+      if (value.stage === 'reading-header') cancelled = true;
+    }), 'LOCAL_SCAN_CANCELLED');
+    if (!progress.some(value => value.stage === 'reading-header')) throw new Error('legacy header hydration did not publish progress');
     const current = await rawModel(legacy.id);
     equal(current.info.id, legacy.id, 'cancel does not rotate the legacy identity');
-    equal(current.info.fingerprint, undefined, 'cancel does not persist a fingerprint');
+    equal(current.info.metadataVersion, undefined, 'cancel does not persist partial metadata');
     equal((await storage.listModels()).filter(model => model.name === 'legacy.gguf').map(model => model.id), [legacy.id], 'cancel creates no replacement identity');
     await storage.deleteModel(legacy.id);
   });
@@ -579,6 +616,41 @@ async function browserChecks() {
       equal(await rawModel(model.id), undefined, 'deleted identity stays absent');
       equal((await storage.listModels()).some(entry => entry.name === 'race.gguf'), false, 'no replacement resurrected');
     } finally { proto.getFile = original; release?.(); }
+  });
+
+  await check('cached refresh rotates identity if its source is retired during handle comparison', async () => {
+    const root = await newRoot('file-retirement-race'); await writeFile(root, 'retire.gguf', gguf());
+    const handle = await root.getFileHandle('retire.gguf'), model = (await registerModelFiles([handle])).models[0];
+    let comparisonPrototype = Object.getPrototypeOf(handle);
+    while (comparisonPrototype && typeof comparisonPrototype.isSameEntry !== 'function') comparisonPrototype = Object.getPrototypeOf(comparisonPrototype);
+    if (!comparisonPrototype) throw new Error('FileSystemHandle.isSameEntry is unavailable');
+    const originalComparison = comparisonPrototype.isSameEntry;
+    let entered, release, replacementId, blockComparison = true;
+    const waiting = new Promise(resolve => { entered = resolve; }), gate = new Promise(resolve => { release = resolve; });
+    comparisonPrototype.isSameEntry = async function (...args) {
+      if (blockComparison && this.kind === 'file' && this.name === 'retire.gguf') {
+        blockComparison = false; entered(); await gate;
+      }
+      return originalComparison.apply(this, args);
+    };
+    try {
+      const refresh = refreshFileReferences();
+      await waiting;
+      const retired = await rawModel(model.id);
+      retired.info.availability = 'changed';
+      await putRawModel(retired);
+      release();
+      equal(await refresh, [], 'refresh completes after the competing retirement');
+      equal(await rawModel(model.id), undefined, 'retired identity is removed');
+      const replacement = (await storage.listModels()).find(entry => entry.name === 'retire.gguf');
+      if (!replacement || replacement.id === model.id) throw new Error('cached refresh must create a fresh identity for a retired record');
+      replacementId = replacement.id;
+      equal(replacement.source.files, model.source.files, 'replacement retains the verified unchanged file snapshot');
+    } finally {
+      comparisonPrototype.isSameEntry = originalComparison; release?.();
+      if (replacementId) await storage.deleteModel(replacementId);
+      await storage.deleteModel(model.id);
+    }
   });
 
   await check('cancelling direct-file refresh before commit keeps the previous identity and source status', async () => {

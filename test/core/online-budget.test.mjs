@@ -14,9 +14,9 @@ test('online budget day keys use local calendar fields and a stable YYYY-MM-DD s
   assert.throws(() => onlineBudgetDayKey(new Date(Number.NaN)), RangeError);
 });
 
-test('online request budget accepts only positive safe integer limits', () => {
-  for (const value of [1, 2, Number.MAX_SAFE_INTEGER]) assert.equal(validOnlineBudgetLimit(value), true);
-  for (const value of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '4', null]) {
+test('online request budget accepts zero for unlimited or a positive safe integer cap', () => {
+  for (const value of [0, 1, 2, Number.MAX_SAFE_INTEGER]) assert.equal(validOnlineBudgetLimit(value), true);
+  for (const value of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1, '4', null]) {
     assert.equal(validOnlineBudgetLimit(value), false);
   }
 });

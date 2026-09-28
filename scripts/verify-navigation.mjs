@@ -349,7 +349,7 @@ try {
   const initial = (await rpc({ type: 'settings' })).settings;
   const configured = await rpc({ type: 'save', settings: { ...initial, endpoint, model: 'navigation-local-mock', profile: 'chat-completions',
     thinkingEffort: 'default', allowLocalHttp: true, enabled: true, sourceLanguage: 'ja', targetLanguage: 'zh-Hans', translationScope: 'all',
-    prefetchSeconds: 25, urgentSeconds: 5, concurrency: 4, batchSize: 50, maxBatchChars: 12000, requestTimeoutMs: 25000 },
+    prefetchSeconds: 25, urgentSeconds: 5, onlineConcurrency: 4, batchSize: 50, maxBatchChars: 12000, requestTimeoutMs: 25000 },
     apiKey: 'danlingo-navigation-local-test-only', remember: false });
   assert.equal(configured.ok, true, configured.error); assert.equal(configured.hasKey, true);
   report.settings = configured.settings; await rpc({ type: 'clear-cache' });

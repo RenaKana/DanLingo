@@ -101,7 +101,8 @@ function fakeClock() {
 }
 
 test('injected local public chain keeps fresh caches across serial cells and records simulated ordered release', async () => {
-  const settings = { ...DEFAULT_SETTINGS, enabled: true, model: 'deepseek-v4-flash', profile: 'deepseek', thinkingEffort: 'off',
+  const settings = { ...DEFAULT_SETTINGS, backend: 'online', reasoningProfileOverride: undefined,
+    enabled: true, model: 'deepseek-v4-flash', profile: 'deepseek', thinkingEffort: 'off',
     endpoint: 'https://synthetic.invalid/v1/chat/completions', batchSize: 1, liveMaxBatchWaitMs: 0 };
   let posts = 0;
   const transport = async (_url, init) => {

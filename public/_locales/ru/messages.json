@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · Перевод Данмаку"
+  },
+  "extensionDescription": {
+    "message": "Переводите заграждения и живые чаты на родных страницах Niconico, YouTube и Bilibili."
+  },
+  "extensionShortcut": {
+    "message": "Включить или выключить заградительный перевод"
+  }
+}

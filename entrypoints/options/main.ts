@@ -1,3 +1,5 @@
+import { loadTimingsText } from '../../src/local/source-progress';
+import { UiError } from '../../src/i18n/text.ts';
 import { browser } from 'wxt/browser';
 import { onlineBudgetText } from '../../src/ui/online-budget';
 import {
@@ -8,9 +10,10 @@ import {
   reasoningCapabilities,
   providerTimeoutMs,
 } from '../../src/core/config';
-import { connectionDisplay, resolveConnection } from '../../src/core/connection';
+import { ConnectionError, connectionDisplay, connectionErrorMessage, resolveConnection } from '../../src/core/connection';
 import type { Settings } from '../../src/core/types';
 import { mountDirectoryUI, type DirectoryAction } from './directory-ui';
+import { createLocalSourcePicker } from './local-source-picker';
 import { directoryErrorMessage } from '../../src/local/directory-errors';
 import type { DirectoryInfo, DirectoryScanStatus } from '../../src/local/directory-types';
 import { LOCAL_SUPPORT } from '../../src/local/gguf';
@@ -19,9 +22,11 @@ import { sanitizeRuntimeDiagnostics } from '../../src/ui/live-diagnostics';
 import { mountPerformanceUI } from './performance-ui';
 import { mountLocalPerformanceUI } from './local-performance-ui';
 import { mountSettingsLayout } from './layout';
+import { mountHybridUI } from './hybrid-ui';
 import { initTheme } from '../../src/ui/theme';
 import { mountCombobox } from '../../src/ui/combobox';
-import { TARGET_LANGUAGES } from '../../src/ui/languages';
+import { mountUserFilterStatus, userFilterSourceLabel, userFilterSourceSelectionText, type UserFilterStatusView } from '../../src/ui/user-filter-status';
+import { mountTargetLanguageSelect } from '../../src/ui/languages';
 import type { LocalRuntimeStatus } from '../../src/local/auto-load';
 import { estimateLocalMemory, localMemoryRuntimeKey } from '../../src/local/memory-estimate';
 import { resolveLocalConfig, normalizeLocalConfig } from '../../src/local/config';
@@ -31,15 +36,27 @@ import type { ServiceAddress } from '../../src/core/service-history';
 import { getTranslationShortcut, translationShortcutManagementUrl } from '../../src/core/translation-shortcut';
 import '../../src/ui/base.css';
 import './options.css';
+import './service-a.css';
+import { formatNumber, formatDate, initLocale, localizeMessage, onLocaleChange, resolveLocale, setLocale, t } from '../../src/i18n';
+import { bindLocalizedAttribute, bindLocalizedText } from '../../src/ui/localized-text';
 
 // Authenticate before mounting anything that reads extension storage or sends privileged messages.
 const embedded = new URL(location.href).searchParams.has('embedded');
 const connected = await browser.runtime.sendMessage({ type: 'settings-ui-connect' });
 if (!connected?.ok || embedded && !connected.embedded) {
-  document.body.replaceChildren(document.createTextNode('设置会话无效或已过期，请从插件按钮重新打开。'));
+  const locale = resolveLocale('auto', browser.i18n.getUILanguage()); setLocale(locale);
+  document.documentElement.lang = locale; document.documentElement.dir = locale === 'ar' ? 'rtl' : 'ltr';
+  document.body.replaceChildren(document.createTextNode(t('m_ed222ea3e8f6')));
   throw new Error('SETTINGS_SESSION_REJECTED');
 }
 const layout = mountSettingsLayout();
+// Text inputs can match :focus-visible after a mouse click; track keyboard navigation explicitly.
+document.documentElement.dataset.focusInput = 'pointer';
+document.addEventListener('pointerdown', () => { document.documentElement.dataset.focusInput = 'pointer'; }, true);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Tab') document.documentElement.dataset.focusInput = 'keyboard';
+}, true);
+void initLocale(document, document.getElementById('ui-locale') as HTMLSelectElement);
 initTheme(document.getElementById('theme') as HTMLSelectElement);
 
 const input = (id: string) => document.getElementById(id) as HTMLInputElement;
@@ -47,9 +64,12 @@ const select = (id: string) => document.getElementById(id) as HTMLSelectElement;
 const fields: Record<string, keyof Settings> = {
   endpoint: 'endpoint', model: 'model', backend: 'backend', 'target-language': 'targetLanguage', 'source-language': 'sourceLanguage',
   'local-preload-entry': 'localPreloadOnEntry',
+  'local-idle-unload-enabled': 'localIdleUnloadEnabled', 'local-idle-unload-minutes': 'localIdleUnloadMinutes',
   'online-request-limit': 'onlineRequestLimitPerDay',
   'translation-scope': 'translationScope', 'display-mode': 'displayMode', prefetch: 'prefetchSeconds', urgent: 'urgentSeconds',
-  'batch-size': 'batchSize', 'batch-chars': 'maxBatchChars', concurrency: 'concurrency', timeout: 'requestTimeoutMs',
+  'bilibili-user-filters': 'bilibiliUserFilters',
+  'bilibili-owned-release': 'bilibiliOwnedRelease',
+  'batch-size': 'batchSize', 'video-batch-size': 'videoBatchSize', 'batch-chars': 'maxBatchChars', 'online-concurrency': 'onlineConcurrency', 'local-concurrency': 'localConcurrency', timeout: 'requestTimeoutMs',
   'thinking-timeout': 'thinkingRequestTimeoutMs', 'cache-size': 'cacheMaxEntries', 'cache-days': 'cacheTtlDays',
   enabled: 'enabled', 'local-http': 'allowLocalHttp', 'live-buffer': 'liveBufferMs', 'live-source-language': 'liveSourceLanguage',
   'live-adaptive': 'liveAdaptiveConcurrency', 'endpoint-mode': 'endpointMode', 'protocol-override': 'protocolOverride',
@@ -66,6 +86,8 @@ let testRevision = 0;
 let formRevision = 0;
 let models: string[] = [];
 let localModels: LocalModelInfo[] = [];
+let performanceUI: ReturnType<typeof mountPerformanceUI> | undefined;
+let hybridUI: ReturnType<typeof mountHybridUI> | undefined;
 let localState: LocalState | undefined;
 let localPollTimer: ReturnType<typeof setTimeout> | undefined;
 let localPollInFlight = false;
@@ -76,104 +98,124 @@ let directoryRequestPending = false;
 let localLoadPending = false;
 let localCommandRevision = 0;
 let localDeleting = false;
-let deleteCandidate: Pick<LocalModelInfo, 'id' | 'name' | 'source'> | undefined;
+let onlinePerformanceActive = false;
 let serviceAddresses: ServiceAddress[] = [];
 let credentialState: { origin?: string; hasKey: boolean; remembered: boolean } = { hasKey: false, remembered: false };
 const endpointCombo = mountCombobox(input('endpoint'), [], { displayValue: 'value', onSelect: (option, previousValue) => {
   const previousOrigin = (() => { try { return endpointOrigin(previousValue, input('local-http').checked); } catch { return ''; } })();
   if (new URL(option.value).origin !== previousOrigin && input('api-key').value) { input('api-key').value = ''; markDirty('api-key'); }
   const address = serviceAddresses.find(row => row.endpoint === option.value);
-  select('endpoint-mode').value = address?.endpointMode ?? 'base'; select('protocol-override').value = 'auto';
+  select('endpoint-mode').value = 'auto'; select('protocol-override').value = 'auto';
   input('local-http').checked = address?.allowLocalHttp ?? false; select('profile').value = 'auto';
   for (const id of ['endpoint-mode', 'protocol-override', 'local-http', 'profile']) markDirty(id);
 } });
 const modelCombo = mountCombobox(input('model'));
-const languageCombo = mountCombobox(input('target-language'), TARGET_LANGUAGES);
+const languageSelect = mountTargetLanguageSelect(select('target-language'));
 let catalogRevision = 0;
-let selectionRevision = 0;
 let selectionSaving = false;
+let loadingModelId = '';
+let sourceRegistrationPending = false;
+let sourceProgress: DirectoryScanStatus | undefined;
 let localRuntime: LocalRuntimeStatus | undefined;
 const destinationFields = ['endpoint', 'api-key', 'local-http', 'backend', 'endpoint-mode', 'protocol-override'];
-const testFields = [...destinationFields, 'model', 'profile', 'thinking-effort', 'source-language', 'live-source-language', 'target-language', 'timeout', 'thinking-timeout', 'superchat-thinking', 'superchat-timeout', 'local-model', 'model-test-text', 'model-test-context'];
+const testFields = [...destinationFields, 'model', 'profile', 'thinking-effort', 'source-language', 'live-source-language', 'target-language', 'timeout', 'thinking-timeout', 'superchat-thinking', 'superchat-timeout', 'model-test-text', 'model-test-context'];
 const dirty = new Set<string>();
-const thinkingLabels: Record<string, string> = {
-  default: '服务默认', off: '关闭思考', on: '开启思考', minimal: '最少', low: '低', medium: '中', high: '高', max: '最高（max）', xhigh: '极高（xhigh）',
+const label = (key: string) => () => t(key);
+const thinkingLabels: Record<string, () => string> = {
+  default: label('m_a636bd2d57ff'), off: label('m_92618f81aee5'), on: label('m_12936984d608'), minimal: label('m_477e3eac4043'),
+  low: label('m_aa9e366f68d3'), medium: label('m_a567bdaa1136'), high: label('m_b1c27820fec2'), max: label('m_10bec0878f8c'), xhigh: label('m_a3bf1e847715'),
 };
-const profileLabels: Record<string, string> = {
-  auto: '自动识别', minimax: 'MiniMax', deepseek: 'DeepSeek', gemini: 'Gemini', 'chat-completions': 'Chat Completions',
+const profileLabels: Record<string, () => string> = {
+  auto: label('m_1b43fb7df76a'), minimax: () => 'MiniMax', deepseek: () => 'DeepSeek', gemini: () => 'Gemini', 'chat-completions': () => 'Chat Completions',
 };
-const localPhaseLabels: Record<LocalState['phase'], string> = {
-  idle: '未加载', loading: '加载中', warming: '预热中', ready: '已就绪', generating: '推理中', error: '错误',
+const localPhaseLabels: Record<LocalState['phase'], () => string> = {
+  idle: label('m_43523cac435e'), loading: label('m_d04fcbda737f'), warming: label('m_975f1e9c14fe'), ready: label('m_ab27f80d046f'), generating: label('m_1d0d8fae36fa'), error: label('m_0bc1fb72ae1b'),
 };
-const localStageLabels: Record<string, string> = {
-  checking: '正在检查 GGUF 文件…', fingerprinting: '正在校验模型内容…', persisting: '正在保存模型文件…', 'reading-file': '正在读取模型…',
-  'checking-gpu': '正在检查 GPU…', 'initializing-wasm': '正在初始化本地运行时…', 'loading-weights': '正在加载 GPU 权重…', loaded: '模型已加载',
+const localStageLabels: Record<string, () => string> = {
+  checking: label('m_26db8fe96dbd'), fingerprinting: label('m_5947862d854e'), persisting: label('m_4fe41ddd6024'), 'reading-file': label('localSource.readingFiles'), 'reading-header': label('localSource.readingHeader'),
+  'checking-gpu': label('m_97b31eeff2ea'), 'initializing-wasm': label('m_f0014b3f4b8a'), 'loading-weights': label('m_e73b6c4c325e'), loaded: label('m_92c0c81b6957'),
 };
-function message(text: string, error = false, id = 'result') {
-  const el = document.getElementById(id)!; el.textContent = text; el.className = 'status' + (error ? ' error' : '');
+function message(text: string | (() => string), error = false, id = 'result') {
+  const el = document.getElementById(id)!;
+  bindLocalizedText(el, typeof text === 'function' ? text : () => text);
+  el.className = 'status' + (error ? ' error' : '');
 }
 function snapshot(ids: string[]) {
   return JSON.stringify(ids.map(id => input(id).type === 'checkbox' ? input(id).checked : input(id).value));
 }
 function formatBytes(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes < 0) return '未知大小';
+  if (!Number.isFinite(bytes) || bytes < 0) return t('m_260790e3c333');
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GiB`;
+  if (bytes < 1024 * 1024) return `${formatNumber(Number((bytes / 1024).toFixed(1)))} KiB`;
+  if (bytes < 1024 * 1024 * 1024) return `${formatNumber(Number((bytes / 1024 / 1024).toFixed(1)))} MiB`;
+  return `${formatNumber(Number((bytes / 1024 / 1024 / 1024).toFixed(2)))} GiB`;
 }
-function localErrorMessage(error: unknown, fallback = '本地模型操作失败'): string {
-  if (error instanceof Error && /^LOCAL_(?:DIRECTORY_|SOURCE_|SCAN_)/.test(error.message)) return directoryErrorMessage(error);
+function localErrorMessage(error: unknown, fallback = t('m_ddc0d10923e8')): string {
+  if (error instanceof Error && /^LOCAL_(?:DIRECTORY_|SOURCE_|SCAN_)/.test(error.message)) return localizeMessage(directoryErrorMessage(error));
   const raw = error instanceof Error ? error.message : '';
   const code = /^LOCAL_[A-Z0-9_]+$/.test(raw) ? raw : '';
-  const labels: Record<string, string> = {
-    LOCAL_SELECT_SINGLE_COMPLETE_GGUF: '请选择一个完整的 GGUF 文件', LOCAL_FORMAT_UNSUPPORTED: '只支持 .gguf 文件',
-    LOCAL_SHARD_SET_INCOMPLETE: '分片不完整，请同时选择模型的全部 GGUF 分片', LOCAL_SHARD_DUPLICATE: '选择了重复的 GGUF 分片',
-    LOCAL_SHARD_MIXED: '这些 GGUF 分片不属于同一组模型', LOCAL_SHARD_METADATA_INVALID: 'GGUF 分片元数据不完整或不一致',
-    LOCAL_SHARD_ORDER_INVALID: 'GGUF 分片文件名与内部编号不一致', LOCAL_FILE_SIZE_INVALID: '文件大小无效或不能安全表示',
-    LOCAL_SHARD_METADATA_MISSING: '文件名表明它是分片，但缺少必要的分片元数据', LOCAL_ARCHITECTURE_MISSING: '模型首分片缺少架构元数据',
-    LOCAL_NATIVE_UNSUPPORTED: '当前内置推理运行时不支持此模型架构或量化，请选择兼容模型',
-    LOCAL_NOT_GGUF: '文件不是有效的 GGUF 模型', LOCAL_GGUF_VERSION_UNSUPPORTED: '仅支持 GGUF v2/v3',
-    LOCAL_GGUF_HEADER_INVALID_OR_TOO_LARGE: 'GGUF 头部无效或超出安全解析预算', LOCAL_ARCHITECTURE_UNSUPPORTED: '当前推理运行时无法加载此模型架构',
-    LOCAL_QUANTIZATION_UNSUPPORTED: '模型量化格式暂不支持', LOCAL_TOKENIZER_MISSING: '模型缺少内置 tokenizer',
-    LOCAL_CHAT_TEMPLATE_MISSING: '模型缺少聊天模板', LOCAL_MODEL_NOT_IMPORTED: '请先导入这个本地模型',
-    LOCAL_BROWSER_JSPI_UNSUPPORTED: '当前浏览器不支持本地模型运行时', LOCAL_BROWSER_MEMORY64_UNSUPPORTED: '当前浏览器不支持本地模型内存需求',
-    LOCAL_WEBGPU_UNSUPPORTED: '当前浏览器无法使用 WebGPU，请检查浏览器硬件加速和显卡驱动',
-    LOCAL_GPU_SOFTWARE_ADAPTER: '浏览器只提供软件渲染适配器，无法进行硬件 GPU 推理',
-    LOCAL_GPU_DEVICE_FAILED: 'GPU 设备初始化失败，请检查硬件加速、显卡驱动和可用显存',
-    LOCAL_GPU_DEVICE_LOST: 'GPU 连接已丢失，请重新加载模型',
-    LOCAL_GPU_OFFLOAD_UNVERIFIED: '未能确认模型已加载到 GPU，本次加载已停止',
-    LOCAL_MODEL_LOAD_REJECTED: '本地引擎未能初始化模型，请检查模型兼容性或诊断信息', LOCAL_MODEL_NOT_LOADED: '本地模型尚未加载',
-    LOCAL_CHAT_TEMPLATE_UNSUPPORTED: '当前引擎无法初始化此模型的聊天模板',
-    LOCAL_NLLB_UNSUPPORTED: '当前本地引擎不支持 NLLB/mBART，无法加载此模型',
-    LOCAL_VOCAB_ONLY: '这是词表文件，不含模型权重，请选择完整模型',
-    LOCAL_TRANSLATION_SOURCE_REQUIRED: translationLanguageMessage('LOCAL_TRANSLATION_SOURCE_REQUIRED')!,
-    LOCAL_TRANSLATION_LANGUAGE_UNSUPPORTED: translationLanguageMessage('LOCAL_TRANSLATION_LANGUAGE_UNSUPPORTED')!,
-    LOCAL_MODEL_CHANGED: '本地模型已切换或卸载', LOCAL_CANCELLED: '本地操作已取消', LOCAL_QUEUE_FULL: '本地推理队列已满',
-    LOCAL_OFFSCREEN_UNAVAILABLE: '本地运行容器暂时不可用', LOCAL_STORAGE_UNAVAILABLE: '本地模型存储不可用',
-    LOCAL_STORAGE_QUOTA_OR_IO: '本地模型存储空间或读写失败', LOCAL_INFERENCE_FAILED: '本地推理失败',
-    LOCAL_WORKER_FAILED: '本地模型运行时失败', LOCAL_IMPORT_WORKER_FAILED: '本地模型导入失败', LOCAL_REQUEST_INVALID: '本地请求格式无效',
-    LOCAL_CONFIG_INVALID: '本地性能参数无效，请检查数值范围和批量大小',
-    LOCAL_CONTEXT_CAPACITY_EXCEEDED: '上下文容量不足，请减少并行序列或每请求预估长度',
-    LOCAL_CONTEXT_EXCEEDS_MODEL: '所选上下文超过模型支持范围，请降低上下文档位',
-    LOCAL_FLASH_ATTENTION_UNAVAILABLE: '无法确认 Flash Attention 可用，请选择 Auto 或 Off 后重试',
-    LOCAL_BENCHMARK_BUSY: '本地模型正在使用中，请结束当前翻译或测试后再试',
-    LOCAL_BENCHMARK_SAME_LANGUAGE: '源语言和目标语言相同，无法做跨语言翻译测试',
-    LOCAL_BENCHMARK_CORPUS_UNAVAILABLE: '所选源语言暂无批量测试语料，请用单次测试填写原文',
-    LOCAL_WORKER_SHUTDOWN_FAILED: '旧模型未能正常退出，请卸载本地模型后重试',
-    LOCAL_MODEL_LOADING: '本地模型正在自动加载，期间保留原文', LOCAL_AUTOLOAD_PAUSED: '自动加载已暂停，请手动加载或关闭再启用翻译',
-    LOCAL_LOAD_TIMEOUT: '模型加载超时，请检查文件和 GPU 后手动重试', LOCAL_REASONING_UNSUPPORTED: '模型聊天模板不支持所选思考强度，请重新选择',
+  const labels: Record<string, () => string> = {
+    LOCAL_SELECT_SINGLE_COMPLETE_GGUF: () => t('m_2456fa56748a'), LOCAL_FORMAT_UNSUPPORTED: () => t('m_5cf5b7153aac'),
+    LOCAL_SHARD_SET_INCOMPLETE: () => t('m_e5a043f13c1f'), LOCAL_SHARD_DUPLICATE: () => t('m_a4759d4e716b'),
+    LOCAL_SHARD_MIXED: () => t('m_5ba0c81d2fc9'), LOCAL_SHARD_METADATA_INVALID: () => t('m_2c70b88b645a'),
+    LOCAL_SHARD_ORDER_INVALID: () => t('m_1ae0ad57dc12'), LOCAL_FILE_SIZE_INVALID: () => t('m_717971f16a81'),
+    LOCAL_SHARD_METADATA_MISSING: () => t('m_2178eb9b599a'), LOCAL_ARCHITECTURE_MISSING: () => t('m_9ae197551937'),
+    LOCAL_NATIVE_UNSUPPORTED: () => t('m_a45f05fc6534'),
+    LOCAL_NOT_GGUF: () => t('m_aafc89acfeaa'), LOCAL_GGUF_VERSION_UNSUPPORTED: () => t('m_1f323404a27b'),
+    LOCAL_GGUF_HEADER_INVALID_OR_TOO_LARGE: () => t('m_900eaeb51b13'), LOCAL_ARCHITECTURE_UNSUPPORTED: () => t('m_28ca73370ea5'),
+    LOCAL_QUANTIZATION_UNSUPPORTED: () => t('m_e993110ba770'), LOCAL_TOKENIZER_MISSING: () => t('m_b8ca280cae2d'),
+    LOCAL_CHAT_TEMPLATE_MISSING: () => t('m_be82469a446b'), LOCAL_MODEL_NOT_IMPORTED: () => t('m_dc5e2e260b10'),
+    LOCAL_BROWSER_JSPI_UNSUPPORTED: () => t('m_12b118c1aa6a'), LOCAL_BROWSER_MEMORY64_UNSUPPORTED: () => t('m_e3fb58afc680'),
+    LOCAL_WEBGPU_UNSUPPORTED: () => t('m_e79e5b0556ff'),
+    LOCAL_GPU_SOFTWARE_ADAPTER: () => t('m_713a9c5be1f9'),
+    LOCAL_GPU_DEVICE_FAILED: () => t('m_0441dd81fb57'),
+    LOCAL_GPU_DEVICE_LOST: () => t('m_fd0e663f6744'),
+    LOCAL_GPU_OFFLOAD_UNVERIFIED: () => t('m_f033efbaffc6'),
+    LOCAL_MODEL_LOAD_REJECTED: () => t('m_2b0f031baa9f'), LOCAL_MODEL_NOT_LOADED: () => t('m_f8db012cd6eb'),
+    LOCAL_CHAT_TEMPLATE_UNSUPPORTED: () => t('m_0691afc603de'),
+    LOCAL_NLLB_UNSUPPORTED: () => t('m_20258af59a51'),
+    LOCAL_VOCAB_ONLY: () => t('m_d6fce6fb28bd'),
+    LOCAL_TRANSLATION_SOURCE_REQUIRED: () => translationLanguageMessage('LOCAL_TRANSLATION_SOURCE_REQUIRED')!,
+    LOCAL_TRANSLATION_LANGUAGE_UNSUPPORTED: () => translationLanguageMessage('LOCAL_TRANSLATION_LANGUAGE_UNSUPPORTED')!,
+    LOCAL_MODEL_CHANGED: () => t('m_4a04eb274aa5'), LOCAL_CANCELLED: () => t('m_b9f6d5862a96'), LOCAL_QUEUE_FULL: () => t('m_c9f4a48209be'),
+    LOCAL_OFFSCREEN_UNAVAILABLE: () => t('m_11d38137b22a'), LOCAL_STORAGE_UNAVAILABLE: () => t('m_bfad9f598891'),
+    LOCAL_STORAGE_QUOTA_OR_IO: () => t('m_f7ac8d375d0a'), LOCAL_INFERENCE_FAILED: () => t('m_d520f08bd2cf'),
+    LOCAL_WORKER_FAILED: () => t('m_52c9a77e4fed'), LOCAL_IMPORT_WORKER_FAILED: () => t('m_1d4106f312d9'), LOCAL_REQUEST_INVALID: () => t('m_a9f3446215ec'),
+    LOCAL_CONFIG_INVALID: () => t('m_36914e8d81eb'),
+    LOCAL_CONTEXT_CAPACITY_EXCEEDED: () => t('m_dd1f630577d7'),
+    LOCAL_CONTEXT_EXCEEDS_MODEL: () => t('m_3ef6b962254e'),
+    LOCAL_FLASH_ATTENTION_UNAVAILABLE: () => t('m_10f09efc1058'),
+    LOCAL_BENCHMARK_BUSY: () => t('m_5eadc2f13988'),
+    LOCAL_BENCHMARK_SAME_LANGUAGE: () => t('m_8dc36d455099'),
+    LOCAL_BENCHMARK_CORPUS_UNAVAILABLE: () => t('m_417b9a11c997'),
+    LOCAL_WORKER_SHUTDOWN_FAILED: () => t('m_a1eff3e3e1f9'),
+    LOCAL_MODEL_LOADING: () => t('m_5a2644140130'), LOCAL_AUTOLOAD_PAUSED: () => t('m_086e68f6abc0'),
+    LOCAL_LOAD_TIMEOUT: () => t('m_e8acf5acb8f3'), LOCAL_REASONING_UNSUPPORTED: () => t('m_aa62ae2e0f78'),
   };
-  return labels[code] ?? (raw && !code ? raw : fallback);
+  if (labels[code]) return labels[code]();
+  if (raw && !code) {
+    const rendered = localizeMessage(raw);
+    return rendered === t('error.unknown') ? fallback : rendered;
+  }
+  return fallback;
 }
 function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof Error && error.message === 'unsupported-thinking-effort') return '当前请求配置不支持所选思考强度，请重新选择';
+  if (error instanceof ConnectionError) return localizeMessage(connectionErrorMessage(error));
+  const hybridErrors: Record<string, string> = {
+    HYBRID_PLAN_REQUIRED: '请先启用上方的 B站5秒弹幕规划。',
+    HYBRID_KEY_REQUIRED: '请配置在线服务 API Key。',
+    HYBRID_CAPACITY_REQUIRED: '请先填写本地上限，或应用当前配置的测试建议。',
+    HYBRID_CAPACITY_INVALID: '请填写有效的本地上限。',
+  };
+  if (error instanceof Error) { const label = hybridErrors[error.message]; if (label) return label; }
+  if (error instanceof Error && error.message === 'unsupported-thinking-effort') return t('m_35f6bd1f62ce');
   if (error instanceof Error && /^LOCAL_/.test(error.message)) return localErrorMessage(error);
-  return error instanceof Error ? error.message : fallback;
+  const rendered = localizeMessage(error);
+  return rendered === t('error.unknown') ? fallback : rendered;
 }
 function markDirty(id: string) {
   dirty.add(id); formRevision++;
-  message(saving ? '正在处理；有未保存的修改' : '未保存的修改');
+  message(() => (saving ? t('m_18f9c48b9e08') : t('m_5e531ad82437')));
   if (id === 'api-key') { dirty.add('endpoint'); dirty.add('local-http'); }
   if (id === 'profile' || id === 'thinking-effort') { dirty.add('profile'); dirty.add('thinking-effort'); }
   if (id === 'translation-scope' || id === 'prefetch') { dirty.add('translation-scope'); dirty.add('prefetch'); }
@@ -186,153 +228,160 @@ function selectedProfile(): Settings['profile'] {
     return brand === 'unknown' ? 'chat-completions' : brand;
   } catch { return settings.profile; }
 }
-function showModels() { modelCombo.setOptions(models.map(model => ({ value: model, label: model }))); }
+function syncPerformance() {
+  performanceUI?.sync({ ...settings, backend: select('backend').value === 'local' ? 'local' : 'online',
+    endpoint: input('endpoint').value.trim(), model: input('model').value.trim() }, localModels, models);
+}
+function showModels() { modelCombo.setOptions(models.map(model => ({ value: model, label: model }))); syncPerformance(); }
+function renderServiceHistory() {
+  const seen = new Set(serviceAddresses.map(row => row.endpoint));
+  endpointCombo.setOptions([
+    ...serviceAddresses.map(row => ({ value: row.endpoint, label: row.endpoint, renderLabel: () => t('m_da7a1fc7ad1f', { p0: row.endpoint, p1: formatDate(row.verifiedAt) }) })),
+    ...SERVICE_PRESETS.filter(row => !seen.has(row.endpoint)).map(row => ({ value: row.endpoint, label: `${row.name} · ${row.endpoint}`, aliases: [row.name] })),
+  ]);
+}
 async function readServiceHistory() {
   const response = await browser.runtime.sendMessage({ type: 'service-history' });
   if (!response?.ok) return;
   serviceAddresses = response.addresses ?? [];
-  const seen = new Set(serviceAddresses.map(row => row.endpoint));
-  endpointCombo.setOptions([
-    ...serviceAddresses.map(row => ({ value: row.endpoint, label: `${row.endpoint} · 已验证 ${new Date(row.verifiedAt).toLocaleDateString()}` })),
-    ...SERVICE_PRESETS.filter(row => !seen.has(row.endpoint)).map(row => ({ value: row.endpoint, label: `${row.name} · ${row.endpoint}`, aliases: [row.name] })),
-  ]);
+  renderServiceHistory();
 }
-function invalidateTest() { testRevision++; message('', false, 'test-result'); }
-function clearModels() { catalogRevision++; models = []; showModels(); message('', false, 'models-result'); input('models-cache').textContent = ''; }
+function invalidateTest() { testRevision++; message(() => (''), false, 'test-result'); }
+function clearModels() { catalogRevision++; models = []; showModels(); message(() => (''), false, 'models-result'); input('models-cache').textContent = ''; }
 async function readCatalog() {
   const revision = ++catalogRevision;
-  if (select('backend').value === 'local') return;
+  if (!input('endpoint').value.trim()) return;
   try {
-    const response = await browser.runtime.sendMessage({ type: 'model-catalog', settings: readForm(false, true), apiKey: input('api-key').value });
+    const response = await browser.runtime.sendMessage({ type: 'model-catalog', settings: readForm(false, true, { backend: 'online' }), apiKey: input('api-key').value });
     if (revision !== catalogRevision) return;
-    if (!response?.ok) throw new Error(response?.error || '缓存读取失败');
+    if (!response?.ok) throw new Error(response?.error || t('m_4e03197f1202'));
     models = response.catalog?.models ?? []; showModels();
-    input('models-cache').textContent = response.catalog?.fetchedAt ? `缓存于 ${new Date(response.catalog.fetchedAt).toLocaleString()}` : '尚无缓存，可手动填写或获取模型';
-  } catch { if (revision === catalogRevision) input('models-cache').textContent = '当前服务暂无可用缓存'; }
+    bindLocalizedText(input('models-cache'), () => response.catalog?.fetchedAt ? t('m_3c17b769a83d', { p0: formatDate(response.catalog.fetchedAt) }) : t('m_cb57ba0ce5b2'));
+  } catch { if (revision === catalogRevision) bindLocalizedText(input('models-cache'), () => t('m_ed6e18c268fe')); }
 }
 function showThinking(profile: Settings['profile'], effort: Settings['thinkingEffort'], preserveInvalid = false) {
   const currentModel = input('model').value.trim() || settings.model;
   const capabilities = reasoningCapabilities({ profile, model: currentModel });
   const selectEl = select('thinking-effort');
-  selectEl.replaceChildren(...capabilities.efforts.map(value => new Option(!capabilities.verified && value === 'default' ? '服务默认（能力未知）' : thinkingLabels[value] ?? value, value)));
-  if (preserveInvalid && !capabilities.efforts.includes(effort)) { const previous = new Option(`${effort} · 不支持，请重新选择`, effort); previous.disabled = true; selectEl.append(previous); selectEl.value = effort; return; }
+  selectEl.replaceChildren(...capabilities.efforts.map(value => localizedOption(value, () => !capabilities.verified && value === 'default' ? t('m_02c99682f183') : thinkingLabels[value]?.() ?? value)));
+  if (preserveInvalid && !capabilities.efforts.includes(effort)) { const previous = localizedOption(effort, () => t('m_064844fefa8a', { p0: effort })); previous.disabled = true; selectEl.append(previous); selectEl.value = effort; return; }
   selectEl.value = capabilities.efforts.includes(effort) ? effort : capabilities.defaultEffort;
+}
+function localizedOption(value: string, render: () => string): HTMLOptionElement {
+  const option = new Option('', value); bindLocalizedText(option, render); return option;
 }
 function showSuperchatThinking(profile: Settings['profile'], effort: Settings['superChatThinkingEffort'] = 'inherit', preserveInvalid = false) {
   const currentModel = input('model').value.trim() || settings.model;
   const capabilities = reasoningCapabilities({ profile, model: currentModel });
   const selectEl = select('superchat-thinking');
-  selectEl.replaceChildren(new Option('跟随普通弹幕', 'inherit'), ...capabilities.efforts.map(value => new Option(thinkingLabels[value] ?? value, value)));
-  if (preserveInvalid && effort !== 'inherit' && !capabilities.efforts.includes(effort!)) { const previous = new Option(`${effort} · 不支持，请重新选择`, effort); previous.disabled = true; selectEl.append(previous); selectEl.value = effort!; return; }
+  selectEl.replaceChildren(localizedOption('inherit', () => t('m_99a19a8ee7f3')), ...capabilities.efforts.map(value => localizedOption(value, () => thinkingLabels[value]?.() ?? value)));
+  if (preserveInvalid && effort !== 'inherit' && !capabilities.efforts.includes(effort!)) { const previous = localizedOption(effort, () => t('m_064844fefa8a', { p0: effort })); previous.disabled = true; selectEl.append(previous); selectEl.value = effort!; return; }
   selectEl.value = effort === 'inherit' || capabilities.efforts.includes(effort) ? effort : 'inherit';
 }
 function showScope() {
-  const windowOnly = select('translation-scope').value === 'window';
+  const windowOnly = select('translation-scope').value !== 'all';
   const field = document.getElementById('prefetch-field')!;
   field.hidden = !windowOnly; field.style.display = windowOnly ? '' : 'none'; input('prefetch').disabled = !windowOnly;
+}
+function showLocalIdleUnload() {
+  input('local-idle-unload-minutes').disabled = !input('local-idle-unload-enabled').checked;
 }
 function showBilibiliTimeoutRetry() {
   for (const platform of ['bilibili', 'youtube', 'niconico']) {
     const enabled = input(platform + '-timeout-retry').checked;
     input(platform + '-timeout-retry-extra').disabled = !enabled;
     select(platform + '-timeout-retry-mode').disabled = !enabled;
+    document.getElementById(platform + '-retry-options')!.hidden = !enabled;
   }
 }
-function readForm(requireModel = true, connectionOnly = false): Settings {
+function readForm(requireModel = true, connectionOnly = false, test?: { backend: 'local' | 'online'; model?: string }): Settings {
   const value: Record<string, unknown> = { ...settings };
   for (const [id, key] of Object.entries(fields)) {
     const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement;
     value[key] = el.type === 'checkbox' ? (el as HTMLInputElement).checked : el.type === 'number' || id === 'live-buffer' ? Number(el.value) : el.value;
   }
+  if (test) { value.backend = test.backend; if (test.model !== undefined) value.model = test.model; }
   value.endpointInput = input('endpoint').value.trim();
-  value.targetLanguage = languageCombo.value();
-  try { value.localPerformance = value.backend === 'local' ? localPerformanceUI.read() : settings.localPerformance; }
+  value.targetLanguage = languageSelect.value();
+  try { value.localPerformance = value.backend === 'local' || hybridUI?.enabled() ? localPerformanceUI.read() : settings.localPerformance; }
   catch (error) {
     layout.reveal(input(Number(input('lp-microBatch').value) > Number(input('lp-batch').value) ? 'lp-microBatch' : 'lp-mode'));
     throw error;
   }
-  // The advanced controls already contain any migrated nested overrides.
+  value.endpointMode = 'auto';
+  value.protocolOverride = 'auto';
   value.connectionOverride = undefined;
-  const profileValue = select('profile').value;
-  if (profileValue === 'auto') value.reasoningProfileOverride = 'auto';
-  else {
-    value.profile = profileValue;
-    if (dirty.has('profile') || settings.reasoningProfileOverride !== undefined) value.reasoningProfileOverride = profileValue;
-  }
-  const localModelId = select('local-model').value.trim();
-  if (localModelId) value.localModelId = localModelId;
-  else if (dirty.has('local-model')) value.localModelId = '';
-  if (requireModel && String(value.backend) === 'local' && !localModelId && !settings.localModelId) { layout.reveal(select('local-model')); throw new Error('请先添加模型文件夹并手动选用模型'); }
-  if (requireModel && String(value.backend) !== 'local' && !String(value.model ?? '').trim()) { layout.reveal(input('model')); throw new Error('请先选择或填写模型'); }
+  value.reasoningProfileOverride = 'auto';
+  value.localModelId = settings.localModelId ?? '';
+  value.bilibiliHybrid = hybridUI?.read() ?? settings.bilibiliHybrid;
+  if (requireModel && String(value.backend) === 'local' && !value.localModelId) { layout.reveal(document.getElementById('local-model-manager')!); throw new UiError('modelManager.choose'); }
+  if (requireModel && hybridUI?.enabled() && !value.bilibiliOwnedRelease) { layout.reveal(input('bilibili-owned-release')); throw new Error('HYBRID_PLAN_REQUIRED'); }
+  if (requireModel && hybridUI?.enabled() && !value.localModelId) { layout.reveal(document.getElementById('local-model-manager')!); throw new UiError('modelManager.choose'); }
+  if (requireModel && hybridUI?.enabled() && !String(value.endpoint ?? '').trim()) { layout.reveal(input('endpoint')); throw new UiError('online.endpointRequired'); }
+  if (requireModel && hybridUI?.enabled() && !String(value.model ?? '').trim()) { layout.reveal(input('model')); throw new UiError('m_57904a95b74a'); }
+  if (String(value.backend) !== 'local' && !String(value.endpoint ?? '').trim() && (requireModel || connectionOnly)) { layout.reveal(input('endpoint')); throw new UiError('online.endpointRequired'); }
+  if (requireModel && String(value.backend) !== 'local' && !String(value.model ?? '').trim()) { layout.reveal(input('model')); throw new UiError('m_57904a95b74a'); }
   return normalizeSettings(connectionOnly ? { ...value, thinkingEffort: undefined, superChatThinkingEffort: 'inherit' } : value);
 }
 function busy(value: boolean) {
   saving = value;
-  layout.task('service', value, 'service', '连接操作进行中');
+  layout.task('service', value, 'service', () => t('m_766dffe4b5ea'));
   for (const id of ['save', 'get-models', 'test-model']) (document.getElementById(id) as HTMLButtonElement).disabled = value;
+  renderLocalActions();
 }
 function renderConnection() {
   const status = document.getElementById('connection-status')!;
   try {
     const backend = select('backend').value === 'local' ? 'local' : 'online';
     const endpoint = input('endpoint').value.trim();
-    const protocolOverride = select('protocol-override').value as Settings['protocolOverride'];
-    const endpointMode = select('endpoint-mode').value as Settings['endpointMode'];
-    const connection = resolveConnection({ endpoint, allowLocalHttp: input('local-http').checked, backend: 'online', protocolOverride, endpointMode });
+    if (backend === 'local' || !endpoint) { bindLocalizedText(status, () => t(backend === 'local' ? 'm_0ce1116c7473' : 'online.unconfigured')); status.className = 'subtle'; return; }
+    const connection = resolveConnection({ endpoint, allowLocalHttp: input('local-http').checked, backend: 'online', protocolOverride: 'auto', endpointMode: 'auto' });
     const display = connectionDisplay(connection);
-    const brand = profileLabels[display.brand] ?? '未知服务';
-    const source = display.protocolSource === 'auto' ? '自动识别：OpenAI 兼容（Chat Completions）' : '手动协议：Chat Completions';
-    const path = connection.requiresManualPath ? '自定义路径，模型列表地址需验证' : '标准路径可推导模型列表地址';
-    status.textContent = backend === 'local'
-      ? '本地 GPU · WebGPU · Super Chat 思考能力由模型聊天模板决定。在线配置已保留。'
-      : `${source} · 请求地址：${display.address} · 模型 ${input('model').value || '待选择'} · 思考设置 ${thinkingLabels[select('thinking-effort').value] ?? '待选择'}${connection.requiresManualPath ? ' · ' + path : ''}`;
+    const source = () => display.protocolSource === 'auto' ? t('m_dbf0ab0b0404') : t('m_3a170345d247');
+    const path = () => connection.requiresManualPath ? t('m_49482cbe1224') : t('m_6603a8e2e1aa');
+    bindLocalizedText(status, () => t('m_8c03a60a90b4', { p0: source(), p1: display.address, p2: input('model').value || t('m_04fbe1f84206'), p3: thinkingLabels[select('thinking-effort').value]?.() ?? t('m_04fbe1f84206'), p4: connection.requiresManualPath ? ' · ' + path() : '' }));
     status.className = 'subtle';
-  } catch (error) { status.textContent = errorMessage(error, '服务地址待检查'); status.className = 'status error'; }
+  } catch (error) { bindLocalizedText(status, () => errorMessage(error, t('m_b7b656b54bdf'))); status.className = 'status error'; }
 }
 function showBackend() {
+  layout.refreshServiceTitle();
   const local = select('backend').value === 'local';
-  for (const el of document.querySelectorAll<HTMLElement>('[data-backend]')) el.hidden = el.dataset.running !== 'true' && el.dataset.backend !== 'both' && el.dataset.backend !== (local ? 'local' : 'online');
-  input('concurrency').max = local ? '2147483647' : '64';
-  localPerformanceUI.setEnabled(local);
-  document.getElementById('save')!.textContent = local ? '保存本地后端' : '保存并授权服务';
-  input('api-key').placeholder = local ? '本地后端不会使用 Key；在线 Key 仍会保留' : '输入 Key；服务域名不变时可留空保留';
-  document.getElementById('local-support')!.textContent = LOCAL_SUPPORT;
+  const hybrid = input('bilibili-hybrid').checked;
+  syncPerformance();
+  for (const el of document.querySelectorAll<HTMLElement>('[data-backend]')) el.hidden = el.dataset.running !== 'true' && el.dataset.backend !== 'both' && !hybrid && el.dataset.backend !== (local ? 'local' : 'online');
+  localPerformanceUI.setEnabled(local || hybrid);
+  bindLocalizedText(document.getElementById('save')!, () => local && !hybrid ? t('m_89514494e648') : t('m_da84b511f856'));
+  bindLocalizedAttribute(input('api-key'), 'placeholder', () => local && !hybrid ? t('m_cc7cd771e3f0') : t('m_9a5bf1f8dda0'));
+  bindLocalizedText(document.getElementById('local-support')!, () => {
+    const rendered = localizeMessage(LOCAL_SUPPORT);
+    return rendered === t('error.unknown') ? LOCAL_SUPPORT : rendered;
+  });
   for (const id of ['endpoint', 'api-key', 'remember', 'local-http', 'profile', 'endpoint-mode', 'protocol-override', 'thinking-effort', 'superchat-thinking']) {
-    (document.getElementById(id) as HTMLInputElement | HTMLSelectElement).disabled = local;
+    (document.getElementById(id) as HTMLInputElement | HTMLSelectElement).disabled = local && !hybrid;
   }
-  modelCombo.setDisabled(local);
-  endpointCombo.setDisabled(local);
+  modelCombo.setDisabled(local && !hybrid);
+  endpointCombo.setDisabled(local && !hybrid);
   renderLocalActions();
   let sameOrigin = false;
   try { sameOrigin = endpointOrigin(input('endpoint').value, input('local-http').checked) === credentialState.origin; } catch { /* Invalid draft URL has no credential binding. */ }
-  input('key-state').textContent = local ? '本地推理不使用 API Key' : input('api-key').value ? '将使用当前填写的 Key'
-    : sameOrigin && credentialState.hasKey ? credentialState.remembered ? '已有 Key · 仅此浏览器保存' : '已有 Key · 本次会话' : '请为此服务填写 Key';
+  bindLocalizedText(input('key-state'), () => local && !hybrid ? t('m_be0a14b35dad') : input('api-key').value ? t('m_9b3ef63cf32e')
+    : sameOrigin && credentialState.hasKey ? credentialState.remembered ? t('m_f8e5db8c00aa') : t('m_a61235030c8d') : t('m_e8a94b2d86bf'));
   renderConnection();
 }
 function renderLocalModels() {
-  const modelSelect = select('local-model');
-  const selected = settings.localModelId ?? '';
-  modelSelect.replaceChildren(new Option('请选择模型', ''), ...localModels.map(model => {
-    const source = model.source ? `${model.source.directoryName}/${model.source.files[0]?.path ?? model.name}` : '旧副本';
-    const unavailable = !!model.availability && model.availability !== 'ready';
-    const option = new Option(`${model.name} · ${formatBytes(model.bytes)} · ${source}${unavailable ? ' · 暂不可用' : ''}`, model.id);
-    option.disabled = unavailable; return option;
-  }));
-  modelSelect.value = localModels.some(model => model.id === selected) ? selected : '';
-  renderLocalActions();
-  const model = localModels.find(item => item.id === modelSelect.value);
+  syncPerformance();
+  const model = localModels.find(item => item.id === settings.localModelId);
   const meta = document.getElementById('local-model-meta')!;
-  meta.textContent = model ? `${model.source ? `${model.source.directoryName}/${model.source.files[0]?.path ?? model.name}\n` : ''}${formatBytes(model.bytes)} · ${model.architecture} · ${model.quantization} · ${model.files.length} 个文件` : '';
-  if (model?.translationProfile) meta.textContent += model.translationProfile === 'seed-x'
-    ? ' · Seed-X 可能错译，请核对译文' : ' · TranslateGemma 需明确选择源语言和直播源语言';
-  meta.title = model ? `${model.files.join(', ')} · tokenizer ${model.tokenizer}${model.template ? ' · 聊天模板' : ''}` : '';
+  bindLocalizedText(meta, () => model?.translationProfile ? model.translationProfile === 'seed-x' ? t('m_d4a22c904a26') : t('m_3ad926cf8251') : '');
+  bindLocalizedAttribute(meta, 'title', () => model ? `${model.files.join(', ')} · tokenizer ${model.tokenizer}${model.template ? t('m_e3c9471f49fa') : ''}` : '');
   localPerformanceUI.setModel(model);
   localPerformanceUI.refresh();
-  renderVram();
+  renderLocalActions(); renderVram();
 }
 function renderVram() {
-  const target = document.getElementById('local-vram')!, model = localModels.find(model => model.id === select('local-model').value);
-  if (!model) { target.textContent = '预计显存占用：选择模型后显示'; return; }
+  const target = document.getElementById('local-vram')!, model = localModels.find(model => model.id === (settings.localModelId ?? ''));
+  bindLocalizedAttribute(target, 'title', () => model ? t('m_4ba53934bfc1') : '');
+  if (!model) { bindLocalizedText(target, () => t('m_c31184e9c25a')); return; }
   try {
     const draft = localPerformanceUI.read(), runtime = resolveLocalConfig(draft, model.id);
     const observed = localState?.model?.id === model.id && localState.runtime && localState.gpu ? {
@@ -342,30 +391,32 @@ function renderVram() {
       computeBytes: localState.gpu.computeBufferMiB === undefined ? undefined : localState.gpu.computeBufferMiB * 1048576,
     } : undefined;
     const value = estimateLocalMemory(model, runtime, observed);
-    const labels: Record<string,string> = {modelBytes:'权重',kvBytes:'统一 KV',computeBytes:'工作缓冲'};
-    const parts = Object.entries(labels).filter(([key]) => value[key as keyof typeof value] !== undefined).map(([key,label]) => `${label} ${formatBytes(value[key as 'modelBytes']!)}`);
-    target.textContent = `预计显存占用：${value.totalBytes === undefined ? '信息不足' : value.lowerBound ? '已知部分约 ' + formatBytes(value.totalBytes) + '（非总量）' : '约 ' + formatBytes(value.totalBytes)}\n${parts.join(' · ')}${value.missing.length ? '\n缺少：' + value.missing.map(key => labels[key] ?? key).join('、') : ''}\n${value.notes.includes('LOCAL_MEMORY_ARCHITECTURE_UNKNOWN') ? '此架构的 KV 暂无法估算。' : ''}估算不含浏览器与驱动开销，不代表可用显存。`;
-    target.title = '统一 KV 只按总上下文计算一次；已跟踪缓冲分配不等于物理显存。';
-    if (localState?.runtime && localState.model?.id === model.id && JSON.stringify(normalizeLocalConfig(localState.requested)) !== JSON.stringify(draft)) target.textContent += '\n参数待应用，需重新加载。';
-  } catch { target.textContent = '预计显存占用：请先修正本地性能参数'; }
+    const labels: Record<string, () => string> = { modelBytes: () => t('m_db18831a0457'), kvBytes: () => t('m_19741f1b2b94'), computeBytes: () => t('m_c1a5b7e932eb') };
+    const parts = () => Object.entries(labels).filter(([key]) => value[key as keyof typeof value] !== undefined).map(([key, render]) => `${render()} ${formatBytes(value[key as 'modelBytes']!)}`);
+    const parametersDiffer = !!localState?.runtime && localState.model?.id === model.id && JSON.stringify(normalizeLocalConfig(localState.requested)) !== JSON.stringify(draft);
+    bindLocalizedText(target, () => t('m_dbf3f901407c', {
+      p0: value.totalBytes === undefined ? t('m_0363eaf0c85e') : value.lowerBound ? t('m_6ba4b8c07bdf') + formatBytes(value.totalBytes) + t('m_41ce230bffd0') : t('m_5890c084b931') + formatBytes(value.totalBytes),
+      p1: parts().join(' · '), p2: value.missing.length ? t('m_463071aaadb9') + value.missing.map(key => labels[key]?.() ?? key).join('、') : '',
+      p3: value.notes.includes('LOCAL_MEMORY_ARCHITECTURE_UNKNOWN') ? t('m_b175a22ecb11') : '',
+    }) + (parametersDiffer ? t('m_20a8d4c5f3ae') : ''));
+  } catch { bindLocalizedText(target, () => t('m_b1de58aca38a')); }
 }
 function renderLocalLanguageIssues(): string[] {
-  const modelId = select('local-model').value;
+  const modelId = (settings.localModelId ?? '');
   const model = localState?.model?.id === modelId ? localState.model : localModels.find(model => model.id === modelId);
-  const profile = select('backend').value === 'local' ? model?.translationProfile : undefined;
+  const profile = select('backend').value === 'local' || hybridUI?.enabled() ? model?.translationProfile : undefined;
   const issues: string[] = [];
-  for (const [id, label] of [['source-language', '观看设置的源语言'], ['live-source-language', '直播聊天的直播源语言']] as const) {
+  for (const [id, label] of [['source-language', t('m_cfe7e8b4befd')], ['live-source-language', t('m_e1f1e6d62cff')]] as const) {
     const control = select(id), hintId = id + '-local-hint';
     let hint = document.getElementById(hintId);
     if (!hint) {
       hint = document.createElement('span'); hint.id = hintId; hint.className = 'status error';
       control.after(hint); control.setAttribute('aria-describedby', hintId);
     }
-    const code = translationLanguageIssue(profile, control.value, languageCombo.value());
-    const text = code === 'LOCAL_TRANSLATION_SOURCE_REQUIRED' ? 'TranslateGemma 不支持自动判断，请选择实际源语言。'
-      : code ? translationLanguageMessage(code)! : '';
-    hint.textContent = text; hint.hidden = !code;
-    if (code) issues.push(code === 'LOCAL_TRANSLATION_SOURCE_REQUIRED' ? `${label}需改为实际语言` : `${label}或目标语言不受支持`);
+    const code = translationLanguageIssue(profile, control.value, languageSelect.value());
+    bindLocalizedText(hint, () => code === 'LOCAL_TRANSLATION_SOURCE_REQUIRED' ? t('m_f137d83307ad')
+      : code ? localizeMessage(translationLanguageMessage(code)) : ''); hint.hidden = !code;
+    if (code) issues.push(code === 'LOCAL_TRANSLATION_SOURCE_REQUIRED' ? t('m_7e15b0e92cd5', { p0: label }) : t('m_174e04797313', { p0: label }));
   }
   return issues;
 }
@@ -380,186 +431,205 @@ function renderLocalState(state: LocalState | undefined) {
     }
   }
   renderLocalActions();
-  const languageIssues = renderLocalLanguageIssues();
+  const languageIssues = () => renderLocalLanguageIssues();
   const target = document.getElementById('local-state')!;
   const summary = document.getElementById('local-state-summary')!;
-  if (!state) { target.textContent = '本地运行状态未读取'; summary.textContent = target.textContent; return; }
+  if (!state) { bindLocalizedText(target, () => t('m_51c888a1d8a5')); bindLocalizedText(summary, () => t('m_51c888a1d8a5')); return; }
   const indexedModel = state.model ? localModels.find(model => model.id === state.model!.id) : undefined;
-  const modelName = state.model ? state.model.name || indexedModel?.name || '所选模型' : undefined;
+  const modelName = state.model ? state.model.name || indexedModel?.name : undefined;
   const modelBytes = state.model?.bytes ?? indexedModel?.bytes;
-  const verificationProgress = state.stage === 'fingerprinting' && state.verificationProgress
-    ? `${formatBytes(state.verificationProgress.bytesProcessed)} / ${formatBytes(state.verificationProgress.totalBytes)}` : '';
-  summary.textContent = `${localPhaseLabels[state.phase]}${modelName ? ' · ' + modelName : ''}${verificationProgress ? ' · 校验 ' + verificationProgress : ''}${localRuntime?.paused ? ' · 自动加载已暂停，手动加载可恢复' : ''}${state.error || localRuntime?.error ? ' · ' + localErrorMessage(new Error(state.error ?? localRuntime?.error)) : ''}`;
+  const showLanguageIssues = ['ready', 'generating'].includes(state.phase) && state.model?.id === (settings.localModelId ?? '');
+  bindLocalizedText(summary, () => `${localPhaseLabels[state.phase]()}${state.model ? ' · ' + (modelName || t('m_75fdd01c2979')) : ''}${state.stage && ['loading', 'warming'].includes(state.phase) ? ' · ' + (localStageLabels[state.stage]?.() ?? state.stage) : ''}${localRuntime?.paused ? t('m_3009e3dc51c9') : ''}${state.error || localRuntime?.error ? ' · ' + localErrorMessage(new Error(state.error ?? localRuntime?.error)) : ''}${showLanguageIssues && languageIssues().length ? t('m_57aab11ece24') + languageIssues().join('；') : ''}`);
   summary.className = state.phase === 'error' ? 'status error span' : 'status span';
-  if (languageIssues.length && ['ready', 'generating'].includes(state.phase) && state.model?.id === select('local-model').value) {
-    summary.textContent += ' · 翻译设置待完善：' + languageIssues.join('；');
+  if (showLanguageIssues && languageIssues().length) {
     summary.className = 'status error span';
   }
-  layout.task('model', localLoadPending || ['loading', 'warming'].includes(state.phase), 'service', '模型加载中');
-  const parts = [`${localPhaseLabels[state.phase]} · ${state.backend}`];
+  layout.task('model', localLoadPending || ['loading', 'warming'].includes(state.phase), 'service', () => t('m_e6ef0409f9df'));
+  bindLocalizedText(target, () => {
+  const parts = [`${localPhaseLabels[state.phase]()} · ${state.backend}`];
   if (state.gpu) {
     const gpu = state.gpu;
-    parts.push(`GPU：${[gpu.vendor, gpu.architecture].filter(Boolean).join(' ') || '设备信息不可用'}`);
-    parts.push(gpu.verified ? `GPU 已加载 ${gpu.offloadedLayers}/${gpu.totalLayers} 层` : 'GPU 权重加载待确认');
-    if (gpu.modelBufferMiB !== undefined) parts.push(`GPU 模型缓冲 ${gpu.modelBufferMiB.toFixed(1)} MiB`);
+    parts.push(`GPU：${[gpu.vendor, gpu.architecture].filter(Boolean).join(' ') || t('m_79c8fcb1eb4e')}`);
+    parts.push(gpu.verified ? t('m_3bf710cbd7d8', { p0: gpu.offloadedLayers, p1: gpu.totalLayers }) : t('m_9bd2a670dbe1'));
+    if (gpu.modelBufferMiB !== undefined) parts.push(t('m_17f862702df7', { p0: formatNumber(Number(gpu.modelBufferMiB.toFixed(1))) }));
   }
-  if (state.model) parts.push(`模型：${modelName}${modelBytes !== undefined ? ' · ' + formatBytes(modelBytes) : ''}`);
-  if (state.stage) parts.push(`${localStageLabels[state.stage] ?? state.stage}${verificationProgress ? ` ${verificationProgress}` : ''}`);
-  if (state.loadMs !== undefined) parts.push(`加载 ${Math.round(state.loadMs)} ms`);
-  parts.push(`原生槽位 ${state.runtime?.parallel ?? '未加载'} · 活跃 ${state.active} · 应用队列 ${state.queued}/128 · 完成 ${state.completed} · 失败 ${state.failed} · 取消 ${state.cancelled}`);
-  if (state.runtime) parts.push(`应用请求上限 ${settings.concurrency} · 实际并发上限 ${Math.min(settings.concurrency, state.runtime.parallel)}（可在请求参数调整）`);
-  if (state.lastMetrics) parts.push(`最近推理：本地排队 ${Math.round(state.lastMetrics.queueMs)} ms · 推理 ${Math.round(state.lastMetrics.inferenceMs)} ms（不含直播等待）`);
-  if (state.runtime) parts.push(`统一上下文 ${state.runtime.contextTokens} · Batch ${state.runtime.batch}/${state.runtime.microBatch} · CPU 线程 ${state.runtime.cpuThreadsActual ?? '未知'} · FA ${state.gpu?.flashAttentionObserved ? '已观察内核' : state.gpu?.flashAttention === false ? '关闭' : '未确认'}`);
-  if (state.warmupMs !== undefined) parts.push(`预热 ${Math.round(state.warmupMs)} ms`);
-  if (state.gpu?.allocatedBytes !== undefined) parts.push(`已跟踪 GPU 缓冲 ${formatBytes(state.gpu.allocatedBytes)}（非物理显存）`);
-  if (state.fallbackReasons?.length) parts.push(`降级：${state.fallbackReasons.join('；')}`);
-  if (state.warnings?.length) parts.push(`风险提示：${state.warnings.map(code => code === 'LOCAL_CONTEXT_ABOVE_TRAINING_LIMIT' ? '所选上下文超过训练长度，效果与稳定性需自测' : code).join('；')}`);
-  if (state.error) parts.push(`错误：${localErrorMessage(new Error(state.error))}`);
-  target.textContent = parts.join(' · '); target.className = state.phase === 'error' ? 'status error' : 'status';
+  if (state.model) parts.push(t('m_5af0be67704b', { p0: modelName ?? t('m_75fdd01c2979'), p1: modelBytes !== undefined ? ' · ' + formatBytes(modelBytes) : '' }));
+  if (state.stage) parts.push(`${localStageLabels[state.stage]?.() ?? state.stage}${state.currentFile ? ` · ${state.currentFile}` : ''}`);
+  if (state.loadTimings) parts.push(loadTimingsText(state.loadTimings));
+  if (state.loadMs !== undefined) parts.push(t('m_6a375f6dd2bb', { p0: Math.round(state.loadMs) }));
+  parts.push(t('m_9446171b0985', { p0: state.runtime?.parallel ?? t('m_43523cac435e'), p1: state.active, p2: state.queued, p3: state.completed, p4: state.failed, p5: state.cancelled }));
+  if (state.runtime) parts.push(t('m_478ef2c9071a', { p0: settings.localConcurrency, p1: Math.min(settings.localConcurrency, state.runtime.parallel) }));
+  if (state.lastMetrics) parts.push(t('m_072a4558f606', { p0: Math.round(state.lastMetrics.queueMs), p1: Math.round(state.lastMetrics.inferenceMs) }));
+  if (state.runtime) parts.push(t('m_b20f59593374', { p0: state.runtime.contextTokens, p1: state.runtime.batch, p2: state.runtime.microBatch, p3: state.runtime.cpuThreadsActual ?? t('m_4d8c1c5b4283'), p4: state.gpu?.flashAttentionObserved ? t('m_37c1450d6855') : state.gpu?.flashAttention === false ? t('m_3fd47edce45b') : t('m_c098e854e60b') }));
+  if (state.warmupMs !== undefined) parts.push(t('m_31717999fb2e', { p0: Math.round(state.warmupMs) }));
+  if (state.gpu?.allocatedBytes !== undefined) parts.push(t('m_8df4bdfeb0b0', { p0: formatBytes(state.gpu.allocatedBytes) }));
+  if (state.fallbackReasons?.length) parts.push(t('m_a2b27c13d253', { p0: state.fallbackReasons.join('；') }));
+  if (state.warnings?.length) parts.push(t('m_1b6094b97912', { p0: state.warnings.map(code => code === 'LOCAL_CONTEXT_ABOVE_TRAINING_LIMIT' ? t('m_94963f59267a') : code).join('；') }));
+  if (state.error) parts.push(t('m_063abdaa463d', { p0: localErrorMessage(new Error(state.error)) }));
+  return parts.join(' · ');
+  }); target.className = state.phase === 'error' ? 'status error' : 'status';
   renderVram();
 }
+function modelActionsBusy() {
+  return localDeleting || selectionSaving || saving || localLoadPending || sourceRegistrationPending || directoryScanBusy || directoryRequestPending || onlinePerformanceActive || localPerformanceUI.active() || ['loading', 'warming', 'generating'].includes(localState?.phase ?? '');
+}
 function renderLocalActions() {
-  const benchmarkBusy = localPerformanceUI.active(), state = localState;
-  const modelBusy = localDeleting || selectionSaving;
-  const local = select('backend').value === 'local';
-  select('local-model').disabled = !local || !localModels.length || modelBusy;
-  (document.getElementById('local-folder-add') as HTMLButtonElement).disabled = modelBusy;
-  (document.getElementById('local-file-add') as HTMLButtonElement).disabled = modelBusy;
+  const benchmarkBusy = localPerformanceUI.active() || onlinePerformanceActive, state = localState;
+  const blocked = modelActionsBusy();
+  localPerformanceUI.setBlocked(blocked);
+  for (const id of ['save', 'get-models', 'test-model']) (document.getElementById(id) as HTMLButtonElement).disabled = saving || localDeleting || selectionSaving || localLoadPending || sourceRegistrationPending || id !== 'save' && benchmarkBusy;
+  (document.getElementById('local-folder-add') as HTMLButtonElement).disabled = blocked;
+  (document.getElementById('local-file-add') as HTMLButtonElement).disabled = blocked;
   const stop = document.getElementById('local-stop') as HTMLButtonElement;
-  stop.textContent = localLoadPending || ['loading', 'warming'].includes(state?.phase ?? '') ? '取消加载' : '卸载模型';
-  stop.disabled = localDeleting || benchmarkBusy || !localLoadPending && (!state || state.phase === 'idle');
-  const selected = select('local-model').value;
-  const model = localModels.find(model => model.id === selected);
-  (document.getElementById('local-load') as HTMLButtonElement).disabled = modelBusy || benchmarkBusy || localLoadPending || !selected || !!model?.availability && model.availability !== 'ready' || ['loading', 'warming', 'generating'].includes(state?.phase ?? '');
-  const deleteButton = document.getElementById('local-delete') as HTMLButtonElement;
-  deleteButton.hidden = false;
-  deleteButton.textContent = model?.source ? '移除模型' : '删除旧副本';
-  deleteButton.title = deleteButton.textContent; deleteButton.setAttribute('aria-label', deleteButton.textContent);
-  deleteButton.disabled = !local || modelBusy || saving || benchmarkBusy || !selected;
-  (document.getElementById('local-delete-accept') as HTMLButtonElement).disabled = modelBusy || saving || benchmarkBusy || !deleteCandidate;
-  (document.getElementById('local-delete-dismiss') as HTMLButtonElement).disabled = localDeleting;
+  bindLocalizedText(stop, () => localLoadPending || ['loading', 'warming'].includes(state?.phase ?? '') ? t('m_47402380923a') : t('m_6d54df246d5e'));
+  stop.disabled = localDeleting || benchmarkBusy || sourceRegistrationPending || !localLoadPending && (!state || state.phase === 'idle');
+  directoryUI.render(localDirectories, sourceProgress ?? directoryScan, directoryScanBusy || directoryRequestPending || sourceRegistrationPending, localModels, {
+    selectedId: settings.localModelId, loadingId: localLoadPending ? loadingModelId : ['loading', 'warming'].includes(state?.phase ?? '') ? state?.model?.id : undefined,
+    loadedId: ['ready', 'generating'].includes(state?.phase ?? '') ? state?.model?.id : undefined, busy: blocked,
+  });
 }
-function dismissModelDelete() {
-  if (localDeleting) return;
-  deleteCandidate = undefined; document.getElementById('local-delete-confirm')!.hidden = true;
-  renderLocalActions();
+function focusModelRow(id?: string) {
+  const row = [...document.querySelectorAll<HTMLElement>('[data-model-id]')].find(row => row.dataset.modelId === id);
+  (row?.querySelector<HTMLButtonElement>('[data-model-action="remove"]') ?? document.getElementById('local-folder-add')!).focus();
 }
-async function deleteSelectedModel() {
-  const candidate = deleteCandidate;
-  if (!candidate || localDeleting || selectionSaving || saving || localPerformanceUI.active()) return;
+async function removeModel(modelId: string) {
+  const index = localModels.findIndex(model => model.id === modelId);
+  const candidate = localModels[index];
+  if (!candidate || modelActionsBusy()) return;
+  const adjacentId = (localModels[index + 1] ?? localModels[index - 1])?.id;
+  let removed = false;
   localDeleting = true; localLoadPending = false; ++localCommandRevision;
-  layout.task('delete-model', true, 'service', '正在删除模型'); renderLocalActions();
-  message('正在删除…', false, 'local-result');
+  layout.task('delete-model', true, 'service', () => t('m_24cddfdc575b')); renderLocalActions();
+  message(() => (t('m_4fd4f40094d4')), false, 'local-result');
   try {
     const response = await browser.runtime.sendMessage({ type: 'local-control', control: { action: 'delete', modelId: candidate.id } });
-    if (!response?.ok) throw new Error(response?.error || '删除失败，请重试');
+    if (!response?.ok) throw new Error(response?.error || t('m_2026b0d30e91'));
     const selectedId = typeof response.settings?.localModelId === 'string' ? response.settings.localModelId : '';
     localModels = response.models ?? []; settings.localModelId = selectedId;
-    dirty.delete('local-model'); select('local-model').value = selectedId;
+    if (hybridUI?.enabled()) void hybridUI.refresh();
     localRuntime = response.localRuntime ?? localRuntime; localLoadPending = false;
     renderLocalModels(); renderLocalState(response.state);
-    deleteCandidate = undefined; document.getElementById('local-delete-confirm')!.hidden = true;
-    message(candidate.source ? `已移除 ${candidate.name} 的登记，原文件未删除` : `已删除 ${candidate.name} 的扩展内副本`, false, 'local-result');
-    message(dirty.size ? '模型列表已更新；其他修改未保存' : '模型列表已更新');
-  } catch (error) { message(localErrorMessage(error), true, 'local-result'); }
+    removed = true;
+    message(() => (candidate.source ? t('m_f4bb8ec46ebc', { p0: candidate.name }) : t('m_7a55bf017f15', { p0: candidate.name })), false, 'local-result');
+    message(() => (dirty.size ? t('m_5089f219e5be') : t('m_5f09e4beb618')));
+  } catch (error) { message(() => (localErrorMessage(error)), true, 'local-result'); }
   finally {
     localDeleting = false; layout.task('delete-model', false); await refreshLocalState(); renderLocalActions();
-    if (!deleteCandidate) (localModels.length ? select('local-model') : document.getElementById('local-folder-add')!).focus();
+    focusModelRow(removed ? adjacentId : candidate.id);
   }
 }
 function scheduleLocalPoll() {
   clearTimeout(localPollTimer);
-  if (directoryScanBusy || directoryRequestPending || localLoadPending || localState && ['loading', 'warming', 'generating'].includes(localState.phase)) localPollTimer = setTimeout(() => { void refreshLocalState(); }, 350);
+  if (directoryScanBusy || directoryRequestPending || sourceRegistrationPending || localLoadPending || localState && ['loading', 'warming', 'generating'].includes(localState.phase)) localPollTimer = setTimeout(() => { void refreshLocalState(); }, 350);
 }
 async function refreshLocalState() {
   if (localPollInFlight) return;
   localPollInFlight = true;
   try {
     const response = await browser.runtime.sendMessage({ type: 'local-control', control: { action: 'list' } });
-    if (!response?.ok) throw new Error(response?.error || '本地状态读取失败');
+    if (!response?.ok) throw new Error(response?.error || t('m_803c822c88ef'));
     localModels = Array.isArray(response.models) ? response.models : [];
     localDirectories = response.directories ?? [];
     directoryScan = response.scan; directoryScanBusy = response.scanBusy === true;
-    directoryUI.render(localDirectories, directoryScan, directoryScanBusy || directoryRequestPending, localModels);
+    await sourcePicker.refreshHandles(localDirectories, localModels);
     localRuntime = response.localRuntime ?? localRuntime;
     renderLocalModels(); renderLocalState(response.state);
   } catch (error) {
     const target = document.getElementById('local-state')!;
-    target.textContent = localErrorMessage(error, '本地状态暂时不可用'); target.className = 'status error';
+    bindLocalizedText(target, () => localErrorMessage(error, t('m_7c9eeafe4a93'))); target.className = 'status error';
   } finally { localPollInFlight = false; scheduleLocalPoll(); }
 }
 async function localCommand(control: { action: 'load' | 'cancel' | 'unload'; modelId?: string }) {
   const result = document.getElementById('local-result')!;
   const revision = ++localCommandRevision;
   localLoadPending = control.action === 'load';
-  result.textContent = localLoadPending ? '正在加载选中模型…' : '正在处理…';
+  bindLocalizedText(result, () => localLoadPending ? t('m_d89c9fbcf9ee') : t('m_574ec7517de1'));
   renderLocalState(localState); scheduleLocalPoll();
   try {
     const response = await browser.runtime.sendMessage({ type: 'local-control', control: control.action === 'load' ? { ...control, config: localPerformanceUI.read() } : control });
     if (revision !== localCommandRevision) return;
-    if (!response?.ok) throw new Error(response?.error || '本地操作失败');
+    if (!response?.ok) throw new Error(response?.error || t('m_f98ae5bf0d8c'));
     if (response.models) localModels = response.models;
     renderLocalModels(); renderLocalState(response.state);
-    result.textContent = control.action === 'load' ? '本地模型加载完成' : control.action === 'unload' ? '本地模型已卸载' : '本地操作已取消'; result.className = 'status';
-  } catch (error) { if (revision === localCommandRevision) { result.textContent = localErrorMessage(error); result.className = 'status error'; } }
+    bindLocalizedText(result, () => control.action === 'load' ? t('m_6e89c062fca7') : control.action === 'unload' ? t('m_a643cbd58dab') : t('m_b9f6d5862a96')); result.className = 'status';
+  } catch (error) { if (revision === localCommandRevision) { bindLocalizedText(result, () => localErrorMessage(error)); result.className = 'status error'; } }
   finally { if (revision === localCommandRevision) localLoadPending = false; await refreshLocalState(); }
 }
-async function directoryAction(action: DirectoryAction, directoryId?: string) {
-  if (action === 'remove-model') { requestModelRemoval(directoryId ?? ''); return; }
+async function directoryAction(action: DirectoryAction, id?: string) {
+  if (action === 'cancel' && sourceRegistrationPending) { await sourcePicker.cancel(); return; }
+  if (action !== 'cancel' && modelActionsBusy()) return;
+  if (action === 'load-model') { await loadModel(id ?? ''); return; }
+  if (action === 'remove-model') { await removeModel(id ?? ''); return; }
   if (action === 'authorize' || action === 'authorize-file') {
-    try { const reply = await browser.runtime.sendMessage({ type: 'open-model-folders', ...(action === 'authorize-file' ? { files: true, modelId: directoryId } : { directoryId }) }); if (!reply?.ok) throw new Error(reply?.error); }
-    catch { message('无法打开文件夹授权窗口，请重试', true, 'local-result'); }
+    await sourcePicker.choose(action === 'authorize' ? 'directory' : 'files', id);
     return;
   }
-  if (action === 'scan' && directoryRequestPending) return;
-  if (action === 'scan') { directoryRequestPending = true; scheduleLocalPoll(); }
+  if (action === 'scan') { sourceProgress = undefined; directoryRequestPending = true; scheduleLocalPoll(); renderLocalActions(); }
   try {
-    const reply = await browser.runtime.sendMessage({ type: 'local-control', control: { action: `directory-${action}`, ...(directoryId ? { directoryId } : {}) } });
+    const reply = await browser.runtime.sendMessage({ type: 'local-control', control: { action: `directory-${action}`, ...(id ? { directoryId: id } : {}) } });
     if (!reply?.ok) throw new Error(reply?.error ?? 'LOCAL_DIRECTORY_SCAN_FAILED');
-    if (reply.settings) settings.localModelId = reply.settings.localModelId ?? '';
-    if (reply.fileIssues?.length) message(reply.fileIssues.map((issue: { path: string; error: string }) => `${issue.path}：${directoryErrorMessage(issue.error)}`).join('\n'), true, 'local-result');
-  } catch (error) { message(localErrorMessage(error), true, 'local-result'); }
+    if (reply.settings) {
+      const previous = settings.localModelId;
+      settings.localModelId = reply.settings.localModelId ?? '';
+      if (hybridUI?.enabled() && previous !== settings.localModelId) void hybridUI.refresh();
+    }
+    if (reply.fileIssues?.length) message(() => reply.fileIssues.map((issue: { path: string; error: string }) => `${issue.path}: ${localizeMessage(directoryErrorMessage(issue.error))}`).join('\n'), true, 'local-result');
+  } catch (error) { message(() => localErrorMessage(error), true, 'local-result'); }
   finally { if (action === 'scan') directoryRequestPending = false; await refreshLocalState(); }
 }
-async function persistModelSelection(modelId: string) {
-  dismissModelDelete();
-  const revision = ++selectionRevision, previous = settings.localModelId ?? '';
-  selectionSaving = true; dirty.add('local-model'); renderLocalActions();
+async function loadModel(modelId: string) {
+  const model = localModels.find(item => item.id === modelId);
+  if (modelActionsBusy() || !model || model.availability && model.availability !== 'ready') return;
+  let config;
+  try { config = localPerformanceUI.read(); }
+  catch (error) { message(() => localErrorMessage(error), true, 'local-result'); return; }
+  invalidateTest();
+  const revision = ++localCommandRevision;
+  localLoadPending = true; selectionSaving = true; loadingModelId = modelId;
+  message(() => t('m_d89c9fbcf9ee'), false, 'local-result');
+  renderLocalState(localState); scheduleLocalPoll();
   try {
-    const reply = await browser.runtime.sendMessage({ type: 'select-local-model', modelId });
-    if (revision !== selectionRevision) return;
-    if (!reply?.ok) throw new Error(reply?.error || '模型选择保存失败');
-    // Only this field is committed; all other form drafts stay untouched.
-    settings.localModelId = modelId; dirty.delete('local-model'); select('local-model').value = modelId;
-    localRuntime = reply.localRuntime ?? localRuntime;
-    message(dirty.size ? '模型选择已保存；其他修改尚未保存' : '模型选择已保存');
-  } catch (error) { if (revision === selectionRevision) { select('local-model').value = previous; dirty.delete('local-model'); } throw error; }
-  finally { if (revision === selectionRevision) { selectionSaving = false; renderLocalModels(); renderLocalState(localState); } }
+    const reply = await browser.runtime.sendMessage({ type: 'select-local-model', modelId, load: true, config });
+    // A load can fail or be cancelled after the choice was saved.
+    if (reply?.settings) settings.localModelId = reply.settings.localModelId ?? '';
+    if (hybridUI?.enabled()) void hybridUI.refresh();
+    if (revision !== localCommandRevision) return;
+    localRuntime = reply?.localRuntime ?? localRuntime;
+    if (reply?.state) renderLocalState(reply.state);
+    if (!reply?.ok) throw new Error(reply?.error || t('m_f98ae5bf0d8c'));
+    message(() => t('m_6e89c062fca7'), false, 'local-result');
+    message(() => dirty.size ? t('m_afbdd6b65d43') : t('m_cc8aa89f6c55'));
+  } catch (error) { if (revision === localCommandRevision) message(() => localErrorMessage(error), true, 'local-result'); }
+  finally {
+    selectionSaving = false;
+    if (revision === localCommandRevision) { localLoadPending = false; loadingModelId = ''; }
+    await refreshLocalState(); renderLocalModels(); renderLocalState(localState);
+  }
 }
 function fill(response: any) {
-  if (!response?.ok) throw new Error(response?.error || '无法读取配置');
-  input('online-budget-status').textContent = onlineBudgetText(response.onlineBudget);
+  if (!response?.ok) throw new Error(response?.error || t('m_b3a4c2d4da9c'));
+  bindLocalizedText(input('online-budget-status'), () => onlineBudgetText(response.onlineBudget));
   const previousDestination = snapshot(destinationFields);
   const previousTest = snapshot(testFields);
   settings = normalizeSettings(response.settings, { stored: true });
-  credentialState = { origin: endpointOrigin(settings.endpoint, settings.allowLocalHttp), hasKey: response.hasOnlineKey ?? (settings.backend !== 'local' && response.hasKey), remembered: response.remembered === true };
+  credentialState = { origin: settings.endpoint ? endpointOrigin(settings.endpoint, settings.allowLocalHttp) : undefined, hasKey: response.hasOnlineKey ?? (settings.backend !== 'local' && response.hasKey), remembered: response.remembered === true };
   if (!dirty.has('local-performance')) localPerformanceUI.fill(settings.localPerformance);
   for (const [id, key] of Object.entries(fields)) {
     if (dirty.has(id)) continue;
     const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement;
     if (id === 'endpoint') el.value = String(settings.endpointInput ?? settings[key]);
-    else if (id === 'target-language') languageCombo.setValue(settings.targetLanguage);
+    else if (id === 'target-language') languageSelect.setValue(settings.targetLanguage);
     else if (el.type === 'checkbox') (el as HTMLInputElement).checked = settings[key] === true;
     else el.value = String(settings[key] ?? '');
   }
-  if (!dirty.has('profile')) select('profile').value = settings.reasoningProfileOverride ?? settings.profile;
-  if (!dirty.has('endpoint-mode')) select('endpoint-mode').value = settings.connectionOverride?.endpointMode ?? settings.endpointMode ?? 'auto';
-  if (!dirty.has('protocol-override')) select('protocol-override').value = settings.connectionOverride?.protocol ?? settings.protocolOverride ?? 'auto';
+  select('profile').value = 'auto';
+  select('endpoint-mode').value = 'auto';
+  select('protocol-override').value = 'auto';
   if (!dirty.has('superchat-thinking')) select('superchat-thinking').value = settings.superChatThinkingEffort ?? 'inherit';
-  if (!dirty.has('local-model')) select('local-model').value = settings.localModelId ?? '';
-  if (!dirty.has('thinking-effort')) showThinking(selectedProfile(), settings.thinkingEffort, true);
-  showSuperchatThinking(selectedProfile(), dirty.has('superchat-thinking') ? select('superchat-thinking').value as Settings['superChatThinkingEffort'] : settings.superChatThinkingEffort ?? 'inherit', true);
-  showScope(); showBilibiliTimeoutRetry(); showBackend(); renderLocalModels(); renderLocalState(localState);
+  if (!dirty.has('thinking-effort')) showThinking(selectedProfile(), settings.thinkingEffort);
+  showSuperchatThinking(selectedProfile(), dirty.has('superchat-thinking') ? select('superchat-thinking').value as Settings['superChatThinkingEffort'] : settings.superChatThinkingEffort ?? 'inherit');
+  if (!dirty.has('bilibili-hybrid')) hybridUI?.fill(settings.bilibiliHybrid);
+  showScope(); showLocalIdleUnload(); showBilibiliTimeoutRetry(); showBackend(); renderLocalModels(); renderLocalState(localState);
   if (!dirty.has('remember')) input('remember').checked = response.remembered === true;
   if (previousDestination !== snapshot(destinationFields)) { clearModels(); providerRevision++; void readCatalog(); }
   if (previousTest !== snapshot(testFields)) { invalidateTest(); providerRevision++; }
@@ -569,51 +639,55 @@ function fill(response: any) {
 }
 async function refresh() {
   const response = await browser.runtime.sendMessage({ type: 'overview' }); fill(response);
-  input('cache-state').textContent = response.cache ? `${response.cache.entries} 条 · ${Math.ceil(response.cache.bytes / 1024)} KiB` : '';
-  input('diagnostics').textContent = JSON.stringify({ status: response.status, cache: response.cache, engine: response.engine }, null, 2);
+  bindLocalizedText(input('cache-state'), () => response.cache ? t('m_2883656935bd', { p0: response.cache.entries, p1: Math.ceil(response.cache.bytes / 1024) }) : '');
+  input('diagnostics').textContent = JSON.stringify(sanitizeRuntimeDiagnostics(response), null, 2);
   renderLocalDiagnostics(response);
   await refreshLocalState();
 }
 function renderLocalDiagnostics(response: unknown) {
   const local = sanitizeRuntimeDiagnostics(response).globalEngine.local;
-  input('local-engine-diagnostics').textContent = local ? `本地累计：引擎排队到期 ${local.counts.queuedDeadline ?? 0} · 已派发后到期 ${local.counts.runningDeadline ?? 0}（包含本地排队和推理） · 请求超时 ${local.counts.requestTimeout ?? 0} · 语言/截断拒收 ${local.counts.qualityRejected ?? 0} · 强制重译实际请求 ${local.counts.forcedCalls ?? 0}` : '';
+  bindLocalizedText(input('local-engine-diagnostics'), () => local ? t('m_0debac083dd7', { p0: local.counts.queuedDeadline ?? 0, p1: local.counts.runningDeadline ?? 0, p2: local.counts.requestTimeout ?? 0, p3: local.counts.qualityRejected ?? 0, p4: local.counts.forcedCalls ?? 0 }) : '');
 }
 async function exportDiagnostics() {
   const button = document.getElementById('export-diagnostics') as HTMLButtonElement;
   if (button.disabled) return;
-  button.disabled = true; message('正在获取最新诊断…', false, 'diagnostics-result');
+  button.disabled = true; message(() => (t('m_638709a842a0')), false, 'diagnostics-result');
   try {
     const response = await browser.runtime.sendMessage({ type: 'live-diagnostics' });
-    if (!response?.ok) throw new Error(response?.error || '无法读取诊断');
+    if (!response?.ok) throw new Error(response?.error || t('m_c2a9f299030d'));
     renderLocalDiagnostics(response);
     const payload = sanitizeRuntimeDiagnostics(response);
     const blob = new Blob([JSON.stringify(payload, null, 2) + '\n'], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     try { const anchor = document.createElement('a'); anchor.href = url; anchor.download = 'danlingo-runtime-diagnostics.json'; anchor.hidden = true; document.body.append(anchor); anchor.click(); anchor.remove(); }
     finally { URL.revokeObjectURL(url); }
-    message(response.status ? '已导出安全诊断 JSON' : '未发现直播统计，已导出全局引擎诊断', false, 'diagnostics-result');
-  } catch (error) { message(errorMessage(error, '诊断导出失败'), true, 'diagnostics-result'); }
+    message(() => (response.status ? t('m_65fb960a533f') : t('m_b06405a01d0b')), false, 'diagnostics-result');
+  } catch (error) { message(() => (errorMessage(error, t('m_1509629cfed7'))), true, 'diagnostics-result'); }
   finally { button.disabled = false; }
 }
 async function saveSettings(autoClose = false): Promise<boolean> {
-  if (saving) { message('连接操作进行中，请稍后再关闭', true); return false; }
-  if (selectionSaving || localDeleting) { message('模型操作尚未完成，请稍候', true); return false; }
-  if (!layout.validate()) { message('请检查标出的设置，修改尚未保存', true); return false; }
-  busy(true); message('正在保存…');
+  if (saving) { message(() => (t('m_643d7531338d')), true); return false; }
+  if (selectionSaving || localDeleting) { message(() => (t('m_63f01d99fe64')), true); return false; }
+  if (!layout.validate()) { message(() => (t('m_61689b8b2b7f')), true); return false; }
+  busy(true); message(() => (t('m_6bdb4435095e')));
   try {
+    await hybridUI?.ensureSelected();
     const normalized = readForm(); const revision = formRevision; const submittedKey = input('api-key').value; const submittedRemember = input('remember').checked;
-    if (normalized.backend !== 'local') {
+    if (normalized.backend !== 'local' || hybridUI?.enabled()) {
       const origin = endpointOrigin(normalized.endpoint, normalized.allowLocalHttp);
+      if (hybridUI?.enabled() && !submittedKey && (!credentialState.hasKey || credentialState.origin !== origin)) {
+        layout.reveal(input('api-key')); throw new Error('HYBRID_KEY_REQUIRED');
+      }
       if (autoClose) {
-        if (!await browser.permissions.contains({ origins: [origin + '/*'] })) throw new Error('此服务尚未授权，请点击“保存并授权服务”后关闭');
-      } else if (!await browser.permissions.request({ origins: [origin + '/*'] })) throw new Error('未授权服务地址，配置未保存');
+        if (!await browser.permissions.contains({ origins: [origin + '/*'] })) throw new UiError('m_ffad0837a6bc');
+      } else if (!await browser.permissions.request({ origins: [origin + '/*'] })) throw new UiError('m_e0bb6a927847');
     }
     const result = await browser.runtime.sendMessage({ type: 'save', settings: normalized, apiKey: submittedKey, remember: submittedRemember });
-    if (!result?.ok) throw new Error(result?.error || '保存失败');
+    if (!result?.ok) throw new Error(result?.error || t('m_6309a3bb5ba4'));
     if (revision === formRevision) dirty.clear(); fill(result);
     if (input('api-key').value === submittedKey) input('api-key').value = '';
-    message(dirty.size ? '已保存；仍有未保存的修改' : '已保存'); await refresh(); return !dirty.size;
-  } catch (error) { message('保存失败：' + errorMessage(error, '请重试'), true); return false; }
+    message(() => (dirty.size ? t('m_e64dc7df2196') : t('m_1bd91a7d0c53'))); await refresh(); return !dirty.size;
+  } catch (error) { message(() => (t('m_6ade7baf8737') + errorMessage(error, t('m_a2577bae3cfc'))), true); return false; }
   finally { busy(false); }
 }
 document.getElementById('settings-form')!.addEventListener('submit', event => {
@@ -621,10 +695,12 @@ document.getElementById('settings-form')!.addEventListener('submit', event => {
 });
 for (const event of ['input', 'change']) document.getElementById('settings-form')!.addEventListener(event, e => {
   const target = e.target as HTMLInputElement | HTMLSelectElement;
-  if (target.id in fields || target.id === 'remember' || target.id === 'api-key' || ['profile', 'thinking-effort', 'superchat-thinking', 'local-model'].includes(target.id)) markDirty(target.id);
+  if (target.id in fields || target.id === 'remember' || target.id === 'api-key' || ['profile', 'thinking-effort', 'superchat-thinking'].includes(target.id)) markDirty(target.id);
   if (testFields.includes(target.id)) invalidateTest();
+  if (target.id === 'local-idle-unload-enabled') showLocalIdleUnload();
   if (destinationFields.includes(target.id)) { clearModels(); void readCatalog(); }
   if ([...destinationFields, 'model'].includes(target.id)) providerRevision++;
+  if (target.id === 'model') syncPerformance();
   if (['backend', 'endpoint', 'local-http', 'endpoint-mode', 'protocol-override', 'api-key'].includes(target.id)) { showBackend(); }
   if (target.id.endsWith('-timeout-retry')) showBilibiliTimeoutRetry();
   if (['backend', 'model', 'endpoint', 'local-http'].includes(target.id)) {
@@ -635,6 +711,10 @@ for (const event of ['input', 'change']) document.getElementById('settings-form'
   }
   if (testFields.includes(target.id)) renderConnection();
   if (['backend', 'source-language', 'live-source-language', 'target-language'].includes(target.id)) renderLocalState(localState);
+  if (hybridUI?.enabled() && ['backend', 'model', 'endpoint', 'local-http', 'profile', 'thinking-effort',
+    'source-language', 'live-source-language', 'target-language', 'local-concurrency', 'online-concurrency', 'timeout', 'thinking-timeout',
+    'batch-size', 'batch-chars', 'live-adaptive',
+    'endpoint-mode', 'protocol-override'].includes(target.id)) void hybridUI.refresh();
 });
 select('profile').addEventListener('change', () => {
   const profile = selectedProfile();
@@ -642,94 +722,77 @@ select('profile').addEventListener('change', () => {
   showSuperchatThinking(profile, 'inherit'); renderConnection();
 });
 select('translation-scope').addEventListener('change', showScope);
-select('local-model').addEventListener('change', () => { void persistModelSelection(select('local-model').value).catch(error => message(localErrorMessage(error), true, 'local-result')); });
 document.getElementById('local-stop')!.addEventListener('click', () => { void localCommand({ action: localLoadPending || ['loading', 'warming'].includes(localState?.phase ?? '') ? 'cancel' : 'unload' }); });
-document.getElementById('local-load')!.addEventListener('click', () => { const modelId = select('local-model').value; if (modelId) void localCommand({ action: 'load', modelId }); });
-function requestModelRemoval(id: string) {
-  const model = localModels.find(item => item.id === id);
-  if (!model || localDeleting || selectionSaving || saving || localPerformanceUI.active()) return;
-  deleteCandidate = { id: model.id, name: model.name, source: model.source };
-  document.getElementById('local-delete-description')!.textContent = model.source
-    ? `移除“${model.name}”的登记？原始 GGUF 文件不受影响；若正在使用，会先卸载并清空选择。${model.source.kind === 'directory' ? '该模型不会随目录刷新重新出现。' : ''}`
-    : `删除“${model.name}”的扩展内副本？原始 GGUF 文件不受影响；若正在使用，会先卸载。`;
-  document.getElementById('local-delete-accept')!.textContent = model.source ? '确认移除' : '删除副本';
-  document.getElementById('local-delete-confirm')!.hidden = false; renderLocalActions();
-  document.getElementById('local-delete-confirm')!.scrollIntoView({ block: 'nearest' });
-  document.getElementById('local-delete-dismiss')!.focus();
-}
-document.getElementById('local-delete')!.addEventListener('click', () => requestModelRemoval(select('local-model').value));
-document.getElementById('local-delete-dismiss')!.addEventListener('click', () => { dismissModelDelete(); document.getElementById('local-delete')!.focus(); });
-document.getElementById('local-delete-accept')!.addEventListener('click', () => { void deleteSelectedModel(); });
 document.getElementById('get-models')!.addEventListener('click', async () => {
   if (saving) return;
-  busy(true); message('正在获取模型…', false, 'models-result'); const revision = providerRevision;
+  busy(true); message(() => (t('m_511a3880b9b9')), false, 'models-result'); const revision = providerRevision;
   try {
     const normalized = readForm(false, true);
     if (normalized.backend === 'local') {
       const local = await browser.runtime.sendMessage({ type: 'local-control', control: { action: 'list' } });
-      if (!local?.ok) throw new Error(local?.error || '本地模型列表读取失败');
+      if (!local?.ok) throw new Error(local?.error || t('m_1594c90bb738'));
       localModels = Array.isArray(local.models) ? local.models : []; renderLocalModels(); renderLocalState(local.state);
-      if (!localModels.length) throw new Error('尚未导入本地 GGUF 模型');
-      message(`已找到 ${localModels.length} 个本地模型，请选择并加载。`, false, 'models-result');
+      if (!localModels.length) throw new UiError('m_74a211665fed');
+      message(() => (t('m_786e3ca18248', { p0: localModels.length })), false, 'models-result');
       return;
     }
     const submittedKey = input('api-key').value; const origin = endpointOrigin(normalized.endpoint, normalized.allowLocalHttp);
-    if (!await browser.permissions.request({ origins: [origin + '/*'] })) throw new Error('未授权服务地址');
-    if (revision !== providerRevision) throw new Error('输入已变化，请重新获取模型');
+    if (!await browser.permissions.request({ origins: [origin + '/*'] })) throw new UiError('m_5c6b58748487');
+    if (revision !== providerRevision) throw new UiError('m_2f2a14b4b16d');
     const result = await browser.runtime.sendMessage({ type: 'models', settings: normalized, apiKey: submittedKey });
-    if (revision !== providerRevision) throw new Error('输入已变化，请重新获取模型');
-    if (!result?.ok) throw new Error(result?.error || '模型查询失败');
-    if (!Array.isArray(result.models) || !result.models.length) throw new Error('服务未返回可用模型，仍可手动填写');
+    if (revision !== providerRevision) throw new UiError('m_2f2a14b4b16d');
+    if (!result?.ok) throw new Error(result?.error || t('m_b3a0e7fec424'));
+    if (!Array.isArray(result.models) || !result.models.length) throw new UiError('m_3421b10a28f4');
     models = result.models;
     if (result.effectiveEndpoint) {
-      input('endpoint').value = result.effectiveEndpoint; select('endpoint-mode').value = result.effectiveEndpointMode ?? 'base'; markDirty('endpoint'); markDirty('endpoint-mode'); renderConnection();
+      input('endpoint').value = result.effectiveEndpoint; select('endpoint-mode').value = 'auto'; markDirty('endpoint'); renderConnection();
     }
     if (!input('model').value.trim()) { input('model').value = models[0]!; markDirty('model'); invalidateTest(); }
-    catalogRevision++; showModels(); input('models-cache').textContent = `缓存于 ${new Date(result.fetchedAt).toLocaleString()}`;
-    message(`已获取 ${models.length} 个模型，可选择或直接编辑。`, false, 'models-result');
+    catalogRevision++; showModels(); bindLocalizedText(input('models-cache'), () => t('m_3c17b769a83d', { p0: formatDate(result.fetchedAt) }));
+    message(() => (t('m_d541191d70a4', { p0: models.length })), false, 'models-result');
     void readServiceHistory();
     showThinking(selectedProfile(), select('thinking-effort').value as Settings['thinkingEffort']);
     showSuperchatThinking(selectedProfile(), select('superchat-thinking').value as Settings['superChatThinkingEffort']); renderConnection();
-  } catch (error) { if (revision !== providerRevision) return; message(errorMessage(error, '模型查询失败') + '；保留已有列表和输入', true, 'models-result'); }
+  } catch (error) { if (revision !== providerRevision) return; message(() => (errorMessage(error, t('m_b3a0e7fec424')) + t('m_9b6e0c624428')), true, 'models-result'); }
   finally { busy(false); }
 });
 document.getElementById('test-model')!.addEventListener('click', async () => {
   if (saving) return;
-  busy(true); const revision = testRevision; message('正在测试模型…', false, 'test-result');
+  busy(true); const revision = testRevision; message(() => (t('m_ff3f7614f8e7')), false, 'test-result');
   try {
     const normalized = readForm(); const submittedKey = input('api-key').value;
     if (normalized.backend !== 'local') {
       const origin = endpointOrigin(normalized.endpoint, normalized.allowLocalHttp);
-      if (!await browser.permissions.request({ origins: [origin + '/*'] })) throw new Error('未授权服务地址');
+      if (!await browser.permissions.request({ origins: [origin + '/*'] })) throw new UiError('m_5c6b58748487');
     }
     if (revision !== testRevision) return;
     const testModelName = normalized.backend === 'local'
       ? localModels.find(model => model.id === normalized.localModelId)?.name
-        ?? (localState?.model?.id === normalized.localModelId ? localState?.model?.name : undefined) ?? '本地模型'
+        ?? (localState?.model?.id === normalized.localModelId ? localState?.model?.name : undefined) ?? t('m_44ac539067ed')
       : normalized.model;
-    message(`正在测试 ${testModelName}，最长等待 ${Math.ceil(providerTimeoutMs(normalized) / 1000)} 秒…`, false, 'test-result');
+    message(() => (t('m_eeff17c695e6', { p0: testModelName, p1: Math.ceil(providerTimeoutMs(normalized) / 1000) })), false, 'test-result');
     const result = await browser.runtime.sendMessage({ type: 'test-model', settings: normalized, apiKey: submittedKey,
       text: (document.getElementById('model-test-text') as HTMLTextAreaElement).value,
       context: select('model-test-context').value });
     if (revision !== testRevision) return;
-    if (!result?.ok) throw new Error(result?.error || '模型测试失败');
+    if (!result?.ok) throw new Error(result?.error || t('m_d3b1da3088dd'));
     void readServiceHistory();
-    const verification = result.verification === 'basic-language-check' ? '格式与语言检查通过' : '格式检查通过';
-    const timing = result.local ? `\n本地排队 ${Math.round(result.local.queueMs)} ms · 推理 ${Math.round(result.local.inferenceMs)} ms` : '';
-    message(`${result.model} · ${verification} · 单条 ${(result.elapsedMs / 1000).toFixed(2)} 秒\n目标 ${result.targetLanguage ?? normalized.targetLanguage} · ${result.promptMode === 'hy-mt' ? 'HY-MT 直接翻译' : '结构化翻译'}\n${result.sourceText} → ${result.text}${timing}\n此耗时不代表直播及时率。`, false, 'test-result');
-  } catch (error) { if (revision === testRevision) message(errorMessage(error, '模型测试失败'), true, 'test-result'); }
+    const verification = () => result.verification === 'basic-language-check' ? t('m_20d0aaef5c92') : t('m_a3e6a2003aba');
+    const timing = () => result.local ? t('m_03ac907910fc', { p0: Math.round(result.local.queueMs), p1: Math.round(result.local.inferenceMs) }) : '';
+    message(() => (t('m_b1887f6b2172', { p0: result.model, p1: verification(), p2: formatNumber(Number((result.elapsedMs / 1000).toFixed(2))), p3: result.targetLanguage ?? normalized.targetLanguage, p4: result.promptMode === 'hy-mt' ? t('m_f9042fe0fe55') : t('m_8e1dfd9d2eff'), p5: result.sourceText, p6: result.text, p7: timing() })), false, 'test-result');
+  } catch (error) { if (revision === testRevision) message(() => (errorMessage(error, t('m_d3b1da3088dd'))), true, 'test-result'); }
   finally { busy(false); }
 });
-const actions: Array<[string, string, string]> = [['clear-cache', 'clear-cache', '缓存已清空'], ['delete-key', 'delete-key', 'Key 已删除']];
-for (const [id, type, text] of actions) {
+const actions: Array<[string, string, string]> = [['clear-cache', 'clear-cache', 'm_5265ad8f9163'], ['delete-key', 'delete-key', 'm_f954966d0999']];
+for (const [id, type, textKey] of actions) {
   const trigger = document.getElementById(id) as HTMLButtonElement, box = document.getElementById(id + '-confirm')!;
   const confirm = box.querySelector<HTMLButtonElement>('[data-confirm]')!, dismiss = box.querySelector<HTMLButtonElement>('[data-dismiss]')!;
   trigger.addEventListener('click', () => { box.hidden = false; confirm.focus(); });
   dismiss.addEventListener('click', () => { box.hidden = true; trigger.focus(); });
   confirm.addEventListener('click', async () => {
-    if (confirm.disabled) return; trigger.disabled = confirm.disabled = dismiss.disabled = true; message('正在处理…', false, id + '-result');
-    try { const result = await browser.runtime.sendMessage({ type }); if (!result?.ok) throw new Error(result?.error || '操作失败'); await refresh(); box.hidden = true; message(text, false, id + '-result'); }
-    catch { message('操作未完成，请重试', true, id + '-result'); }
+    if (confirm.disabled) return; trigger.disabled = confirm.disabled = dismiss.disabled = true; message(() => (t('m_574ec7517de1')), false, id + '-result');
+    try { const result = await browser.runtime.sendMessage({ type }); if (!result?.ok) throw new Error(result?.error || t('m_0c3b4cf7aa25')); await refresh(); box.hidden = true; message(() => t(textKey), false, id + '-result'); }
+    catch { message(() => (t('m_608e2da1bf2d')), true, id + '-result'); }
     finally { trigger.disabled = confirm.disabled = dismiss.disabled = false; if (box.hidden) trigger.focus(); }
   });
 }
@@ -740,50 +803,69 @@ browser.runtime.onMessage.addListener((response: any) => {
   if (response?.type === 'local-models-updated') { void refreshLocalState(); return; }
   if (response?.type !== 'settings-updated') return;
   providerRevision++; invalidateTest();
-  try { fill(response); void refreshLocalState(); } catch (error) { message(errorMessage(error, '配置读取失败'), true); }
+  try { fill(response); void refreshLocalState(); } catch (error) { message(() => (errorMessage(error, t('m_e5ed04984086'))), true); }
 });
-const localPerformanceUI = mountLocalPerformanceUI({ container: layout.localPerformance, benchmarkContainer: layout.localBenchmark, superchatContainer: layout.localSuperchat, activity: active => layout.task('local-test', active), modelId: () => select('local-model').value, changed: () => { markDirty('local-performance'); invalidateTest(); renderVram(); }, state: renderLocalState, busyChanged: () => renderLocalState(localState), translationSettings: () => ({ sourceLanguage: select('live-source-language').value, targetLanguage: languageCombo.value() }) });
+const localPerformanceUI = mountLocalPerformanceUI({ container: layout.localPerformance, benchmarkContainer: layout.localBenchmark, superchatContainer: layout.localSuperchat, activity: active => layout.task('local-test', active), modelId: () => (settings.localModelId ?? ''), changed: () => { markDirty('local-performance'); invalidateTest(); renderVram(); if (hybridUI?.enabled()) void hybridUI.refresh(); }, state: renderLocalState, busyChanged: () => renderLocalState(localState), translationSettings: () => ({ sourceLanguage: select('live-source-language').value, targetLanguage: languageSelect.value() }) });
+hybridUI = mountHybridUI({ container: document.getElementById('hybrid-host')!, readSettings: () => readForm(false),
+  requestCapacity: draft => browser.runtime.sendMessage({ type: 'hybrid-capacity', settings: draft }),
+  changed: () => markDirty('bilibili-hybrid'), enabledChanged: showBackend, reveal: layout.reveal });
 const directoryUI = mountDirectoryUI(directoryAction);
-mountPerformanceUI({ container: layout.onlinePerformance, activity: active => layout.task('online-test', active), readSettings: () => readForm(), readKey: () => input('api-key').value });
+const sourcePicker = createLocalSourcePicker({
+  busy: value => { sourceRegistrationPending = value; renderLocalActions(); scheduleLocalPoll(); },
+  progress: value => { sourceProgress = value; renderLocalActions(); },
+  result: (render, error) => message(render, error, 'local-result'),
+  refresh: refreshLocalState,
+});
+performanceUI = mountPerformanceUI({ container: layout.onlinePerformance,
+  activity: active => { onlinePerformanceActive = active; layout.task('online-test', active); renderLocalActions(); },
+  readSettings: (backend, model) => readForm(false, false, { backend, model }), readKey: () => input('api-key').value,
+  configureOnline: () => {
+    select('backend').value = 'online'; select('backend').dispatchEvent(new Event('change', { bubbles: true }));
+    layout.reveal(input('endpoint'));
+  },
+});
 window.addEventListener('beforeunload', event => { if (dirty.size) { event.preventDefault(); event.returnValue = ''; } });
 let closing = false;
 async function closeEmbedded(save = false) {
   if (closing) return;
-  if (localDeleting) { message('正在删除模型，请稍候', true); return; }
+  if (localDeleting) { message(() => (t('m_df3091ed7a71')), true); return; }
   if (save) {
     closing = true;
     try {
-      if (selectionSaving || saving) { message('操作尚未完成，请稍后再关闭', true); return; }
+      if (selectionSaving || saving) { message(() => (t('m_ea87fa06bcc7')), true); return; }
       if (dirty.size && !await saveSettings(true)) return;
       if (dirty.size) return;
       await browser.runtime.sendMessage({ type: 'settings-frame-close' });
     } finally { closing = false; }
     return;
   }
-  if (dirty.size && !window.confirm('有未保存的修改，放弃修改并关闭设置？')) return;
+  if (dirty.size && !window.confirm(t('m_0e440d4ed0d6'))) return;
   await browser.runtime.sendMessage({ type: 'settings-frame-close' });
 }
 if (embedded) {
   document.documentElement.classList.add('embedded-settings');
-  const close = document.createElement('button'); close.type = 'button'; close.className = 'settings-close'; close.textContent = '关闭设置';
+  const close = document.createElement('button'); close.type = 'button'; close.className = 'settings-close'; bindLocalizedText(close, () => t('m_77b17fc4a52a'));
   close.addEventListener('click', () => { void closeEmbedded(); }); document.querySelector('.page-header')!.append(close);
   window.addEventListener('keydown', event => { if (event.key === 'Escape' && !event.defaultPrevented) { event.preventDefault(); void closeEmbedded(); } });
 }
 async function refreshShortcut() {
-  try { input('translation-shortcut').textContent = await getTranslationShortcut(browser.commands) || '未设置'; }
-  catch { input('translation-shortcut').textContent = '暂不可用'; }
+  try {
+    const shortcut = await getTranslationShortcut(browser.commands);
+    bindLocalizedText(input('translation-shortcut'), () => shortcut || t('m_2f5f1d6fbfb0'));
+  }
+  catch { bindLocalizedText(input('translation-shortcut'), () => t('m_f36cac96220b')); }
 }
 document.getElementById('customize-shortcut')!.addEventListener('click', () => {
   const target = translationShortcutManagementUrl(/\bEdg\//.test(navigator.userAgent) ? 'edge' : 'chrome');
-  void browser.tabs.create({ url: target }).then(() => { input('shortcut-result').textContent = '在浏览器中找到 DanLingo，即可修改快捷键'; })
-    .catch(() => { input('shortcut-result').textContent = '请在浏览器的扩展管理 → 键盘快捷键中修改'; });
+  void browser.tabs.create({ url: target }).then(() => { bindLocalizedText(input('shortcut-result'), () => t('m_4bf8e6d85519')); })
+    .catch(() => { bindLocalizedText(input('shortcut-result'), () => t('m_6412257bcd55')); });
 });
 window.addEventListener('focus', () => {
   void refreshShortcut();
   if (select('backend').value === 'local') void refreshLocalState();
 });
 void refreshShortcut();
-void refresh().then(() => { void readCatalog(); void readServiceHistory(); if (!dirty.size) message('已保存'); }).catch(error => message(errorMessage(error, '配置读取失败'), true));
+void refresh().then(() => { void readCatalog(); void readServiceHistory(); if (!dirty.size) message(() => (t('m_1bd91a7d0c53'))); }).catch(error => message(() => (errorMessage(error, t('m_e5ed04984086'))), true));
 
 // Refresh only the counter: never replace an unsaved settings draft.
 let readingBudget = false;
@@ -792,8 +874,72 @@ const budgetTimer = setInterval(async () => {
   readingBudget = true;
   try {
     const reply = await browser.runtime.sendMessage({ type: 'online-budget-status' });
-    input('online-budget-status').textContent = onlineBudgetText(reply?.ok ? reply.onlineBudget : undefined);
-  } catch { input('online-budget-status').textContent = onlineBudgetText(); }
+    bindLocalizedText(input('online-budget-status'), () => onlineBudgetText(reply?.ok ? reply.onlineBudget : undefined));
+  } catch { bindLocalizedText(input('online-budget-status'), () => onlineBudgetText()); }
   finally { readingBudget = false; }
 }, 1500);
 window.addEventListener('pagehide', () => clearInterval(budgetTimer));
+
+const userFilterStatus = mountUserFilterStatus(document.getElementById('bilibili-user-filter-status')!);
+const userFilterSourceRow = document.getElementById('bilibili-user-filter-source-row')!;
+const userFilterSource = select('bilibili-user-filter-source');
+bindLocalizedText(document.getElementById('bilibili-user-filter-source-label')!, () => userFilterSourceSelectionText().label);
+let userFilterSources: Array<{ tabId: number; resourceId: string }> = [];
+let selectedUserFilterTab: number | undefined;
+let userFilterSourceSignature = '';
+let userFilterRevision = 0;
+let readingUserFilters = false;
+function renderUserFilterSources(force = false) {
+  const signature = JSON.stringify(userFilterSources);
+  userFilterSourceRow.hidden = userFilterSources.length < 2;
+  if (signature === userFilterSourceSignature && !force) { userFilterSource.value = String(selectedUserFilterTab ?? ''); return; }
+  userFilterSourceSignature = signature;
+  userFilterSource.replaceChildren(new Option(userFilterSourceSelectionText().placeholder, ''),
+    ...userFilterSources.map(source => new Option(userFilterSourceLabel(source.resourceId, source.tabId), String(source.tabId))));
+  userFilterSource.value = String(selectedUserFilterTab ?? '');
+}
+const unsubscribeUserFilterLocale = onLocaleChange(() => renderUserFilterSources(true));
+function clearUserFilterStatus(readFailed = false) {
+  const source = userFilterSources.find(item => item.tabId === selectedUserFilterTab);
+  userFilterStatus.update({ connected: !!source, stale: false, featureEnabled: settings.bilibiliUserFilters,
+    ...(source ? { tabId: source.tabId, resourceId: source.resourceId } : {}), readFailed });
+}
+async function pollUserFilterStatus() {
+  if (readingUserFilters || document.hidden) return;
+  readingUserFilters = true;
+  const revision = ++userFilterRevision;
+  try {
+    const reply = await browser.runtime.sendMessage({ type: 'bilibili-user-filter-status',
+      ...(selectedUserFilterTab === undefined ? {} : { tabId: selectedUserFilterTab }) });
+    if (revision !== userFilterRevision) return;
+    if (!reply?.ok || !Array.isArray(reply.sources)) throw new Error('user-filter-status-unavailable');
+    userFilterSources = reply.sources.filter((source: any) => Number.isSafeInteger(source?.tabId) && source.tabId >= 0
+      && typeof source.resourceId === 'string' && source.resourceId.length <= 100).slice(0, 30);
+    if (selectedUserFilterTab === undefined && userFilterSources.some(source => source.tabId === reply.selectedTabId))
+      selectedUserFilterTab = reply.selectedTabId;
+    if (userFilterSources.length === 1) selectedUserFilterTab = userFilterSources[0]!.tabId;
+    else if (!userFilterSources.some(source => source.tabId === selectedUserFilterTab)) selectedUserFilterTab = undefined;
+    renderUserFilterSources();
+    const source = userFilterSources.find(item => item.tabId === selectedUserFilterTab);
+    const view = reply.view as UserFilterStatusView | undefined;
+    if (!source || !view || view.tabId !== source.tabId || view.resourceId !== source.resourceId) {
+      clearUserFilterStatus(); return;
+    }
+    userFilterStatus.update(view);
+  } catch {
+    if (revision === userFilterRevision) clearUserFilterStatus(true);
+  } finally { if (revision === userFilterRevision) readingUserFilters = false; }
+}
+userFilterSource.addEventListener('change', () => {
+  const tabId = Number(userFilterSource.value);
+  selectedUserFilterTab = userFilterSource.value && userFilterSources.some(source => source.tabId === tabId) ? tabId : undefined;
+  userFilterRevision++; readingUserFilters = false; clearUserFilterStatus();
+  void pollUserFilterStatus();
+});
+clearUserFilterStatus();
+void pollUserFilterStatus();
+const userFilterTimer = setInterval(() => { void pollUserFilterStatus(); }, 2000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void pollUserFilterStatus(); });
+window.addEventListener('pagehide', () => {
+  clearInterval(userFilterTimer); userFilterRevision++; unsubscribeUserFilterLocale(); userFilterStatus.dispose();
+});

@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS } from '../../src/core/config.ts';
 import { cacheResource } from '../../src/core/resource.ts';
 import { TranslationEngine } from '../../src/translation/index.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 async function flush() { for (let turn = 0; turn < 100; turn++) await Promise.resolve(); }
 
@@ -38,9 +38,9 @@ class Clock {
 
 function harness(t, overrides = {}) {
   const clock = new Clock(), calls = [], traces = [];
-  const config = { ...DEFAULT_SETTINGS, enabled: true, batchSize: 2, concurrency: 1,
+  const config = onlineSettings({ enabled: true, batchSize: 2, concurrency: 1,
     liveAdaptiveConcurrency: false, translationStream: false,
-    endpoint: 'https://feasibility-provider.invalid/v1/chat/completions', ...overrides };
+    endpoint: 'https://feasibility-provider.invalid/v1/chat/completions', ...overrides });
   const resourceId = cacheResource({ platform: 'youtube', scenario: 'live', resourceId: 'feasibility-room' });
   const privateValues = new Set(['synthetic-never-sent', config.endpoint, new URL(config.endpoint).origin,
     new URL(config.endpoint).hostname, resourceId]);

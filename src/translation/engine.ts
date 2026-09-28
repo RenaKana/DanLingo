@@ -6,10 +6,11 @@ import { createClock } from './clock.ts';
 import type { TranslationClock } from './clock.ts';
 import { addUsage, ChatCompletionsProvider, ProviderError } from './provider.ts';
 import type { ProviderRequest, ProviderResult } from './provider.ts';
-import { protectText } from './text.ts';
+import { placeholdersIntact, protectText } from './text.ts';
 import { localPromptMode, localQualityIssue, localSingleItem } from './local-policy.ts';
 import type { LocalInferenceMetrics } from '../local/types.ts';
 import { liveTokenEstimate, type TranslationTrace, type LiveTimingEstimate, type LiveDispatchDecision } from './telemetry.ts';
+import { HybridInputWindow } from './hybrid.ts';
 
 export interface TranslationEngineOptions {
   provider?: { complete(request: ProviderRequest): Promise<ProviderResult> };
@@ -24,6 +25,10 @@ export interface TranslationEngineOptions {
   maxSubscribers?: number;
   maxRequestItems?: number;
   onTrace?: (event: TranslationTrace) => void;
+  /** Optional policy for consumers that cannot display an unqualified result. */
+  validateResult?: (original: string, text: string, settings: Settings) => string | null;
+  maxAttempts?: number;
+  cacheOnly?: () => boolean;
 }
 export interface TranslationEngineStats {
   pendingItems: number;
@@ -55,6 +60,12 @@ export interface TranslationEngineStats {
   lastError?: { reason: string; status?: number; at: number; retryAt?: number };
   /** Present only while the engine is observing a 429 cooldown. */
   rateLimitedUntil?: number;
+  hybrid: HybridStats;
+}
+interface HybridBackendStats { cacheHits: number; actualRequests: number; inputItems: number; inputChars: number; timelyQualified: number }
+export interface HybridStats {
+  subscriptions: number; uniqueTasks: number; mergedInputs: number; expired: number;
+  local: HybridBackendStats; online: HybridBackendStats;
 }
 interface ResponseContext {
   vod: boolean;
@@ -85,6 +96,7 @@ interface Subscription {
 }
 interface Task {
   id: string;
+  identityKey: string;
   cacheKey: string;
   resourceId: string;
   text: string;
@@ -106,6 +118,11 @@ interface Task {
   forced: boolean;
   cacheGeneration: number;
   serviceClass: 'normal' | 'superchat' | 'manual';
+  hybrid?: { local: Settings; online: Settings; localKey: string; onlineKey: string;
+    onlineIdentity: string;
+    localGroup: string; onlineGroup: string;
+    localReady: boolean; onlineReady: boolean; maxItems: number; maxChars: number; p95Ms?: number;
+    capacityKey: string; onLocalNeeded?: () => void; reserved: boolean };
 }
 interface Batch { tasks: Task[]; controller: AbortController; concurrency: number; urgent: boolean; live: boolean;
   id: number; startedAt: number; load: number; bucket: string; contexts: Set<ResponseContext> }
@@ -133,13 +150,17 @@ function batchGroup(settings: Settings): string {
   ]);
 }
 function validateSettings(value: Settings): void {
-  endpointOrigin(value.endpoint, value.allowLocalHttp);
   if (!['minimax', 'deepseek', 'gemini', 'chat-completions'].includes(value.profile)
       || !['translated', 'original'].includes(value.displayMode)
       || typeof value.enabled !== 'boolean' || typeof value.allowLocalHttp !== 'boolean') throw new Error('invalid-settings');
-  for (const name of ['endpoint', 'model', 'sourceLanguage', 'targetLanguage'] as const) {
+  if (typeof value.endpoint !== 'string' || value.endpoint.length > 1000) throw new Error('invalid-settings');
+  if (value.endpoint.trim()) endpointOrigin(value.endpoint, value.allowLocalHttp);
+  else if (value.backend !== 'local') throw new Error('missing-endpoint');
+  if (typeof value.model !== 'string' || value.model.length > 100) throw new Error('invalid-settings');
+  if (value.backend !== 'local' && !value.model.trim()) throw new Error('missing-model');
+  for (const name of ['sourceLanguage', 'targetLanguage'] as const) {
     const text = value[name];
-    if (typeof text !== 'string' || !text.trim() || text.length > (name === 'endpoint' ? 1000 : 100)) throw new Error('invalid-settings');
+    if (typeof text !== 'string' || !text.trim() || text.length > 100) throw new Error('invalid-settings');
   }
   for (const [name, minimum, maximum] of [
     ['requestTimeoutMs', 1, MAX_REQUEST_TIMEOUT_MS], ['concurrency', 1, value.backend === 'local' ? 2_147_483_647 : MAX_CONCURRENCY], ['batchSize', 1, 200],
@@ -155,6 +176,10 @@ function validateSettings(value: Settings): void {
   for (const [name, max] of [['liveMaxBatchWaitMs', MAX_LIVE_BATCH_WAIT_MS], ['liveMaxInputTokens', 24000], ['liveMaxOutputTokens', 24000]] as const) {
     if (value[name] !== undefined && (!Number.isInteger(value[name]) || value[name]! < (name === 'liveMaxBatchWaitMs' ? 0 : 256) || value[name]! > max)) throw new Error('invalid-settings');
   }
+}
+function hybridQualityIssue(source: string, translated: string): string | undefined {
+  return !translated.trim() || translated === source || translated.length > 2000
+    || !placeholdersIntact(source, translated) ? 'unqualified-translation' : undefined;
 }
 
 /** One shared instance per background worker supplies cross-tab coalescing and global limits. */
@@ -182,8 +207,18 @@ export class TranslationEngine {
   private batchSequence = 0;
   private readonly traceTail: TranslationTrace[] = [];
   private readonly onTrace?: TranslationEngineOptions['onTrace'];
+  private readonly validateResult?: TranslationEngineOptions['validateResult'];
+  private readonly maxAttempts: number;
+  private readonly cacheOnly?: () => boolean;
   private readonly timings = new Map<string, { elapsed: number; items: number; complete: boolean }[]>();
   private readonly controls = new Map<string, { limit: number; changedAt: number; blockedUntil: number }>();
+  private readonly hybridWindow = new HybridInputWindow();
+  private readonly hybridCooldown = { local: 0, online: 0 };
+  private readonly hybridCounts: HybridStats = {
+    subscriptions: 0, uniqueTasks: 0, mergedInputs: 0, expired: 0,
+    local: { cacheHits: 0, actualRequests: 0, inputItems: 0, inputChars: 0, timelyQualified: 0 },
+    online: { cacheHits: 0, actualRequests: 0, inputItems: 0, inputChars: 0, timelyQualified: 0 },
+  };
   private pumpScheduled = false;
   private wakeTimer?: unknown;
   private rateLimitedUntil = 0;
@@ -207,6 +242,9 @@ export class TranslationEngine {
     this.maxSubscribers = bound(options.maxSubscribers, 4000, 40_000);
     this.maxRequestItems = bound(options.maxRequestItems, 1000, 10_000);
     this.onTrace = options.onTrace;
+    this.validateResult = options.validateResult;
+    this.maxAttempts = bound(options.maxAttempts, 2, 2);
+    this.cacheOnly = options.cacheOnly;
   }
 
   private trace(event: TranslationTrace): void {
@@ -226,12 +264,48 @@ export class TranslationEngine {
       return fallback('failed', 'invalid-resource');
     }
     let settings: Settings;
+    let hybrid: Omit<NonNullable<Task['hybrid']>, 'reserved'> | undefined;
     try {
       settings = { ...request.settings };
-      validateSettings(settings);
-      if (settings.backend !== 'local') settings.thinkingEffort = normalizeReasoningEffort(settings, settings.thinkingEffort);
+      let baseAvailable = true;
+      try { validateSettings(settings); }
+      catch (error) {
+        if (!request.hybrid || request.hybrid.onlineReady || !(error instanceof Error)
+            || !['missing-endpoint', 'missing-model'].includes(error.message)) throw error;
+        baseAvailable = false;
+      }
+      if (settings.backend !== 'local' && baseAvailable) settings.thinkingEffort = normalizeReasoningEffort(settings, settings.thinkingEffort);
+      if (request.hybrid) {
+        const local = { ...request.hybrid.local }, online = { ...request.hybrid.online };
+        validateSettings(local);
+        let onlineCacheAvailable = true;
+        try { validateSettings(online); }
+        catch (error) {
+          if (request.hybrid.onlineReady || !(error instanceof Error)
+              || !['missing-endpoint', 'missing-model'].includes(error.message)) throw error;
+          onlineCacheAvailable = false;
+        }
+        if (local.backend !== 'local' || online.backend !== 'online'
+            || !Number.isSafeInteger(request.hybrid.maxItems) || request.hybrid.maxItems < 1
+            || !Number.isSafeInteger(request.hybrid.maxChars) || request.hybrid.maxChars < 1
+            || typeof request.hybrid.capacityKey !== 'string' || !request.hybrid.capacityKey
+            || (request.hybrid.p95Ms !== undefined && (!Number.isFinite(request.hybrid.p95Ms) || request.hybrid.p95Ms <= 0))) {
+          throw new Error('invalid-settings');
+        }
+        if (onlineCacheAvailable) online.thinkingEffort = normalizeReasoningEffort(online, online.thinkingEffort);
+        hybrid = { local, online, localKey: '', onlineKey: '', onlineIdentity: onlineCacheAvailable ? ''
+          : JSON.stringify(['unavailable-online', online]),
+          localGroup: '', onlineGroup: '', localReady: request.hybrid.localReady === true,
+          onlineReady: request.hybrid.onlineReady === true, maxItems: request.hybrid.maxItems,
+          maxChars: request.hybrid.maxChars, p95Ms: request.hybrid.p95Ms,
+          capacityKey: request.hybrid.capacityKey, onLocalNeeded: request.hybrid.onLocalNeeded };
+      }
     }
-    catch { return fallback('failed', 'invalid-settings'); }
+    catch (error) {
+      const reason = error instanceof Error && ['missing-endpoint', 'missing-model'].includes(error.message)
+        ? error.message : 'invalid-settings';
+      return fallback('failed', reason);
+    }
     if (!settings.enabled || settings.displayMode === 'original') return fallback('original', 'translation-disabled');
     if (request.items.length === 0) return { items: [] };
     // A rejected oversized envelope cannot create an unbounded number of timers or cache lookups.
@@ -254,7 +328,8 @@ export class TranslationEngine {
         },
       };
       request.signal?.addEventListener('abort', context.abort, { once: true });
-      const group = JSON.stringify([batchGroup(settings), context.live ? request.resourceId : '', context.live, request.namespace ?? '']);
+      const groupFor = (value: Settings) => JSON.stringify([batchGroup(value), context.live ? request.resourceId : '', context.live, request.namespace ?? '']);
+      const group = groupFor(hybrid?.local ?? settings);
       const lookups: Task[] = [];
       request.items.forEach((source, index) => {
         // Snapshot inputs/settings: page mutation cannot change task identity after admission.
@@ -271,47 +346,70 @@ export class TranslationEngine {
           direct('failed', 'invalid-input'); return;
         }
         if (!context.vod && input.deadlineAt <= this.clock.now()) { direct('expired', 'deadline'); return; }
-        if (input.text.length === 0 || input.text.length > settings.maxBatchChars) { direct('original', 'input-size'); return; }
+        const maxChars = hybrid ? Math.max(hybrid.local.maxBatchChars, hybrid.online.maxBatchChars) : settings.maxBatchChars;
+        if (input.text.length === 0 || input.text.length > maxChars) { direct('original', 'input-size'); return; }
         const protectedText = protectText(input.text);
         if (protectedText.reason) { direct('original', protectedText.reason); return; }
-        if (protectedText.text.length > settings.maxBatchChars) { direct('original', 'protected-input-size'); return; }
-        if (this.subscribers >= this.maxSubscribers) { overflow('subscriber-overflow'); return; }
-        const persistentKey = translationCacheKey(request.resourceId, input.text, settings, context.live ? LIVE_PROMPT_VERSION : undefined);
+        if (protectedText.text.length > maxChars) { direct('original', 'protected-input-size'); return; }
+        const localKey = hybrid && translationCacheKey(request.resourceId, input.text, hybrid.local, context.live ? LIVE_PROMPT_VERSION : undefined);
+        const onlineKey = hybrid && (hybrid.onlineIdentity ? ''
+          : translationCacheKey(request.resourceId, input.text, hybrid.online, context.live ? LIVE_PROMPT_VERSION : undefined));
+        const persistentKey = hybrid ? JSON.stringify(['hybrid', localKey, onlineKey,
+          hybrid.onlineIdentity, hybrid.capacityKey, request.namespace ?? ''])
+          : translationCacheKey(request.resourceId, input.text, settings, context.live ? LIVE_PROMPT_VERSION : undefined);
         const key = request.bypassCache ? JSON.stringify([persistentKey, request.namespace, occurrenceId]) : persistentKey;
         // Credentials are compared only in transient memory, never encoded in a cache key or diagnostic.
         let task = [...(this.byKey.get(key) ?? [])].reverse().find((candidate) =>
           candidate.apiKey === request.apiKey && !candidate.batch?.controller.signal.aborted &&
           (!request.force || candidate.forced && ['lookup', 'queued', 'running'].includes(candidate.stage)),
         );
+        const side = task ? this.queueSide(task) : hybrid ? 'lookup' : settings.backend === 'local' ? 'local' : 'online';
+        if (this.sideSubscribers(side) >= this.maxSubscribers) { overflow('subscriber-overflow'); return; }
         let created = false;
-        if (task) { this.counts.mergedInputs++; if ((input.strategy ?? 'normal') === 'normal') task.serviceClass = 'normal'; }
+        if (task) { this.counts.mergedInputs++; if (task.hybrid) this.hybridCounts.mergedInputs++;
+          if ((input.strategy ?? 'normal') === 'normal') task.serviceClass = 'normal'; }
         else {
           const bytes = encoder.encode(key).byteLength + encoder.encode(input.text).byteLength + 256;
-          if (!this.makeRoom(bytes, input.deadlineAt, context)) { overflow('queue-overflow'); return; }
+          if (!this.makeRoom(bytes, input.deadlineAt, context, side)) { overflow('queue-overflow'); return; }
           if (request.force) this.cacheGenerations.set(key, (this.cacheGenerations.get(key) ?? 0) + 1);
           task = {
-            id: `t${++this.sequence}`, cacheKey: key, resourceId: request.resourceId, text: input.text,
+            id: `t${++this.sequence}`, identityKey: key, cacheKey: key, resourceId: request.resourceId, text: input.text,
             settings, apiKey: request.apiKey, group, subscribers: new Set(), bytes, chars: protectedText.text.length,
             tokenEstimate: liveTokenEstimate(protectedText.text),
             stage: 'lookup', attempts: 0, readyAt: this.clock.now(), enqueuedAt: this.clock.now(),
             bypassCache: request.bypassCache === true, forced: request.force === true,
             cacheGeneration: this.cacheGenerations.get(key) ?? 0, serviceClass: input.strategy ?? 'normal',
+            ...(hybrid ? { hybrid: { ...hybrid, localKey: localKey!, onlineKey: onlineKey!,
+              localGroup: `${groupFor(hybrid.local)}:hybrid`, onlineGroup: hybrid.onlineIdentity || `${groupFor(hybrid.online)}:hybrid`,
+              reserved: false } } : {}),
           };
           this.tasks.add(task); this.pendingBytes += bytes;
           const bucket = this.byKey.get(key) ?? new Set<Task>();
           bucket.add(task); this.byKey.set(key, bucket);
           created = true;
           this.counts.uniqueTasks++;
+          if (hybrid) this.hybridCounts.uniqueTasks++;
         }
         this.trace({ type: 'bind', at: this.clock.now(), occurrenceId, taskId: task.id, reused: !created });
         const subscription: Subscription = { input, index, context, task, done: false };
         task.subscribers.add(subscription); context.subscribers.add(subscription); this.subscribers++;
+        if (task.hybrid) this.hybridCounts.subscriptions++;
         if (!context.vod) this.armDeadline(subscription);
         if (task.completedText !== undefined) this.finish(subscription, 'translated', undefined, task.completedText);
         else if (created) lookups.push(task);
       });
       if (lookups.length) void this.prepare(lookups);
     });
+  }
+
+  cancelItems(signal: AbortSignal, ids: readonly string[]): void {
+    if (!ids.length) return;
+    const selected = new Set(ids);
+    for (const task of [...this.tasks]) for (const subscription of [...task.subscribers]) {
+      if (subscription.context.signal === signal && selected.has(subscription.input.id)) {
+        this.finish(subscription, 'original', 'cancelled');
+      }
+    }
   }
 
   private record(context: ResponseContext, index: number, output: TranslationOutput): void {
@@ -351,6 +449,13 @@ export class TranslationEngine {
     const output: TranslationOutput = {
       id: input.id, text: status === 'translated' || status === 'cached' ? text : input.text, status,
     };
+    if (task.hybrid) {
+      if (status === 'expired') this.hybridCounts.expired++;
+      if (status === 'cached') this.hybridCounts[task.settings.backend === 'local' ? 'local' : 'online'].cacheHits++;
+      if ((status === 'translated' || status === 'cached'
+          || (task.stage !== 'lookup' && (status === 'failed' || status === 'expired')))
+          && task.settings.backend) output.backend = task.settings.backend;
+    }
     if (reason) output.reason = reason;
     if (retryAfterMs !== undefined) output.retryAfterMs = retryAfterMs;
     this.record(context, index, output);
@@ -366,10 +471,14 @@ export class TranslationEngine {
   }
   private remove(task: Task): void {
     if (!this.tasks.delete(task)) return;
+    if (task.hybrid?.reserved) {
+      this.hybridWindow.release(task.hybrid.capacityKey, task);
+      task.hybrid.reserved = false;
+    }
     this.pendingBytes -= task.bytes; task.stage = 'done';
-    const bucket = this.byKey.get(task.cacheKey);
+    const bucket = this.byKey.get(task.identityKey);
     bucket?.delete(task);
-    if (!bucket?.size) { this.byKey.delete(task.cacheKey); this.cacheGenerations.delete(task.cacheKey); }
+    if (!bucket?.size) { this.byKey.delete(task.identityKey); this.cacheGenerations.delete(task.identityKey); }
   }
   private deadline(task: Task, latest = false): number {
     let value = latest ? -Infinity : Infinity;
@@ -397,10 +506,28 @@ export class TranslationEngine {
       : input.deadlineAt - this.clock.now() <= task.settings.urgentSeconds * 1000 ? 0 : 2));
   }
   private urgent(task: Task): boolean { return this.priority(task) <= 0; }
-  private makeRoom(bytes: number, deadline: number, context: ResponseContext): boolean {
+  private queueSide(task: Task): 'local' | 'online' | 'lookup' {
+    if (task.hybrid && task.stage === 'lookup') return 'lookup';
+    return task.settings.backend === 'local' ? 'local' : 'online';
+  }
+  private sideTasks(side: 'local' | 'online' | 'lookup'): Task[] {
+    return [...this.tasks].filter(task => this.queueSide(task) === side);
+  }
+  private sideSubscribers(side: 'local' | 'online' | 'lookup'): number {
+    return this.sideTasks(side).reduce((sum, task) => sum + task.subscribers.size, 0);
+  }
+  private sideRoom(task: Task, side: 'local' | 'online'): boolean {
+    const peers = this.sideTasks(side).filter(item => item !== task);
+    return peers.length < this.maxQueuedItems
+      && peers.reduce((sum, item) => sum + item.bytes, 0) + task.bytes <= this.maxQueuedBytes
+      && peers.reduce((sum, item) => sum + item.subscribers.size, 0) + task.subscribers.size <= this.maxSubscribers;
+  }
+  private makeRoom(bytes: number, deadline: number, context: ResponseContext, side: 'local' | 'online' | 'lookup'): boolean {
     if (bytes > this.maxQueuedBytes) return false;
-    while (this.tasks.size >= this.maxQueuedItems || this.pendingBytes + bytes > this.maxQueuedBytes) {
-      const furthest = [...this.tasks].filter((task) =>
+    for (;;) {
+      const peers = this.sideTasks(side);
+      if (peers.length < this.maxQueuedItems && peers.reduce((sum, item) => sum + item.bytes, 0) + bytes <= this.maxQueuedBytes) break;
+      const furthest = peers.filter((task) =>
         (task.stage === 'lookup' || task.stage === 'queued') && (context.vod
           ? this.priority(task) > ['near', 'buffered', 'background'].indexOf(context.priority)
           : this.vod(task) || this.deadline(task) > deadline),
@@ -414,6 +541,7 @@ export class TranslationEngine {
     return true;
   }
   private async prepare(tasks: Task[]): Promise<void> {
+    if (tasks[0]?.hybrid) { await this.prepareHybrid(tasks); return; }
     const settings = tasks[0]!.settings;
     const policy = { ttlMs: settings.cacheTtlDays * DAY, maxEntries: settings.cacheMaxEntries };
     let cached = new Map<string, string>();
@@ -433,7 +561,9 @@ export class TranslationEngine {
     for (const task of tasks) {
       if (task.stage !== 'lookup') continue;
       const hit = cached.get(task.cacheKey);
-      if (typeof hit === 'string' && hit.trim() && !localQualityIssue(task.settings, task.text, hit)) { this.finishTask(task, 'cached', undefined, hit); continue; }
+      if (typeof hit === 'string' && hit.trim() && !localQualityIssue(task.settings, task.text, hit)
+          && !this.validateResult?.(task.text, hit, task.settings)) { this.finishTask(task, 'cached', undefined, hit); continue; }
+      if (this.cacheOnly?.()) { this.finishTask(task, 'failed', 'cache-miss'); continue; }
       if (task.settings.backend !== 'local' && (!task.apiKey || /[\r\n]/.test(task.apiKey))) { this.finishTask(task, 'failed', 'api-key-missing-or-invalid'); continue; }
       const rejected = this.rejectedGroups.get(task.group);
       if (rejected?.apiKey === task.apiKey) { this.finishTask(task, 'failed', rejected.reason); continue; }
@@ -442,6 +572,85 @@ export class TranslationEngine {
     }
     this.schedulePump();
   }
+  private async prepareHybrid(tasks: Task[]): Promise<void> {
+    const first = tasks[0]!.hybrid!;
+    const read = async (candidates: Task[], backend: 'local' | 'online'): Promise<Map<string, string>> => {
+      if (!candidates.length) return new Map();
+      const settings = first[backend];
+      const policy = { ttlMs: settings.cacheTtlDays * DAY, maxEntries: settings.cacheMaxEntries };
+      const keys = candidates.map(task => task.hybrid![backend === 'local' ? 'localKey' : 'onlineKey']).filter(Boolean);
+      if (!keys.length) return new Map();
+      try {
+        if (this.cache.getMany) return await this.cache.getMany(keys, policy);
+        const results = await Promise.allSettled(keys.map(key => this.cache.get(key, policy)));
+        const found = new Map<string, string>();
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') this.counts.cacheErrors++;
+          else if (result.value !== undefined) found.set(keys[index]!, result.value);
+        });
+        return found;
+      } catch { this.counts.cacheErrors++; return new Map(); }
+    };
+    const eligible = tasks.filter(task => !task.bypassCache && !task.forced);
+    const local = await read(eligible, 'local');
+    const remaining: Task[] = [];
+    const useCache = (task: Task, backend: 'local' | 'online', found: Map<string, string>): boolean => {
+      const hybrid = task.hybrid!;
+      const settings = hybrid[backend];
+      const key = backend === 'local' ? hybrid.localKey : hybrid.onlineKey;
+      const hit = found.get(key);
+      if (task.stage !== 'lookup' || typeof hit !== 'string' || !hit.trim()
+          || hybridQualityIssue(task.text, hit) || localQualityIssue(settings, task.text, hit)
+          || this.validateResult?.(task.text, hit, settings)) return false;
+      task.settings = settings; task.cacheKey = key;
+      this.finishTask(task, 'cached', undefined, hit);
+      return true;
+    };
+    for (const task of tasks) if (task.stage === 'lookup' && !useCache(task, 'local', local)) remaining.push(task);
+    const online = await read(remaining.filter(task => !task.bypassCache && !task.forced), 'online');
+    for (const task of remaining) {
+      if (task.stage !== 'lookup' || useCache(task, 'online', online)) continue;
+      if (this.cacheOnly?.()) { this.finishTask(task, 'failed', 'cache-miss'); continue; }
+      this.routeHybrid(task);
+    }
+    this.schedulePump();
+  }
+
+  private routeHybrid(task: Task): void {
+    const hybrid = task.hybrid!;
+    const now = this.clock.now();
+    if (!hybrid.localReady && hybrid.onLocalNeeded) {
+      void Promise.resolve().then(() => hybrid.onLocalNeeded?.()).catch(() => {});
+    }
+    const localLimit = Math.min(this.maxConcurrency, hybrid.local.concurrency,
+      bound(hybrid.local.localCapacity, 1, Number.MAX_SAFE_INTEGER));
+    const localBatches = [...this.active].filter(batch => batch.tasks[0]?.settings.backend === 'local');
+    const localActive = localBatches.length;
+    const localInFlight = localBatches.reduce((sum, batch) =>
+      sum + Math.max(1, batch.tasks.filter(item => item.stage === 'running').length), 0);
+    const localQueued = [...this.tasks].filter(item => item !== task && item.settings.backend === 'local'
+      && (!item.hybrid || item.hybrid.reserved) && (item.stage === 'queued' || item.stage === 'lookup')).length;
+    const remaining = this.deadline(task) - now;
+    const timely = hybrid.p95Ms === undefined ? localActive + localQueued < localLimit
+      : Math.ceil((localInFlight + localQueued + 1) / localLimit) * hybrid.p95Ms < remaining;
+    const localFits = task.chars <= hybrid.local.maxBatchChars && localQueued < localLimit && timely
+      && this.sideRoom(task, 'local')
+      && now >= this.hybridCooldown.local && !this.rejectedGroups.has(hybrid.localGroup);
+    if (hybrid.localReady && localFits && this.hybridWindow.reserve(hybrid.capacityKey, task, task.text.length,
+      hybrid.maxItems, hybrid.maxChars, now)) {
+      hybrid.reserved = true;
+      task.settings = hybrid.local; task.cacheKey = hybrid.localKey; task.group = hybrid.localGroup;
+    } else {
+      if (!hybrid.onlineReady || !task.apiKey || /[\r\n]/.test(task.apiKey)
+          || task.chars > hybrid.online.maxBatchChars || !this.sideRoom(task, 'online')
+          || now < this.hybridCooldown.online || this.rejectedGroups.get(hybrid.onlineGroup)?.apiKey === task.apiKey) {
+        this.finishTask(task, 'failed', 'hybrid-no-capacity'); return;
+      }
+      task.settings = hybrid.online; task.cacheKey = hybrid.onlineKey; task.group = hybrid.onlineGroup;
+    }
+    task.stage = 'queued';
+    this.trace({ type: 'queued', at: now, taskId: task.id });
+  }
   private schedulePump(): void {
     if (this.pumpScheduled || this.disposed) return;
     this.pumpScheduled = true;
@@ -449,28 +658,35 @@ export class TranslationEngine {
     queueMicrotask(() => queueMicrotask(() => { this.pumpScheduled = false; if (!this.disposed) this.pump(); }));
   }
   private canRun(task: Task): boolean {
+    const backend = task.settings.backend === 'local' ? 'local' : 'online';
+    const activeSide = [...this.active].filter(batch => batch.tasks[0]?.settings.backend === backend);
+    if (task.hybrid) {
+      const limit = Math.min(this.maxConcurrency, task.settings.concurrency,
+        backend === 'local' ? bound(task.settings.localCapacity, 1, Number.MAX_SAFE_INTEGER) : MAX_CONCURRENCY);
+      return activeSide.length < limit;
+    }
     const limit = Math.min(this.maxConcurrency, task.settings.concurrency,
       task.settings.backend === 'local' ? bound(task.settings.localCapacity, 1, Number.MAX_SAFE_INTEGER) : MAX_CONCURRENCY,
-      ...[...this.active].map((batch) => batch.concurrency));
-    if (task.serviceClass === 'normal' && this.live(task) && this.active.size >= limit) {
+      ...activeSide.map((batch) => batch.concurrency));
+    if (task.serviceClass === 'normal' && this.live(task) && activeSide.length >= limit) {
       // At a single-slot backend, cancel a slower category to release the only slot.
       // With multiple slots, slower categories always leave one slot for normal chat.
-      if (limit === 1) for (const batch of this.active) if (batch.tasks.every(item => item.serviceClass !== 'normal')) batch.controller.abort();
+      if (limit === 1) for (const batch of activeSide) if (batch.tasks.every(item => item.serviceClass !== 'normal')) batch.controller.abort();
     }
-    if (this.active.size >= limit) return false;
-    if (task.serviceClass !== 'normal' && limit > 1 && [...this.active].filter(batch => batch.tasks.every(item => item.serviceClass !== 'normal')).length >= limit - 1) return false;
+    if (activeSide.length >= limit) return false;
+    if (task.serviceClass !== 'normal' && limit > 1 && activeSide.filter(batch => batch.tasks.every(item => item.serviceClass !== 'normal')).length >= limit - 1) return false;
     if (this.live(task) && task.settings.liveAdaptiveConcurrency !== false) {
       const control = this.control(task);
       const active = [...this.active].filter(batch => batch.live && batch.tasks[0]?.group === task.group).length;
       if (active >= control.limit) return false;
     }
     if (this.vod(task) && this.hasLiveWork()) {
-      return limit >= 2 && [...this.active].filter(batch => !batch.live).length < limit - 1;
+      return limit >= 2 && activeSide.filter(batch => !batch.live).length < limit - 1;
     }
     if (this.vod(task) || this.urgent(task)) return true;
     // One far batch at most, and always leave one slot for newly arriving urgent work.
     // At concurrency=1, far work waits until it enters the urgent window.
-    return this.active.size < limit - 1 && ![...this.active].some((batch) => !batch.urgent);
+    return activeSide.length < limit - 1 && !activeSide.some((batch) => !batch.urgent);
   }
   private control(task: Task): { limit: number; changedAt: number; blockedUntil: number } {
     let control = this.controls.get(task.group);
@@ -498,12 +714,12 @@ export class TranslationEngine {
     return this.timingEstimate(task, chars).expectedMs;
   }
   private sendAt(task: Task, chars = task.chars): number {
-    if (localSingleItem(task.settings)) return task.enqueuedAt; // A single-source translation never benefits from aggregation delay.
+    if (localSingleItem(task.settings) || task.hybrid && task.settings.backend === 'local') return task.enqueuedAt;
     return Math.min(task.enqueuedAt + (task.settings.liveMaxBatchWaitMs ?? MAX_LIVE_BATCH_WAIT_MS), this.deadline(task) - this.expectedMs(task, chars) - 25);
   }
   private adjustCapacity(now: number): void {
     const groups = new Map<string, Task[]>();
-    for (const task of this.tasks) if (task.stage === 'queued' && this.live(task) && task.settings.liveAdaptiveConcurrency !== false) {
+    for (const task of this.tasks) if (task.stage === 'queued' && this.live(task) && !task.hybrid && task.settings.liveAdaptiveConcurrency !== false) {
       const group = groups.get(task.group) ?? []; group.push(task); groups.set(task.group, group);
     }
     for (const tasks of groups.values()) {
@@ -571,10 +787,12 @@ export class TranslationEngine {
         if (!subscription.context.vod && subscription.input.deadlineAt <= now) this.finish(subscription, 'expired', 'deadline');
       }
     }
-    if (now >= this.rateLimitedUntil) {
+    {
       const waiting = new Set<string>();
       for (;;) {
-        const ready = [...this.tasks].filter((task) => task.stage === 'queued' && task.readyAt <= now && task.subscribers.size)
+        const ready = [...this.tasks].filter((task) => task.stage === 'queued' && task.readyAt <= now && task.subscribers.size
+          && (task.hybrid ? now >= this.hybridCooldown[task.settings.backend === 'local' ? 'local' : 'online']
+            : now >= this.rateLimitedUntil))
           .sort((a, b) => this.priority(a) - this.priority(b) || this.deadline(a) - this.deadline(b));
         const first = ready.find((task) => !waiting.has(task.group) && this.canRun(task));
         if (!first) break;
@@ -588,7 +806,7 @@ export class TranslationEngine {
         // Conservative compact-prompt allowance. Full pooled context is a batch ceiling;
         // actual tokenizer/KV admission remains the local worker's responsibility.
         const localInputLimit = local ? bound(first.settings.localContextTokens, 2048, Number.MAX_SAFE_INTEGER) - localOutputLimit : Infinity;
-        const maxBatchItems = localSingleItem(first.settings) ? 1 : first.settings.batchSize;
+        const maxBatchItems = localSingleItem(first.settings) || first.hybrid && local ? 1 : first.settings.batchSize;
         let inputTokens = (local ? 256 : 1024) + first.tokenEstimate.input;
         let outputTokens = first.tokenEstimate.output;
         let sizeLimited = false;
@@ -730,13 +948,14 @@ export class TranslationEngine {
     for (const until of this.liveSessions.values()) if (until > now) next = Math.min(next, until);
     for (const task of this.tasks) {
       if (task.stage !== 'queued') continue;
-      const readyAt = Math.max(task.readyAt, this.rateLimitedUntil);
+      const readyAt = Math.max(task.readyAt, task.hybrid
+        ? this.hybridCooldown[task.settings.backend === 'local' ? 'local' : 'online'] : this.rateLimitedUntil);
       if (readyAt > now) next = Math.min(next, readyAt);
       if (this.live(task)) {
         const sendAt = this.sendAt(task);
         if (sendAt > now) next = Math.min(next, sendAt);
         const control = this.control(task);
-        if (task.settings.liveAdaptiveConcurrency !== false && control.limit < task.settings.concurrency) {
+        if (!task.hybrid && task.settings.liveAdaptiveConcurrency !== false && control.limit < task.settings.concurrency) {
           const adjustmentAt = Math.max(control.changedAt + 250, control.blockedUntil);
           if (adjustmentAt > now) next = Math.min(next, adjustmentAt);
         }
@@ -749,7 +968,24 @@ export class TranslationEngine {
   private retry(task: Task, reason: string, waitMs: number): void {
     if (this.live(task)) { this.finishTask(task, 'original', reason); return; }
     const readyAt = this.clock.now() + waitMs;
-    if (task.attempts < 2 && task.subscribers.size && (this.vod(task) || this.deadline(task, true) - readyAt >= MIN_RETRY_BUDGET_MS)) {
+    if (task.attempts < this.maxAttempts && task.subscribers.size && (this.vod(task) || this.deadline(task, true) - readyAt >= MIN_RETRY_BUDGET_MS)) {
+      if (task.hybrid && task.settings.backend === 'local') {
+        const localLimit = Math.min(this.maxConcurrency, task.settings.concurrency,
+          bound(task.settings.localCapacity, 1, Number.MAX_SAFE_INTEGER));
+        const otherBatches = [...this.active].filter(batch => batch !== task.batch
+          && batch.tasks[0]?.settings.backend === 'local');
+        const otherInFlight = otherBatches.reduce((sum, batch) =>
+          sum + Math.max(1, batch.tasks.filter(item => item.stage === 'running').length), 0);
+        const queued = [...this.tasks].filter(item => item !== task && item.settings.backend === 'local'
+          && (!item.hybrid || item.hybrid.reserved) && (item.stage === 'queued' || item.stage === 'lookup')).length;
+        const timely = task.hybrid.p95Ms === undefined ? otherBatches.length + queued < localLimit
+          : Math.ceil((otherInFlight + queued + 1) / localLimit) * task.hybrid.p95Ms < this.deadline(task, true) - readyAt;
+        if (queued >= localLimit || !timely || !this.hybridWindow.reserve(task.hybrid.capacityKey,
+          task, task.text.length, task.hybrid.maxItems, task.hybrid.maxChars, this.clock.now())) {
+          this.finishTask(task, 'failed', 'hybrid-local-limit'); return;
+        }
+        task.hybrid.reserved = true;
+      }
       task.stage = 'queued'; task.batch = undefined; task.readyAt = readyAt;
     } else this.finishTask(task, 'failed', reason, undefined, this.vod(task) && reason === 'http-429' ? waitMs : undefined);
   }
@@ -760,7 +996,7 @@ export class TranslationEngine {
     this.cacheWriteTail = currentWrite;
     if (previousWrite) await previousWrite;
     const all = tasks;
-    tasks = tasks.filter(task => !task.bypassCache && task.cacheGeneration === (this.cacheGenerations.get(task.cacheKey) ?? 0));
+    tasks = tasks.filter(task => !task.bypassCache && task.cacheGeneration === (this.cacheGenerations.get(task.identityKey) ?? 0));
     if (!tasks.length) { all.forEach(task => this.remove(task)); releaseWrite(); return; }
     const settings = tasks[0]!.settings;
     const policy = { ttlMs: settings.cacheTtlDays * DAY, maxEntries: settings.cacheMaxEntries };
@@ -778,26 +1014,66 @@ export class TranslationEngine {
     finally { all.forEach((task) => this.remove(task)); releaseWrite(); this.schedulePump(); }
   }
   private async run(batch: Batch): Promise<void> {
-    const first = batch.tasks[0]!;
+    let first = batch.tasks[0]!;
     let usage: Usage | undefined, status = 'failed', duplicates = 0;
+    let sent = false;
     const pendingSaves: Task[] = [];
     const accept = (task: Task, text: string, saveNow = true): void => {
       if (task.completedText !== undefined || this.disposed || batch.controller.signal.aborted || task.stage === 'done' || !text.trim()) return;
-      const issue = localQualityIssue(task.settings, task.text, text);
-      if (issue) { this.localDiagnostics.qualityRejected++; this.lastError = { reason: issue, at: this.clock.now() }; this.finishTask(task, 'failed', issue); return; }
+      const issue = (task.hybrid ? hybridQualityIssue(task.text, text) : undefined)
+        ?? localQualityIssue(task.settings, task.text, text)
+        ?? this.validateResult?.(task.text, text, task.settings);
+      if (issue) {
+        if (task.settings.backend === 'local') this.localDiagnostics.qualityRejected++;
+        this.lastError = { reason: issue, at: this.clock.now() }; this.finishTask(task, 'failed', issue); return;
+      }
+      if (task.hybrid && [...task.subscribers].some(subscription =>
+        subscription.input.deadlineAt > this.clock.now())) {
+        this.hybridCounts[task.settings.backend === 'local' ? 'local' : 'online'].timelyQualified++;
+      }
       task.stage = 'saving'; task.completedText = text;
       for (const subscription of [...task.subscribers]) this.finish(subscription, 'translated', undefined, text);
       // Stream delivery and cache writes never stop the provider from draining final usage.
       if (saveNow) void this.save([task]); else pendingSaves.push(task);
     };
     try {
+      for (const task of batch.tasks) for (const subscription of [...task.subscribers]) {
+        if (subscription.context.signal?.aborted) this.finish(subscription, 'original', 'cancelled');
+      }
+      const activeTasks = batch.tasks.filter(task => task.stage === 'running' && task.subscribers.size > 0);
+      for (const task of batch.tasks) if (!activeTasks.includes(task)) this.remove(task);
+      batch.tasks = activeTasks;
+      if (batch.controller.signal.aborted) {
+        for (const task of batch.tasks) this.finishTask(task, 'original', 'cancelled');
+      }
+      if (!batch.tasks.length || batch.controller.signal.aborted) {
+        this.counts.providerCalls--; status = 'cancelled';
+        return;
+      }
+      first = batch.tasks[0]!;
       if (first.settings.backend === 'local' && batch.tasks.some(task => task.forced)) this.localDiagnostics.forcedCalls++;
+      sent = true;
       const result = await this.provider.complete({
-        settings: first.settings, apiKey: first.apiKey,
+        settings: first.settings, apiKey: first.hybrid && first.settings.backend === 'local' ? 'local-inference' : first.apiKey,
         strategy: first.serviceClass,
         force: batch.tasks.some(task => task.forced),
         mode: batch.live ? 'deadline' : this.vod(first) ? 'vod' : undefined,
         items: batch.tasks.map(({ id, text }) => ({ id, text })), signal: batch.controller.signal,
+        isItemCurrent: id => batch.tasks.some(task => task.id === id && task.subscribers.size > 0 && task.stage === 'running'),
+        onDispatch: (items, backend) => {
+          if (!first.hybrid) return;
+          const counts = this.hybridCounts[backend];
+          counts.actualRequests++;
+          counts.inputItems += items.length;
+          counts.inputChars += items.reduce((sum, item) => sum + item.text.length, 0);
+          if (backend === 'local') for (const item of items) {
+            const task = batch.tasks.find(task => task.id === item.id);
+            if (task?.hybrid?.reserved) {
+              this.hybridWindow.dispatch(task.hybrid.capacityKey, task, item.text.length, this.clock.now());
+              task.hybrid.reserved = false;
+            }
+          }
+        },
         onItem: (id, output) => {
           const task = batch.tasks.find(task => task.id === id);
           if (task && output.text !== undefined) accept(task, output.text);
@@ -858,7 +1134,11 @@ export class TranslationEngine {
         return; // An old cancelled request cannot overwrite current configuration failure state.
       }
       const waitMs = failure.status === 429 ? failure.retryAfterMs ?? 1000 : 200;
-      if (failure.status === 429) this.rateLimitedUntil = Math.max(this.rateLimitedUntil, this.clock.now() + waitMs);
+      if (failure.status === 429) {
+        const backend = first.settings.backend === 'local' ? 'local' : 'online';
+        this.hybridCooldown[backend] = Math.max(this.hybridCooldown[backend], this.clock.now() + waitMs);
+        if (!first.hybrid) this.rateLimitedUntil = Math.max(this.rateLimitedUntil, this.clock.now() + waitMs);
+      }
       if (batch.live && failure.retryable) {
         const control = this.control(first);
         // 429 is capacity feedback. An isolated network failure is not evidence that
@@ -869,7 +1149,8 @@ export class TranslationEngine {
       if (failure.message !== 'cancelled') {
         this.lastError = { reason: failure.message, at: this.clock.now() };
         if (failure.status !== undefined) this.lastError.status = failure.status;
-        if (failure.status === 429) this.lastError.retryAt = this.rateLimitedUntil;
+        if (failure.status === 429) this.lastError.retryAt = first.hybrid
+          ? this.hybridCooldown[first.settings.backend === 'local' ? 'local' : 'online'] : this.rateLimitedUntil;
         if ((failure.status === 401 || failure.status === 403) && !batch.controller.signal.aborted) {
           this.rejectedGroups.set(first.group, { apiKey: first.apiKey, reason: failure.message });
           for (const task of [...this.tasks]) {
@@ -884,7 +1165,7 @@ export class TranslationEngine {
       }
     } finally {
       if (usage) { this.counts.usageReports++; this.usage = addUsage(this.usage, usage); }
-      if (usage?.promptTokens === undefined || usage?.completionTokens === undefined) this.counts.usageUnavailableCalls++;
+      if (sent && (usage?.promptTokens === undefined || usage?.completionTokens === undefined)) this.counts.usageUnavailableCalls++;
       this.trace({ type: 'settled', at: this.clock.now(), batchId: batch.id, durationMs: this.clock.now() - batch.startedAt,
         status, usage, usageKnown: usage?.promptTokens !== undefined && usage?.completionTokens !== undefined, duplicateIds: duplicates });
       this.active.delete(batch); this.schedulePump();
@@ -899,6 +1180,7 @@ export class TranslationEngine {
       pendingBytes: this.pendingBytes, subscribers: this.subscribers, activeRequests: this.active.size,
       recentTrace: this.traceTail.map(event => structuredClone(event)),
       localDiagnostics: structuredClone(this.localDiagnostics),
+      hybrid: structuredClone(this.hybridCounts),
     };
     if (this.usage) snapshot.usage = { ...this.usage };
     if (this.lastError) snapshot.lastError = { ...this.lastError };
@@ -908,6 +1190,7 @@ export class TranslationEngine {
   /** Called only by the trusted background after cancelling subscriptions for a settings action. */
   resetFailureState(): void {
     this.rejectedGroups.clear(); this.lastError = undefined; this.rateLimitedUntil = 0;
+    this.hybridCooldown.local = 0; this.hybridCooldown.online = 0;
     // Background calls this before clear/settings changes. A pending write must no longer supply joins.
     for (const task of [...this.tasks]) if (task.stage === 'saving') this.remove(task);
     this.schedulePump();
@@ -916,6 +1199,7 @@ export class TranslationEngine {
     this.disposed = true;
     this.rejectedGroups.clear();
     this.quotas.clear();
+    this.hybridWindow.clear();
     this.liveSessions.clear();
     this.clock.clearTimeout(this.wakeTimer);
     for (const task of [...this.tasks]) this.finishTask(task, 'original', 'engine-disposed');

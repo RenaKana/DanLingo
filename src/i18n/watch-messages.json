@@ -1,0 +1,7 @@
+{
+  "watch.enableTranslation": "开启翻译",
+  "watch.translationOn": "翻译已开启，点击关闭",
+  "watch.translationOff": "翻译已关闭，点击开启",
+  "watch.disableTranslation": "关闭翻译",
+  "watch.actionWithShortcut": "{action}（{shortcut}）"
+}

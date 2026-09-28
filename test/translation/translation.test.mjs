@@ -1,12 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS, PROMPT_VERSION } from '../../src/core/config.ts';
+import { PROMPT_VERSION } from '../../src/core/config.ts';
 import {
   TranslationEngine, MemoryTranslationCache, IndexedDbTranslationCache, translationCacheKey,
   ChatCompletionsProvider, placeholdersIntact, MAX_REQUEST_MS,
   protectText, restoreText,
 } from '../../src/translation/index.ts';
 import { retryAfterMs } from '../../src/translation/provider.ts';
+import { LOCAL_COMPLETION_ENDPOINT } from '../../src/core/connection.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 class Clock {
   time = 1000;
@@ -39,10 +41,12 @@ class Clock {
 }
 async function flush() { for (let n = 0; n < 60; n++) await Promise.resolve(); }
 function settings(overrides = {}) {
-  const thinkingEffort = overrides.profile === 'chat-completions' ? 'default' : overrides.profile === 'gemini' ? 'low' : 'off';
+  const profile = overrides.profile ?? 'minimax';
+  const thinkingEffort = profile === 'chat-completions' ? 'default' : profile === 'gemini' ? 'low' : 'off';
   // Legacy deadline fixtures retain their explicit 8s urgency window after the VOD defaults change.
-  const model = overrides.profile === 'deepseek' ? 'deepseek-v4-pro' : overrides.profile === 'gemini' ? 'gemini-2.5-pro' : DEFAULT_SETTINGS.model;
-  return { ...DEFAULT_SETTINGS, model, enabled: true, urgentSeconds: 8, thinkingEffort, ...overrides };
+  const model = profile === 'deepseek' ? 'deepseek-v4-pro' : profile === 'gemini' ? 'gemini-2.5-pro'
+    : profile === 'chat-completions' ? 'gpt-5.5' : 'MiniMax-M3';
+  return onlineSettings({ enabled: true, urgentSeconds: 8, profile, model, thinkingEffort, ...overrides });
 }
 function response(items, usage, extra = {}) {
   return Response.json({
@@ -71,6 +75,30 @@ function harness(t, overrides = {}) {
   t.after(() => engine.dispose());
   return { engine, clock, calls };
 }
+
+test('online requests with blank endpoint or model fail before provider calls', async (t) => {
+  const { engine, clock, calls } = harness(t);
+  const missingEndpoint = await engine.translate(request(clock, ['endpoint'], { settings: settings({ endpoint: '', model: 'fixture-model' }) }));
+  const missingModel = await engine.translate(request(clock, ['model'], { settings: settings({ model: '' }) }));
+  assert.equal(missingEndpoint.items[0].reason, 'missing-endpoint');
+  assert.equal(missingModel.items[0].reason, 'missing-model');
+  assert.equal(calls.length, 0);
+});
+
+test('local provider accepts blank online-only fields and uses only the internal dispatch URL', async () => {
+  let requestedUrl;
+  const provider = new ChatCompletionsProvider({ fetch: async url => {
+    requestedUrl = url;
+    return response([{ id: 'local-one', text: 'translated locally' }]);
+  } });
+  const result = await provider.complete({
+    settings: settings({ backend: 'local', endpoint: '', model: '', localModelId: 'fixture-model',
+      localPerformance: { promptMode: 'json', languageValidation: 'off' } }),
+    apiKey: 'local-inference', items: [{ id: 'local-one', text: 'original' }], budgetMs: 1000,
+  });
+  assert.equal(requestedUrl, LOCAL_COMPLETION_ENDPOINT);
+  assert.equal(result.items.get('local-one').text, 'translated locally');
+});
 
 test('401 stops queued and future tasks for the rejected credentials until an explicit reset', async (t) => {
   const { engine, clock, calls } = harness(t);
@@ -112,7 +140,7 @@ test('real POST shape: Bearer, exact JSON data, no redirect/cookies, explicit th
       assert.equal(calls.length, 1);
       const { url, init } = calls[0];
       const body = JSON.parse(init.body);
-      assert.equal(url, DEFAULT_SETTINGS.endpoint);
+      assert.equal(url, settings({profile}).endpoint);
       assert.equal(init.method, 'POST');
       assert.equal(init.headers.Authorization, 'Bearer test-only-not-a-real-key');
       assert.equal(init.headers['Content-Type'], 'application/json');
@@ -831,8 +859,8 @@ test('caller mutation cannot change provider endpoint, model or original text af
   req.settings.model = 'wrong';
   req.items[0].text = 'changed';
   await flush();
-  assert.equal(calls[0].url, DEFAULT_SETTINGS.endpoint);
-  assert.equal(JSON.parse(calls[0].init.body).model, DEFAULT_SETTINGS.model);
+  assert.equal(calls[0].url, settings().endpoint);
+  assert.equal(JSON.parse(calls[0].init.body).model, settings().model);
   assert.equal(calls[0].data.items[0].text, '原文');
   calls[0].succeed();
   assert.equal((await pending).items[0].text, '译:原文');

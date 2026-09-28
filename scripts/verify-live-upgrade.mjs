@@ -67,7 +67,7 @@ async function copyExtension(source, destination, replace = false) {
 }
 function assertDefaults(settings) {
   assert.equal(settings.schemaVersion, 3);
-  assert.equal(settings.liveBufferMs, 2000);
+  assert.equal(settings.liveBufferMs, 3000);
   assert.equal(settings.liveSourceLanguage, 'auto');
 }
 function assertPreserved(before, after) {

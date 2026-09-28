@@ -51,6 +51,8 @@ export function parseSources(value: unknown, resourceId: string, platform: Sourc
       originalText: m.originalText, mediaTimeMs: m.mediaTimeMs, renderAtMs: m.renderAtMs,
       translatable: m.translatable === true && m.fork !== 'owner' && (platform !== 'bilibili' || ['1','4','5','6'].includes(style.position)), style,
     };
+    if (platform === 'bilibili' && typeof m.displayPlanEligible === 'boolean')
+      message.displayPlanEligible = m.displayPlanEligible && m.translatable === true && style.position === '1';
     if (typeof m.sentAtEpochMs === 'number' && Number.isFinite(m.sentAtEpochMs) && m.sentAtEpochMs > 0) message.sentAtEpochMs = m.sentAtEpochMs;
     result.push(message);
   }

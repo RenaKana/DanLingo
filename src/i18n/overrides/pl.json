@@ -1,0 +1,22 @@
+{
+  "m_549ef7f261be": "Licznik żądań jest wspólny dla wszystkich kart i usług oraz jest naliczany według lokalnego dnia kalendarzowego na tym urządzeniu. Ponowienia, tłumaczenia uzupełniające i testy także się liczą. To limit liczby żądań; limit kwoty ustaw po stronie usługi.",
+  "m_4e377b8b93c0": "Usunąć rejestrację „{p0}”? Oryginalny plik GGUF pozostanie nienaruszony. Jeśli model jest używany, zostanie najpierw wyładowany z pamięci, a wybór zostanie wyczyszczony. {p1}",
+  "m_e9d46d8e3ec9": "Usunąć kopię „{p0}” z rozszerzenia? Oryginalny plik GGUF pozostanie nienaruszony. Jeśli model jest używany, zostanie najpierw wyładowany z pamięci.",
+  "m_779638a3aad8": "Usunąć rejestrację „{p0}”? Oryginalny plik pozostanie nienaruszony. Jeśli model jest używany, zostanie najpierw wyładowany z pamięci, a wybór zostanie wyczyszczony.",
+  "m_b4fe85db78aa": "Ten model nie pojawi się ponownie po odświeżeniu folderu.",
+  "m_9a5bf1f8dda0": "Wpisz klucz API; jeśli domena usługi się nie zmienia, pole może pozostać puste.",
+  "m_da84b511f856": "Zapisz i autoryzuj usługę",
+  "m_ffad0837a6bc": "Ta usługa nie jest jeszcze autoryzowana. Aby zamknąć ustawienia, kliknij „Zapisz i autoryzuj usługę”.",
+  "m_592a688fb6d4": "Test wyśle wybraną liczbę żądań i może spowodować użycie usługi. Podczas testu tłumaczenie strony oglądania zostanie wstrzymane, a po jego zakończeniu wznowione. Ustawienie włączania lub wyłączania tłumaczenia pozostanie bez zmian.",
+  "m_41ed2767d1c6": "Ustawienia oglądania",
+  "m_217cfe7db1e3": "Motyw systemowy",
+  "m_92618f81aee5": "Wyłącz rozumowanie",
+  "m_9c41b3a9e12a": "Poziom rozumowania",
+  "m_45da2d9c85d1": "Dodaj folder",
+  "m_9b826346239e": "Silnik tłumaczenia",
+  "m_aa0819dfc4d8": "Jasny motyw",
+  "m_a6b75d068032": "Ciemny motyw",
+  "locale.label": "Język interfejsu",
+  "m_9dac295e3b09": "Zrozum inny język dzięki danmaku.",
+  "m_03287b455f2d": "Zwykłe danmaku"
+}

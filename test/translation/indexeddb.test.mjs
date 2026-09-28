@@ -226,7 +226,10 @@ async function browserChecks() {
     } });
     try {
       const items = Array.from({ length: 110 }, (_, n) => ({ id: `display-${n}`, text: `source-${n % 100}`, deadlineAt: 0 }));
-      const request = { resourceId: 'video', mode: 'vod', apiKey: 'test-only-not-a-real-key', settings: { ...DEFAULT_SETTINGS, enabled: true }, items };
+      const request = { resourceId: 'video', mode: 'vod', apiKey: 'test-only-not-a-real-key', settings: {
+        ...DEFAULT_SETTINGS, backend: 'online', endpoint: 'https://api.minimax.cn/v1/chat/completions', model: 'MiniMax-M3',
+        profile: 'minimax', protocol: 'chat-completions', thinkingEffort: 'off', reasoningProfileOverride: undefined, enabled: true,
+      }, items };
       const translated = await engine.translate(request);
       equal(calls.length, 1, 'one grouped provider POST'); equal(calls[0].length, 100, 'unique provider sources');
       equal(translated.items.map(({ id }) => id), items.map(({ id }) => id), 'every display identity');

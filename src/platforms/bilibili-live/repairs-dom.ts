@@ -1,6 +1,7 @@
 import { decimalId, ordinaryMessageId } from './messages.ts';
 import { BilibiliRepairs, type RepairRecord } from './repairs.ts';
 import { readNativeBody } from './body.ts';
+import { getLocale, onLocaleChange, t } from '../../i18n/text.ts';
 
 type Data = Record<string, any>;
 interface Display { row: Element; body: HTMLElement; record: RepairRecord; actions: HTMLSpanElement; button: HTMLButtonElement; originalButton: HTMLButtonElement; showingOriginal: boolean; written?: string; nodes?: { node: Text; text: string | null }[] }
@@ -70,6 +71,7 @@ export class BilibiliRepairDom {
   private readonly options: { ledger: BilibiliRepairs; active(): boolean };
   private readonly document: Document;
   private readonly style: HTMLStyleElement;
+  private readonly stopLocale: () => void;
   constructor(options: { ledger: BilibiliRepairs; active(): boolean; document?: Document }) {
     this.options=options; this.document=options.document ?? globalThis.document;
     this.style=this.document.createElement('style');
@@ -82,6 +84,7 @@ export class BilibiliRepairDom {
       [data-danlingo-bili-actions]>button:disabled{opacity:.35;cursor:default}
     `;
     (this.document.head ?? this.document.documentElement).append(this.style);
+    this.stopLocale=onLocaleChange(()=>{for(const display of this.displays.values())this.updateControls(display);});
   }
   private candidates(): { row:Element; body:HTMLElement; record:RepairRecord }[] {
     const result: { row:Element; body:HTMLElement; record:RepairRecord }[]=[];
@@ -141,12 +144,14 @@ export class BilibiliRepairDom {
     display.nodes.push(...added.map(node => ({ node, text: null }))); display.written = text; return true;
   }
   private updateControls(display: Display) {
-    const record=display.record, disabled=!!record.request||!this.options.active(), label=record.request?'翻译中':'强制重译';
+    const record=display.record, disabled=!!record.request||!this.options.active(), label=record.request?t('m_aeda1aa78563'):t('m_dee9278dcdbe');
     display.button.disabled=disabled;
-    const title=record.request?'翻译进行中':'强制重译：从保存的原文重新翻译，绕过成功缓存';
+    const title=record.request?t('m_fc6c6f9525b7'):t('m_561e50ee96e7');
     updateIconButton(display.button,'retry',label,title);
-    const originalLabel=display.showingOriginal?'显示译文':'显示原文';
-    updateIconButton(display.originalButton,display.showingOriginal?'translation':'original',originalLabel,display.showingOriginal?'显示已保存的译文，不发起翻译请求':'显示保存的原文，不发起翻译请求');
+    const originalLabel=display.showingOriginal?t('m_7cd62999f274'):t('m_098e66189da8');
+    updateIconButton(display.originalButton,display.showingOriginal?'translation':'original',originalLabel,display.showingOriginal?t('m_b114613fd85a'):t('m_57b267c33e38'));
+    display.actions.setAttribute('aria-label',t('m_f7d73464ac24'));
+    display.actions.lang = getLocale(); display.actions.dir = getLocale() === 'ar' ? 'rtl' : 'ltr';
     display.originalButton.setAttribute('aria-pressed',String(display.showingOriginal));
     display.originalButton.disabled=display.showingOriginal&&!record.text;
   }
@@ -162,9 +167,9 @@ export class BilibiliRepairDom {
       found.add(row);
       this.options.ledger.seen(record.sourceId);
       if(!display) {
-        const button=iconButton(this.document,'retry','强制重译','强制重译：从保存的原文重新翻译，绕过成功缓存'); button.setAttribute('data-danlingo-bili-retry','');
-        const originalButton=iconButton(this.document,'original','显示原文','显示保存的原文，不发起翻译请求'); originalButton.setAttribute('data-danlingo-bili-original','');
-        const actions=this.document.createElement('span');actions.setAttribute('data-danlingo-bili-actions','');actions.setAttribute('role','group');actions.setAttribute('aria-label','翻译操作');actions.append(button,originalButton);
+        const button=iconButton(this.document,'retry',t('m_dee9278dcdbe'),t('m_561e50ee96e7')); button.setAttribute('data-danlingo-bili-retry','');
+        const originalButton=iconButton(this.document,'original',t('m_098e66189da8'),t('m_57b267c33e38')); originalButton.setAttribute('data-danlingo-bili-original','');
+        const actions=this.document.createElement('span');actions.setAttribute('data-danlingo-bili-actions','');actions.setAttribute('role','group');actions.setAttribute('aria-label',t('m_f7d73464ac24'));actions.append(button,originalButton);
         // Native ordinary bodies use middle alignment; baseline text keeps the approved optical offset.
         if(this.document.defaultView?.getComputedStyle(body).verticalAlign==='middle')actions.style.verticalAlign='middle';
         // Remember the first native automatic translation as the per-display baseline.
@@ -202,5 +207,5 @@ export class BilibiliRepairDom {
   }
   loadedIds(): Set<string> { return new Set([...this.displays.values()].map(d=>d.record.sourceId)); }
   visibleIds(): Set<string> { return new Set([...this.displays.values()].filter(d=>visible(d.row)).map(d=>d.record.sourceId)); }
-  dispose() { for(const display of this.displays.values())this.restore(display);this.displays.clear();this.automatic.clear();this.style.remove(); }
+  dispose() { this.stopLocale();for(const display of this.displays.values())this.restore(display);this.displays.clear();this.automatic.clear();this.style.remove(); }
 }

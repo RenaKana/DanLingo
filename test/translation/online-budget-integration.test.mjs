@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS, normalizeSettings } from '../../src/core/config.ts';
+import { normalizeSettings } from '../../src/core/config.ts';
 import { ChatCompletionsProvider, ProviderError, discoverModels } from '../../src/translation/provider.ts';
 import { TranslationEngine } from '../../src/translation/engine.ts';
 import { testModel } from '../../src/translation/model-test.ts';
 import { PerformanceTest } from '../../src/translation/performance-test.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
-const settings = { ...DEFAULT_SETTINGS, enabled: true, endpoint: 'https://fixture.invalid/v1/chat/completions',
-  model: 'deepseek-v4-pro', profile: 'deepseek', thinkingEffort: 'off', liveSourceLanguage: 'ja', liveMaxBatchWaitMs: 0 };
+const settings = onlineSettings({ enabled: true, endpoint: 'https://fixture.invalid/v1/chat/completions',
+  model: 'deepseek-v4-pro', profile: 'deepseek', thinkingEffort: 'off', liveSourceLanguage: 'ja', liveMaxBatchWaitMs: 0 });
 const request = extra => ({ settings, apiKey: 'fixture-only', items: [{ id: 'a', text: 'A small synthetic sentence.' }], budgetMs: 2000, mode: 'vod', ...extra });
 function reply(init) {
   const body = JSON.parse(init.body), text = body.messages[1]?.content;
@@ -32,10 +33,11 @@ function boundary(limit, transport = reply) {
   return { options, get used() { return used; }, get sends() { return sends; } };
 }
 
-test('daily cap defaults to 3000 and accepts positive safe integers only', () => {
-  assert.equal(normalizeSettings({}).onlineRequestLimitPerDay, 3000);
+test('daily cap defaults to unlimited and accepts zero or positive safe integers', () => {
+  assert.equal(normalizeSettings({}).onlineRequestLimitPerDay, 0);
+  assert.equal(normalizeSettings({ onlineRequestLimitPerDay: 0 }).onlineRequestLimitPerDay, 0);
   assert.equal(normalizeSettings({ onlineRequestLimitPerDay: 1 }).onlineRequestLimitPerDay, 1);
-  for (const value of [0, -1, 1.5, NaN, Infinity, '3000', Number.MAX_SAFE_INTEGER + 1]) {
+  for (const value of [-1, 1.5, NaN, Infinity, '3000', Number.MAX_SAFE_INTEGER + 1]) {
     assert.throws(() => normalizeSettings({ onlineRequestLimitPerDay: value }), /invalid-online-request-limit/);
   }
 });

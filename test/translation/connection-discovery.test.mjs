@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS } from '../../src/core/config.ts';
 import { discoverConnectionModels } from '../../src/translation/connection-discovery.ts';
-const settings={...DEFAULT_SETTINGS,endpoint:'https://gateway.example/team/proxy?tenant=test'};
+import { onlineSettings } from '../fixtures/online-settings.mjs';
+const settings=onlineSettings({endpoint:'https://gateway.example/team/proxy?tenant=test'});
 test('custom proxy checks two bounded prefix-preserving GET candidates and returns effective base',async()=>{
   const calls=[];const result=await discoverConnectionModels(settings,'fixture',{fetch:async(url,init)=>{calls.push({url,init});return calls.length===1?new Response('',{status:404}):Response.json({data:[{id:'fixture-model'}]});}});
   assert.deepEqual(calls.map(call=>call.url),['https://gateway.example/team/proxy/models?tenant=test','https://gateway.example/team/proxy/v1/models?tenant=test']);

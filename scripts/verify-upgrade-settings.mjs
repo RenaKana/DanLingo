@@ -12,7 +12,8 @@ import { settingsSection, settingsDetails } from './settings-navigation.mjs';
 
 const root = resolve('.artifacts/upgrade-settings'); await mkdir(root,{recursive:true});
 const directory = await mkdtemp(resolve(root,'run-'));
-const report = {capturedAt:new Date().toISOString(),evidence:'PRODUCTION_EXTENSION_SETTINGS_BACKGROUND_LOOPBACK_FIXTURE',checks:{},requests:[],models:[],runs:{},screenshots:[],errors:[],limitations:['Isolated Chromium and loopback mock; native permission prompt is bypassed only in the test copy by granting loopback host permission. Browser fixture routing permits only this server port.','Translation samples and timing here exercise real extension transport and accounting against fixed responses; no paid API, real translation quality or local-model performance is measured.']};
+const fileFixtureDirectory='danlingo-upgrade-file-fixture';
+const report = {capturedAt:new Date().toISOString(),evidence:'PRODUCTION_EXTENSION_SETTINGS_BACKGROUND_LOOPBACK_FIXTURE',checks:{},requests:[],models:[],runs:{},screenshots:[],errors:[],limitations:['Isolated Chromium and loopback mock; native service permission prompt is bypassed only in the test copy by granting loopback host permission. Browser fixture routing permits only this server port.','File chooser returns OPFS-backed File System handles; native OS picker UI and external-file grants are not exercised.','Translation samples and timing here exercise real extension transport and accounting against fixed responses; no paid API, real translation quality or local-model performance is measured.']};
 let scenario='setup', mode='success', active=0, maxActive=0, context, page;
 const held = new Set();
 const release=()=>{for(const done of held)done();held.clear();};
@@ -48,6 +49,10 @@ await new Promise(done=>server.listen(0,'127.0.0.1',done));
 const origin=`http://127.0.0.1:${server.address().port}`;
 const rpc=message=>page.evaluate(message=>chrome.runtime.sendMessage(message),message);
 const posts=label=>report.requests.filter(row=>row.scenario===label);
+const seedPickerFile=async(name,bytes)=>page.evaluate(async({directoryName,name,bytes})=>{
+  const root=await navigator.storage.getDirectory(),directory=await root.getDirectoryHandle(directoryName,{create:true}),handle=await directory.getFileHandle(name,{create:true});
+  const writable=await handle.createWritable();await writable.write(new Uint8Array(bytes));await writable.close();
+},{directoryName:fileFixtureDirectory,name,bytes:Array.from(bytes)});
 async function check(name,run){try{await run();report.checks[name]='PASS';console.log('PASS',name);}catch(error){report.checks[name]='FAIL: '+error.message;report.errors.push(name+': '+error.message);console.error('FAIL',name,error.message);}}
 try{
   const uiOnly=process.argv.includes('--ui-only');
@@ -57,13 +62,22 @@ try{
   manifest.host_permissions=[...new Set([...(manifest.host_permissions??[]),'http://127.0.0.1/*'])];
   await writeFile(resolve(extension,'manifest.json'),JSON.stringify(manifest));
   const {chromium}=await loadPlaywright();
-  context=await chromium.launchPersistentContext(await mkdtemp(resolve(directory,'profile-')),{headless:true,...browserLaunchOptions("chromium"),viewport:{width:1360,height:900},args:['--disable-extensions-except='+extension,'--load-extension='+extension,'--disable-background-networking','--disable-component-update','--disable-sync','--no-first-run','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']});
+  context=await chromium.launchPersistentContext(await mkdtemp(resolve(directory,'profile-')),{headless:true,...browserLaunchOptions("chromium"),locale:'zh-CN',viewport:{width:1360,height:900},args:['--lang=zh-CN','--disable-extensions-except='+extension,'--load-extension='+extension,'--disable-background-networking','--disable-component-update','--disable-sync','--no-first-run','--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1']});
+  await context.addInitScript(({directoryName})=>{
+    if(location.protocol!=='chrome-extension:')return;
+    globalThis.__danlingoUpgradeFilePickerCalls=[];
+    Object.defineProperty(globalThis,'showOpenFilePicker',{configurable:true,writable:true,value:async options=>{
+      globalThis.__danlingoUpgradeFilePickerCalls.push(options);
+      const paths=JSON.parse(localStorage.getItem('__danlingoUpgradeFilePaths')||'["corrupt.gguf"]'),root=await navigator.storage.getDirectory(),fixture=await root.getDirectoryHandle(directoryName,{create:false});
+      return Promise.all(paths.map(async path=>{const parts=path.split('/');let folder=fixture;for(const part of parts.slice(0,-1))folder=await folder.getDirectoryHandle(part,{create:false});return folder.getFileHandle(parts.at(-1),{create:false});}));
+    }});
+  },{directoryName:fileFixtureDirectory});
   await context.route('**/*',route=>{const url=new URL(route.request().url());return !['http:','https:'].includes(url.protocol)||url.origin===origin?route.continue():route.abort();});
   const background=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');
   const url=`chrome-extension://${new URL(background.url()).host}/options.html`;
-  page=await context.newPage();page.on('pageerror',error=>report.errors.push(error.message));await page.goto(url);await page.locator('#endpoint').waitFor();
+  page=await context.newPage();page.on('pageerror',error=>report.errors.push(error.message));await page.goto(url);await page.evaluate(()=>chrome.storage.local.set({'ui.locale.v1':'zh-CN'}));await page.reload();await page.locator('#endpoint').waitFor();
   if(uiOnly || process.argv.includes('--ui'))await check('ui-fresh-profile-default-is-auto',async()=>{await page.locator('#performance-start').waitFor({state:'attached'});assert.equal(await page.locator('#profile').inputValue(),'auto');});
-  const settings=normalizeSettings({...DEFAULT_SETTINGS,backend:'online',enabled:true,endpoint:origin,allowLocalHttp:true,model:'fixture-generic',profile:'generic',protocol:'auto',thinkingEffort:'default',translationStream:false,liveBufferMs:3000,liveSourceLanguage:'ja',targetLanguage:'zh-CN',concurrency:2,batchSize:2,liveBatchMaxChars:2000,liveMaxBatchWaitMs:0,liveAdaptiveConcurrency:false});
+  const settings=normalizeSettings({...DEFAULT_SETTINGS,backend:'online',enabled:true,endpoint:origin,allowLocalHttp:true,model:'fixture-generic',profile:'chat-completions',reasoningProfileOverride:'chat-completions',protocol:'auto',thinkingEffort:'default',translationStream:false,liveBufferMs:3000,liveSourceLanguage:'ja',targetLanguage:'zh-CN',onlineConcurrency:2,batchSize:2,liveBatchMaxChars:2000,liveMaxBatchWaitMs:0,liveAdaptiveConcurrency:false});
   assert.equal((await rpc({type:'save',settings,apiKey:'fixture-settings-key',remember:false})).ok,true);
   await page.reload();await page.locator('#endpoint').waitFor();
   for(const width of [1360,560]){
@@ -144,14 +158,14 @@ try{
     await check('ui-performance-10-button-sends-10-transports',async()=>{
       await settingsSection(page,'performance');
       scenario='ui-10';mode='success';
-      await page.locator('#performance-count').selectOption('10');await page.locator('#performance-mode').selectOption('latency');await page.locator('#performance-concurrency').fill('1');
+      await page.locator('#performance-count').fill('10');await page.locator('#performance-mode').selectOption('latency');await page.locator('#performance-concurrency').fill('1');
       await page.locator('#performance-start').click();
       await until(async()=>(await page.locator('#performance-progress').textContent()).includes('已完成'),'UI performance completion');
       assert.equal(posts(scenario).length,10);assert.match(await page.locator('#performance-progress').textContent(),/实际发出 10 次/);assert.match(await page.locator('#performance-result').textContent(),/成功请求 n=10/);assert.equal(await page.locator('#performance-copy').isEnabled(),true);
-      await page.locator('#performance-copy').click();await until(async()=>(await page.locator('#performance-progress').textContent()).includes('复制'),'copy result feedback');
+      await page.locator('#performance-copy').click();await until(async()=>(await page.locator('#performance-copy-status').textContent()).includes('复制'),'copy result feedback');
     });
     await check('ui-performance-100-stop-cancels-unsent',async()=>{
-      scenario='ui-stop';mode='held';await page.locator('#performance-count').selectOption('100');await page.locator('#performance-concurrency').fill('2');
+      scenario='ui-stop';mode='held';await page.locator('#performance-count').fill('100');await page.locator('#performance-concurrency').fill('2');
       await page.locator('#performance-start').click();await until(()=>posts(scenario).length===2,'UI held POSTs');
       await settingsSection(page,'service');await page.locator('#backend').selectOption('local');await page.locator('#running-task').click();
       await page.locator('[data-section="performance"]').waitFor({state:'visible'});
@@ -161,6 +175,7 @@ try{
       await settingsSection(page,'service');await page.locator('#backend').selectOption('online');
     });
     await check('ui-superchat-config-persists-and-keeps-online-key',async()=>{
+      await settingsSection(page,'service'); await page.locator('#model').fill('deepseek-v4-flash');
       await settingsSection(page,'advanced'); await page.locator('#profile').evaluate(el=>el.closest('details').open=true);
       await page.locator('#profile').selectOption('deepseek'); await settingsSection(page,'service'); await page.locator('#thinking-effort').selectOption('off'); await settingsSection(page,'live'); await page.locator('#superchat-thinking').selectOption('high');await page.locator('#superchat-timeout').fill('18000');
       await page.locator('#save').click();await until(async()=>(await rpc({type:'settings'})).settings?.superChatTimeoutMs===18000,'SC saved');
@@ -170,35 +185,39 @@ try{
     await check('ui-local-file-errors-and-reopen-preserve-online-config',async()=>{
       await settingsSection(page,'service');
       mode='success';await page.locator('#backend').selectOption('local');await page.locator('#local-settings').waitFor({state:'visible'});
-      await page.locator('#local-file').setInputFiles({name:'unsupported.safetensors',mimeType:'application/octet-stream',buffer:Buffer.from('fixture')});await page.locator('#local-import').click();
-      await until(async()=>/不支持|只支持/.test(await page.locator('#local-result').textContent()),'unsupported local file');
-      assert.equal((await rpc({type:'local-control',control:{action:'list'}})).models.length,0);
-      await page.locator('#local-file').setInputFiles({name:'corrupt.gguf',mimeType:'application/octet-stream',buffer:Buffer.from('GGUF')});await page.locator('#local-import').click();
-      await until(async()=>/头|无效|损坏/.test(await page.locator('#local-result').textContent()),'corrupt GGUF error');
+      await seedPickerFile('corrupt.gguf',Buffer.from('GGUF'));await page.evaluate(()=>localStorage.setItem('__danlingoUpgradeFilePaths','["corrupt.gguf"]'));
+      await page.locator('#local-file-add').click();await page.waitForFunction(()=>globalThis.__danlingoUpgradeFilePickerCalls.length===1);
+      const picker=await page.evaluate(()=>globalThis.__danlingoUpgradeFilePickerCalls[0]);assert.equal(picker.multiple,true);assert.deepEqual(picker.types[0].accept,{'application/octet-stream':['.gguf']});
+      await until(async()=>/头|无效|损坏/.test(await page.locator('#local-result').textContent()),'corrupt GGUF error');assert.equal((await rpc({type:'local-control',control:{action:'list'}})).models.length,0);
       const before=await background.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}));
       for(const width of [1360,560]){await page.setViewportSize({width,height:900});const path=resolve(root,`local-settings-${width}.png`);await page.screenshot({path,fullPage:true});report.screenshots.push(path);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));}
       await page.close();page=await context.newPage();await page.goto(url);await page.locator('#performance-start').waitFor({state:'attached'});
       const after=await background.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}));assert.equal(before[0].documentId,after[0].documentId);
-      const preserved=await rpc({type:'settings'});assert.equal(preserved.settings.backend,'online');assert.equal(preserved.hasKey,true);assert.equal(preserved.settings.model,'fixture-generic');
+      const preserved=await rpc({type:'settings'});assert.equal(preserved.settings.backend,'online');assert.equal(preserved.hasKey,true);assert.equal(preserved.settings.model,'deepseek-v4-flash');
     });
     await check('ui-saved-local-model-and-online-settings-roundtrip',async()=>{
       const u32=n=>{const b=Buffer.alloc(4);b.writeUInt32LE(n);return b;},u64=n=>{const b=Buffer.alloc(8);b.writeBigUInt64LE(BigInt(n));return b;},str=s=>[u64(Buffer.byteLength(s)),Buffer.from(s)];
       const metadata=[['general.architecture','llama'],['general.file_type',15],['tokenizer.ggml.model','llama'],['tokenizer.ggml.tokens',['hello']],['tokenizer.chat_template','{{ messages }}']];
       const chunks=[u32(0x46554747),u32(3),u64(1),u64(metadata.length)];for(const[key,value]of metadata){chunks.push(...str(key));if(typeof value==='number')chunks.push(u32(4),u32(value));else if(Array.isArray(value))chunks.push(u32(9),u32(8),u64(1),...str(value[0]));else chunks.push(u32(8),...str(value));}
-      await page.locator('#backend').selectOption('local');
-      await page.locator('#local-file').setInputFiles({name:'no-weights-fixture.gguf',mimeType:'application/octet-stream',buffer:Buffer.concat(chunks)});await page.locator('#local-import').click();
-      await until(async()=>!!(await page.locator('#local-model').inputValue()),'header fixture import');
-      const selected=await page.locator('#local-model').inputValue();await page.locator('#save').click();
+      await seedPickerFile('no-weights-fixture.gguf',Buffer.concat(chunks));await page.evaluate(()=>localStorage.setItem('__danlingoUpgradeFilePaths','["no-weights-fixture.gguf"]'));await page.locator('#backend').selectOption('local');
+      await page.locator('#local-file-add').click();await page.waitForFunction(()=>globalThis.__danlingoUpgradeFilePickerCalls.length===1);await until(async()=>(await rpc({type:'local-control',control:{action:'list'}})).models.some(model=>model.source?.kind==='files'),'header fixture registration');
+      const picker=await page.evaluate(()=>globalThis.__danlingoUpgradeFilePickerCalls[0]);assert.equal(picker.multiple,true);assert.deepEqual(picker.types[0].accept,{'application/octet-stream':['.gguf']});
+      const models=(await rpc({type:'local-control',control:{action:'list'}})).models,model=models.find(model=>model.source?.kind==='files'),selected=model.id,row=page.locator(`#local-model-entries [data-model-id="${selected}"]`);assert.equal(await page.locator('#local-model-manager').evaluate(el=>el.open),true);assert.deepEqual(await row.locator('[data-model-action]').evaluateAll(buttons=>buttons.map(button=>button.dataset.modelAction)),['load','remove']);
+      const beforeLoad=(await rpc({type:'settings'})).settings;await row.locator('[data-model-action="load"]').click();await until(async()=>(await rpc({type:'settings'})).settings?.localModelId===selected,'row selection persisted');
+      await until(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='error','real engine rejects weightless fixture');
+      const afterLoad=await rpc({type:'settings'});assert.equal(afterLoad.settings.backend,beforeLoad.backend);assert.equal(afterLoad.settings.model,'deepseek-v4-flash');assert.equal(afterLoad.settings.profile,'deepseek');assert.equal(afterLoad.settings.thinkingEffort,'off');assert.equal(afterLoad.settings.localModelId,selected);
+      await until(async()=>page.locator('#local-result').evaluate(el=>el.classList.contains('error')&&!!el.textContent?.trim()),'visible native load rejection');
+      assert.equal((await rpc({type:'local-control',control:{action:'state'}})).state.error,'LOCAL_MODEL_LOAD_REJECTED');
+      assert.match(await page.locator('#local-result').textContent(),/未能初始化模型/);
+      await page.locator('#local-stop').click();await until(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='idle','unload after failed row load');
+      await page.locator('#save').click();
       await until(async()=>(await rpc({type:'settings'})).settings?.backend==='local','local backend saved');
-      await page.reload();await page.locator('#local-model').waitFor();await until(async()=>(await page.locator('#local-model').inputValue())===selected,'imported id persisted');
-      const local=await rpc({type:'settings'});assert.equal(local.hasKey,true);assert.equal(local.settings.model,'fixture-generic');assert.equal(local.settings.localModelId,selected);
-      await page.locator('#local-load').click();await until(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='error','real engine rejects weightless fixture');
-      await until(async()=>/权重|未能加载|加载失败/.test(await page.locator('#local-result').textContent()),'visible native load rejection');
-      await page.locator('#local-unload').click();await until(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='idle','unload after failure');
+      await page.reload();await page.locator('#performance-start').waitFor({state:'attached'});await page.waitForFunction(id=>!!document.querySelector(`#local-model-entries [data-model-id="${id}"]`),selected);const local=await rpc({type:'settings'});assert.equal(local.hasKey,true);assert.equal(local.settings.model,'deepseek-v4-flash');assert.equal(local.settings.localModelId,selected);
       await page.locator('#backend').selectOption('online');await page.locator('#save').click();await until(async()=>(await rpc({type:'settings'})).settings?.backend==='online','online restored');
-      const restored=await rpc({type:'settings'});assert.equal(restored.hasKey,true);assert.equal(restored.settings.model,'fixture-generic');assert.equal(restored.settings.profile,'deepseek');assert.equal(restored.settings.thinkingEffort,'off');assert.equal(restored.settings.superChatThinkingEffort,'high');
-      assert.equal((await rpc({type:'local-control',control:{action:'delete',modelId:selected}})).ok,true);
-      report.localFixture='GGUF metadata only: imported and persisted; actual engine correctly rejected missing weights. No model translation claim.';
+      const restored=await rpc({type:'settings'});assert.equal(restored.hasKey,true);assert.equal(restored.settings.model,'deepseek-v4-flash');assert.equal(restored.settings.profile,'deepseek');assert.equal(restored.settings.thinkingEffort,'off');assert.equal(restored.settings.superChatThinkingEffort,'high');
+      await page.locator('#backend').selectOption('local');await page.locator(`#local-model-entries [data-model-id="${selected}"] [data-model-action="remove"]`).click();await until(async()=>((await rpc({type:'settings'})).settings?.localModelId??'')==='','row removal clears the saved choice');assert.equal(await row.count(),0);assert.equal(await page.locator('#local-delete-confirm').count(),0);assert.equal((await rpc({type:'settings'})).settings.backend,'online');
+      const preservedFileSize=await page.evaluate(async({directoryName,name})=>(await (await (await navigator.storage.getDirectory()).getDirectoryHandle(directoryName)).getFileHandle(name)).getFile().then(file=>file.size),{directoryName:fileFixtureDirectory,name:'no-weights-fixture.gguf'});assert.equal(preservedFileSize,Buffer.concat(chunks).length);
+      report.localFixture='GGUF metadata only: row selection persisted, and the actual engine correctly rejected the missing weights. No model translation claim.';
     });
   }
   console.log(JSON.stringify({checks:report.checks,posts:report.requests.length,models:report.models.length,screenshots:report.screenshots},null,2));

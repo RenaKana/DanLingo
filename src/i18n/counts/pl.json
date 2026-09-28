@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "{count} zadań",
+  "count.tasks.one": "{count} zadanie",
+  "count.tasks.two": "{count} zadań",
+  "count.tasks.few": "{count} zadania",
+  "count.tasks.many": "{count} zadań",
+  "count.tasks.other": "{count} zadań"
+}

@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · Traducción Danmaku"
+  },
+  "extensionDescription": {
+    "message": "Traduce bombardeos y chats en vivo en las páginas nativas de Niconico, YouTube y Bilibili."
+  },
+  "extensionShortcut": {
+    "message": "Activar o desactivar la traducción de bombardeo"
+  }
+}

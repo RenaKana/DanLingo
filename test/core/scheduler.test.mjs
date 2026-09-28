@@ -2,14 +2,16 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { translationIdentity, VideoScheduler } from '../../src/core/scheduler.ts';
 import { DEFAULT_SETTINGS } from '../../src/core/config.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 const clock = (mediaTimeMs=0, playbackRate=1) => ({ mediaTimeMs, playbackRate, paused:true, seeking:false, contentActive:true, durationMs:600000, buffered:[] });
 const msg = (id, renderAtMs, originalText='これはテストです') => ({ id, sourceId:id, resourceId:'sm9', threadId:'1', fork:'main', platform:'niconico', originalText, mediaTimeMs:renderAtMs+2000, renderAtMs, translatable:true, style:{commands:[]} });
 const flush = () => new Promise(resolve => setImmediate(resolve));
 function harness(settings={}) {
   const calls=[], prepared=[]; let now=0;
-  const config={...DEFAULT_SETTINGS,enabled:true,...settings};
+  const config={...DEFAULT_SETTINGS,enabled:true,...settings,
+    videoBatchSize:settings.videoBatchSize ?? settings.batchSize ?? DEFAULT_SETTINGS.videoBatchSize};
   const scheduler = new VideoScheduler({ settings:config, now:()=>now, reset:()=>{},
-    request:(resource,items,signal,priority)=>new Promise(resolve=>calls.push({resource,items,signal,priority,resolve})), prepared:items=>prepared.push(...items) });
+    request:(resource,items,signal,priority,onResult)=>new Promise(resolve=>calls.push({resource,items,signal,priority,onResult,resolve})), prepared:items=>prepared.push(...items) });
   return {scheduler,calls,prepared,config,advance:ms=>{now+=ms;},finish(index,status='translated'){const c=calls[index];c.resolve(c.items.map(m=>({id:m.id,text:'译文:'+m.text,status})));}};
 }
 
@@ -26,6 +28,29 @@ test('translation identity tracks effective local model and generation settings,
   assert.notEqual(translationIdentity(DEFAULT_SETTINGS), identity);
   assert.equal(withLocal({ localPerformance: { ...settings.localPerformance, parallel: 8 } }), identity);
   assert.equal(withLocal({ concurrency: 16, requestTimeoutMs: 1000, thinkingRequestTimeoutMs: 1000 }), identity);
+});
+
+test('blank disabled defaults configure without requests, then a configured online service dispatches', async () => {
+  const calls = [], prepared = [];
+  const scheduler = new VideoScheduler({
+    settings: DEFAULT_SETTINGS,
+    now: () => 0,
+    reset: () => {},
+    request: (resource, items, signal, priority) => {
+      calls.push({ resource, items, signal, priority });
+      return Promise.resolve(items.map(item => ({ id: item.id, text: `译文:${item.text}`, status: 'translated' })));
+    },
+    prepared: items => prepared.push(...items),
+  });
+  assert.doesNotThrow(() => scheduler.configure(DEFAULT_SETTINGS));
+  scheduler.snapshot('sm9', 'a', clock(), [msg('1', 0)]);
+  assert.equal(calls.length, 0);
+
+  scheduler.configure(onlineSettings({ enabled: true, batchSize: 1 }));
+  assert.equal(calls.length, 1);
+  await flush();
+  assert.deepEqual(prepared.map(item => item.id), ['1']);
+  scheduler.dispose();
 });
 
 test('local generation changes abort stale preparation and schedule the current settings', async () => {
@@ -53,7 +78,7 @@ test('small VOD batches can use 16 slots and send the separate high-thinking bud
   h.scheduler.dispose();
 });
 test('paused opening includes negative preparation, then buffered and whole-video candidates with full concurrency', async () => {
-  const h=harness({batchSize:1});
+  const h=harness({translationScope:'all',batchSize:1});
   h.scheduler.snapshot('sm9','a',{...clock(),buffered:[{startMs:170000,endMs:190000}]},[msg('far',300000),msg('buffered',180000),msg('zero',-2000)]);
   assert.deepEqual(h.calls.map(c=>c.items[0].id),['zero','buffered']);
   assert.equal(h.calls[0].priority,'near');assert.equal(h.calls[1].priority,'buffered');
@@ -61,7 +86,7 @@ test('paused opening includes negative preparation, then buffered and whole-vide
   assert.equal(h.prepared[0].id,'zero');h.scheduler.dispose();
 });
 test('same-video seek retains in-flight work and completed values, even after its original media time', async () => {
-  const h=harness({concurrency:1,batchSize:1});
+  const h=harness({translationScope:'all',concurrency:1,batchSize:1});
   h.scheduler.snapshot('sm9','a',clock(),[msg('1',2000),msg('2',45000)]);
   h.scheduler.snapshot('sm9','a',clock(40000));assert.equal(h.calls[0].signal.aborted,false);
   h.advance(6000);h.finish(0);await flush();assert.equal(h.prepared[0].id,'1');
@@ -80,6 +105,20 @@ test('window uses video seconds, excludes far buffered positions, and fills as p
   assert.deepEqual(h.calls.flatMap(c=>c.items.map(m=>m.id)),['zero','near']);
   h.finish(0);h.finish(1);await flush();h.scheduler.snapshot('sm9','a',clock(50000,2));
   assert.equal(h.calls[2].items[0].id,'later');assert.equal(h.scheduler.getStats().messages,1);h.scheduler.dispose();
+});
+test('paused clock holds the exact prefetch edge; playing at 2x admits the next source after one second', () => {
+  const h=harness({translationScope:'window',prefetchSeconds:60,batchSize:1,concurrency:2});
+  const edge=msg('edge',58000), outside=msg('outside',58001);
+  h.scheduler.snapshot('sm9','a',clock(0,2),[edge,outside]);
+  assert.deepEqual(h.calls.map(c=>c.items[0].id),['edge']);
+  assert.equal(h.scheduler.getStats().total,1,'60s media-time edge is inclusive');
+  h.advance(1000);h.scheduler.tick();
+  assert.equal(h.calls.length,1,'a paused wall clock does not advance the media window');
+  h.scheduler.snapshot('sm9','a',{...clock(0,2),paused:false});
+  h.advance(1000);h.scheduler.tick();
+  assert.deepEqual(h.calls.map(c=>c.items[0].id),['edge','outside']);
+  assert.equal(h.scheduler.getStats().total,2);
+  h.scheduler.dispose();
 });
 test('source updates and removals cannot apply a stale in-flight result', async () => {
   const h=harness({concurrency:1});const old=msg('1',0,'古い文章');
@@ -134,7 +173,7 @@ test('ad and seeking clocks do not submit translation work; pause alone does', (
 });
 
 test('completed preparation reports excluded comments separately within the selected video range', async () => {
-  const h = harness({ sourceLanguage: 'ja' });
+  const h = harness({ sourceLanguage: 'ja', translationScope: 'all' });
   const sources = [msg('plain', 0), msg('face', 1, 'この頃に生まれたかったಠ\u2060益\u2060ಠ'), msg('han', 2, '聖地巡礼'),
     { ...msg('special', 3), translatable: false }, msg('symbols', 4, 'www'), msg('art', 5, 'すごい┻━┻'),
     { ...msg('far-special', 300000), translatable: false }];
@@ -166,4 +205,108 @@ test('skip counts follow source edits, removals, language changes and video disp
   assert.equal(h.scheduler.getStats().total, 0);
   assert.deepEqual(h.scheduler.getStats().skipped, { special: 0, language: 0, emoticon: 0 });
   h.scheduler.dispose();
+});
+
+const eligibility = (revision, items, extra={}) => ({ revision, epoch:0, reset:false,
+  capability:'filtered-pool', display:'visible', items:items.map(([m,state])=>({id:m.id,originalText:m.originalText,state})), ...extra });
+
+test('auto begins with a bounded window, then uses only explicitly eligible filtered-pool entries', async () => {
+  const h=harness({translationScope:'auto',prefetchSeconds:60,batchSize:1,concurrency:3});
+  const near=msg('near',0), far=msg('far',300000), unknown=msg('unknown',310000), filtered=msg('filtered',320000);
+  h.scheduler.snapshot('sm9','a',clock(),[near,far,unknown,filtered]);
+  assert.deepEqual(h.calls.map(c=>c.items[0].id),['near']);
+  assert.equal(h.scheduler.getStats().effectiveScope,'window');
+  h.scheduler.updateEligibility(eligibility(1,[[near,'eligible'],[far,'eligible'],[filtered,'filtered']]));
+  assert.deepEqual(h.calls.map(c=>c.items[0].id),['near','far']);
+  const stats=h.scheduler.getStats();
+  assert.equal(stats.effectiveScope,'all');assert.equal(stats.candidates,4);assert.equal(stats.total,4);
+  assert.equal(stats.filtered,1);assert.equal(stats.eligibilityUnknown,1);assert.equal(stats.messages,2);
+  h.finish(0);h.finish(1);await flush();h.scheduler.dispose();
+});
+
+test('filter changes retain completed text and unfilter prepares only still missing entries', async () => {
+  const h=harness({translationScope:'all',batchSize:1});
+  const ready=msg('ready',0), pending=msg('pending',1000);
+  h.scheduler.snapshot('sm9','a',clock(),[ready,pending]);
+  h.finish(0);await flush();
+  h.scheduler.updateEligibility(eligibility(1,[[ready,'filtered'],[pending,'filtered']]));
+  assert.equal(h.calls[1].signal.aborted,true);assert.equal(h.scheduler.getStats().filtered,2);
+  h.scheduler.updateEligibility(eligibility(2,[[ready,'eligible'],[pending,'eligible']]));
+  assert.equal(h.calls.length,3);assert.equal(h.calls[2].items[0].id,'pending');
+  h.finish(1);await flush();
+  assert.deepEqual(h.prepared.map(p=>p.id),['ready']);
+  h.finish(2);await flush();
+  assert.deepEqual(h.prepared.map(p=>p.id),['ready','pending']);
+  assert.equal(h.scheduler.getStats().translated,2);h.scheduler.dispose();
+});
+
+test('seek epoch discards eligibility, rejects stale updates and defers dispatch until a valid clock', async () => {
+  const h=harness({translationScope:'auto',batchSize:1,concurrency:1});
+  const opening=msg('opening',0), far=msg('far',300000);
+  h.scheduler.snapshot('sm9','a',clock(),[opening,far],0);
+  h.scheduler.updateEligibility(eligibility(1,[[opening,'eligible'],[far,'eligible']]));
+  assert.equal(h.calls.length,1);
+  h.scheduler.snapshot('sm9','a',{...clock(300000),seeking:true},undefined,1);
+  assert.equal(h.calls[0].signal.aborted,true);assert.equal(h.scheduler.getStats().effectiveScope,'window');
+  h.scheduler.updateEligibility(eligibility(100,[[opening,'eligible']],{epoch:0}));
+  h.scheduler.snapshot('sm9','a',clock(0),undefined,0);
+  assert.equal(h.scheduler.getStats().effectiveScope,'window');
+  assert.equal(h.calls.length,1);
+  h.finish(0);await flush();assert.equal(h.prepared.length,0);
+  h.scheduler.snapshot('sm9','a',clock(300000),undefined,1);
+  assert.deepEqual(h.calls[1].items.map(i=>i.id),['far']);
+  h.scheduler.updateEligibility(eligibility(0,[[far,'filtered']],{epoch:1}));
+  assert.equal(h.calls[1].signal.aborted,true);
+  h.scheduler.updateEligibility(eligibility(0,[[far,'eligible']],{epoch:1}));
+  assert.equal(h.calls.length,2,'duplicate revision cannot undo filtering');h.scheduler.dispose();
+});
+
+test('hidden first snapshot prevents dispatch, visibility resumes without clearing ready values', async () => {
+  const h=harness({translationScope:'all',batchSize:1,concurrency:1});
+  const first=msg('first',0), second=msg('second',1000);
+  h.scheduler.snapshot('sm9','a',{...clock(),commentsVisible:false},[first,second]);
+  assert.equal(h.calls.length,0);assert.equal(h.scheduler.getStats().displayState,'hidden');
+  h.scheduler.updateEligibility(eligibility(1,[],{capability:'unknown',display:'visible'}));
+  assert.equal(h.calls.length,1);
+  h.calls[0].onResult({id:'first',status:'translated',text:'第一条'});
+  h.scheduler.updateEligibility(eligibility(2,[],{capability:'unknown',display:'hidden'}));
+  h.finish(0);await flush();
+  assert.equal(h.calls.length,1);assert.equal(h.scheduler.getStats().translated,1);
+  h.scheduler.updateEligibility(eligibility(3,[],{capability:'unknown',display:'visible'}));
+  assert.equal(h.calls.length,2);h.finish(1);await flush();
+  assert.deepEqual(h.prepared.map(p=>p.id),['first','second']);h.scheduler.dispose();
+});
+
+test('window seek cancels out-of-range work, frees its slot immediately and ignores late callbacks', async () => {
+  const h=harness({translationScope:'window',batchSize:1,concurrency:1});
+  h.scheduler.snapshot('sm9','a',clock(),[msg('old',0),msg('next',300000)]);
+  h.scheduler.snapshot('sm9','a',{...clock(300000),seeking:true});
+  assert.equal(h.calls[0].signal.aborted,true);assert.equal(h.scheduler.getStats().inflight,0);
+  h.scheduler.snapshot('sm9','a',clock(300000));
+  assert.equal(h.calls[1].items[0].id,'next');
+  h.calls[0].onResult({id:'old',status:'translated',text:'过期'});
+  h.finish(0);await flush();
+  assert.equal(h.calls.length,2,'old finally must not clear replacement ownership');
+  h.calls[1].onResult({id:'next',status:'translated',text:'下一条'});
+  assert.equal(h.prepared.length,1);h.finish(1,'failed');await flush();
+  assert.equal(h.scheduler.getStats().translated,1);assert.equal(h.scheduler.getStats().failed,0);h.scheduler.dispose();
+});
+
+test('incremental successes prepare once before batch settlement; source replacement ignores late results', async () => {
+  const h=harness({translationScope:'all',batchSize:2,concurrency:1});
+  const one=msg('one',0), two=msg('two',1);
+  h.scheduler.snapshot('sm9','a',clock(),[one,two]);
+  const call=h.calls[0];
+  call.onResult({id:'one',status:'cached',text:'缓存'});
+  call.onResult({id:'one',status:'translated',text:'重复'});
+  assert.deepEqual(h.prepared.map(p=>p.text),['缓存']);
+  assert.equal(h.scheduler.getStats().cacheHits,1);
+  call.resolve([{id:'one',status:'failed'},{id:'two',status:'translated',text:'第二条'}]);await flush();
+  assert.deepEqual(h.prepared.map(p=>p.text),['缓存','第二条']);
+  assert.equal(h.scheduler.getStats().failed,0);
+  h.scheduler.updateSources([msg('one',0,'更新された文章です')],[],false,true);
+  call.onResult({id:'one',status:'translated',text:'旧结果'});
+  assert.equal(h.prepared.length,2);
+  assert.equal(h.calls.length,2);h.finish(1);await flush();
+  assert.equal(h.prepared.at(-1).originalText,'更新された文章です');h.scheduler.dispose();
 });

@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS, strategySettings } from '../../src/core/config.ts';
+import { strategySettings } from '../../src/core/config.ts';
 import { TranslationEngine } from '../../src/translation/engine.ts';
 import { MemoryTranslationCache, translationCacheKey } from '../../src/translation/cache.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 const flush = async () => { for (let i=0;i<60;i++) await Promise.resolve(); };
-const settings = { ...DEFAULT_SETTINGS, enabled:true, profile:'deepseek', model:'deepseek-v4-pro', thinkingEffort:'off', endpoint:'https://provider.example/v1/chat/completions', batchSize:100, concurrency:4, liveMaxBatchWaitMs:0, liveAdaptiveConcurrency:false };
+const settings = onlineSettings({ enabled:true, profile:'deepseek', model:'deepseek-v4-pro', thinkingEffort:'off', endpoint:'https://provider.example/v1/chat/completions', batchSize:100, concurrency:4, liveMaxBatchWaitMs:0, liveAdaptiveConcurrency:false });
 test('manual root operation has its own cache identity; equivalent auto URL spellings share identity',()=>{
   const key = value => translationCacheKey('room', '同じ文', { ...settings, ...value });
   assert.equal(key({endpoint:'https://provider.example'}), key({endpoint:'https://provider.example/v1/'}));

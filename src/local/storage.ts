@@ -1,6 +1,5 @@
-import type { LocalModelInfo } from './types.ts';
+import type { LocalModelInfo, PreparedLocalModel, SourcePreparationOptions } from './types.ts';
 import { fingerprintFiles, inspectAndOrderFiles } from './gguf.ts';
-import type { FingerprintProgress } from './gguf.ts';
 import type { DirectoryFileSnapshot, DirectoryInfo, DirectoryIssue, DirectoryScanStatus, DirectorySource, FileSource, ReadOnlyFileHandle, ReadOnlyDirectoryHandle, StoredDirectory } from './directory-types.ts';
 
 const DATABASE_NAME = 'danlingo-local-models-v1';
@@ -51,10 +50,7 @@ const sourceAccessCode = (error: unknown, fallback = 'LOCAL_DIRECTORY_SCAN_FAILE
   }
 };
 
-interface ResolveModelFilesOptions {
-  shouldCancel?: () => boolean;
-  onProgress?: (progress: FingerprintProgress) => void;
-}
+type ResolveModelFilesOptions = SourcePreparationOptions;
 function checkResolutionCancellation(options: ResolveModelFilesOptions): void {
   if (options.shouldCancel?.()) throw new Error('LOCAL_CANCELLED');
 }
@@ -224,8 +220,14 @@ export async function deleteModelIfOwned(id: string, fingerprint: string, owner:
   } finally { db.close(); }
 }
 
+export function hasReusableMetadata(info: LocalModelInfo): boolean {
+  return info.metadataVersion === 1 && info.metadataComplete === true && !!info.architecture && !!info.tokenizer
+    && (info.template === true || !!info.translationProfile) && !!info.templateCapability
+    && Array.isArray(info.files) && info.files.length > 0;
+}
+
 async function hydrateModel(model: StoredModel): Promise<StoredModel | undefined> {
-  if (model.info.source || model.info.metadataVersion === 1) return model;
+  if (model.info.source || hasReusableMetadata(model.info)) return model;
   if (!Array.isArray(model.blobs)) return model;
   try {
     const inspected = await inspectAndOrderFiles(model.blobs);
@@ -239,8 +241,8 @@ async function hydrateModel(model: StoredModel): Promise<StoredModel | undefined
         const request = store.get(model.info.id); let result: StoredModel | undefined;
         request.onsuccess = () => {
           result = request.result;
-          if (result && !sourceOf(result.info) && result.info.metadataVersion !== 1 && result.info.importedAt === model.info.importedAt) {
-            result = { ...result, info, blobs: result.blobs }; store.put(result);
+          if (result && !result.info.source && !hasReusableMetadata(result.info) && sameSnapshot(result, snapshotModel(model))) {
+            result = { ...result, info: { ...info, files: inspected.info.files }, blobs: inspected.files }; store.put(result);
           }
         };
         tx.oncomplete = () => resolve(result);
@@ -373,6 +375,7 @@ async function markModelAvailability(id: string, availability: DirectoryModelInf
           abort(new Error(previousAvailability === 'changed' ? 'LOCAL_SOURCE_CHANGED' : 'LOCAL_SOURCE_MISSING'));
           return;
         }
+        if (previousAvailability === availability && (current.info as DirectoryModelInfo).error === error) return;
         const info = { ...current.info, availability, ...(error ? { error } : { error: undefined }) } as DirectoryModelInfo;
         store.put({ ...current, info });
         const retired = availability === 'changed' || availability === 'missing';
@@ -385,47 +388,6 @@ async function markModelAvailability(id: string, availability: DirectoryModelInf
         }
       };
       tx.oncomplete = () => resolve();
-      tx.onerror = tx.onabort = () => reject(failure ?? new Error('LOCAL_STORAGE_QUOTA_OR_IO'));
-    });
-  } finally { db.close(); }
-}
-
-async function reidentifyLegacyExternalModel(model: StoredModel, fingerprint: string, shouldCancel?: () => boolean): Promise<void> {
-  if (shouldCancel?.()) throw new Error('LOCAL_CANCELLED');
-  const source = model.info.source;
-  if (!source) throw new Error('LOCAL_MODEL_SOURCE_INVALID');
-  const id = crypto.randomUUID();
-  const db = await open();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const stores = source.kind === 'directory' ? [MODEL_STORE, DIRECTORY_STORE] : [MODEL_STORE];
-      const tx = db.transaction(stores, 'readwrite'), models = tx.objectStore(MODEL_STORE);
-      const directories = source.kind === 'directory' ? tx.objectStore(DIRECTORY_STORE) : undefined;
-      let result = false;
-      let failure: Error | undefined;
-      const abort = (error: Error) => { failure = error; try { tx.abort(); } catch { /* transaction already finished */ } };
-      const request = models.get(model.info.id);
-      request.onsuccess = () => {
-        if (shouldCancel?.()) { abort(new Error('LOCAL_CANCELLED')); return; }
-        const current = request.result as StoredModel | undefined;
-        if (!current || !current.info.source || current.info.fingerprint
-          || JSON.stringify(current.info.source) !== JSON.stringify(source)) { abort(new Error('LOCAL_SOURCE_CHANGED')); return; }
-        const info = { ...current.info, id, importedAt: Date.now(), fingerprint, availability: 'ready', error: undefined } as LocalModelInfo;
-        const replace = () => {
-          if (shouldCancel?.()) { abort(new Error('LOCAL_CANCELLED')); return; }
-          models.delete(current.info.id); models.put({ ...current, info }); result = true;
-        };
-        if (source.kind !== 'directory') { replace(); return; }
-        const directoryRequest = directories!.get(source.directoryId);
-        directoryRequest.onsuccess = () => {
-          if (shouldCancel?.()) { abort(new Error('LOCAL_CANCELLED')); return; }
-          const directory = directoryRequest.result as StoredDirectory | undefined;
-          if (!directory) { abort(new Error('LOCAL_SOURCE_MISSING')); return; }
-          directories!.put({ ...directory, revision: directory.revision + 1 });
-          replace();
-        };
-      };
-      tx.oncomplete = () => result ? resolve() : reject(failure ?? new Error('LOCAL_STORAGE_QUOTA_OR_IO'));
       tx.onerror = tx.onabort = () => reject(failure ?? new Error('LOCAL_STORAGE_QUOTA_OR_IO'));
     });
   } finally { db.close(); }
@@ -481,6 +443,7 @@ async function resolveDirectoryFiles(model: StoredModel, source: DirectorySource
   const files: File[] = [];
   for (const snapshot of source.files) {
     checkResolutionCancellation(options);
+    options.onProgress?.({ stage: 'reading-file', currentFile: snapshot.path });
     let file: File;
     try { file = await fileAtPath(directory.handle, snapshot.path); }
     catch (error) {
@@ -501,40 +464,13 @@ async function resolveDirectoryFiles(model: StoredModel, source: DirectorySource
     await markModelAvailability(model.info.id, 'error', 'LOCAL_DIRECTORY_SCAN_FAILED');
     throw new Error('LOCAL_DIRECTORY_SCAN_FAILED');
   }
-  let fingerprint: string;
-  try {
-    fingerprint = await fingerprintFiles(files, {
-      shouldCancel: options.shouldCancel, cancelCode: 'LOCAL_CANCELLED', onProgress: options.onProgress,
-      checkSource: () => directoryPermission(directory),
-    });
-  }
-  catch (error) {
-    const code = sourceAccessCode(error, 'LOCAL_MODEL_FINGERPRINT_FAILED');
-    if (code === 'LOCAL_CANCELLED') throw new Error(code);
-    const availability = code === 'LOCAL_DIRECTORY_PERMISSION_REQUIRED' ? 'permission-required'
-      : code === 'LOCAL_SOURCE_MISSING' ? 'missing' : 'error';
-    await markModelAvailability(model.info.id, availability, code).catch(() => {});
-    throw new Error(code);
-  }
-  if (!model.info.fingerprint) {
-    checkResolutionCancellation(options);
-    await reidentifyLegacyExternalModel(model, fingerprint, options.shouldCancel);
-    throw new Error('LOCAL_SOURCE_CHANGED');
-  }
-  if (model.info.fingerprint !== fingerprint) {
-    await markModelAvailability(model.info.id, 'changed', 'LOCAL_SOURCE_CHANGED');
-    throw new Error('LOCAL_SOURCE_CHANGED');
-  }
   checkResolutionCancellation(options);
   await markModelAvailability(model.info.id, 'ready');
   return { info: withAvailability(model.info, 'ready'), files };
 }
 
-export async function resolveModelFiles(id: string, options: ResolveModelFilesOptions = {}): Promise<{ info: LocalModelInfo; files: File[] }> {
+async function resolveStoredModelFiles(model: StoredModel, options: ResolveModelFilesOptions): Promise<{ info: LocalModelInfo; files: File[] }> {
   checkResolutionCancellation(options);
-  const model = await readStoredModel(id);
-  checkResolutionCancellation(options);
-  if (!model) throw new Error('LOCAL_MODEL_NOT_IMPORTED');
   if (model.info.source?.kind === 'files') return resolveFileHandles(model, model.info.source, options);
   const source = sourceOf(model.info);
   if (!source) {
@@ -545,6 +481,48 @@ export async function resolveModelFiles(id: string, options: ResolveModelFilesOp
   if (availability === 'changed') throw new Error('LOCAL_SOURCE_CHANGED');
   if (availability === 'missing') throw new Error('LOCAL_SOURCE_MISSING');
   return resolveDirectoryFiles(model, source, options);
+}
+
+/** Prepare once in offscreen; subsequent Worker reads use these File objects, never stored handles. */
+export async function resolveModelFiles(id: string, options: ResolveModelFilesOptions = {}): Promise<PreparedLocalModel> {
+  checkResolutionCancellation(options);
+  const started = performance.now();
+  const model = await readStoredModel(id);
+  if (!model) throw new Error('LOCAL_MODEL_NOT_IMPORTED');
+  const resolved = await resolveStoredModelFiles(model, options);
+  const sourceMs = performance.now() - started;
+  checkResolutionCancellation(options);
+  if (hasReusableMetadata(resolved.info)) return { ...resolved, timings: { sourceMs, metadataMs: 0 } };
+  const metadataStarted = performance.now();
+  options.onProgress?.({ stage: 'reading-header', currentFile: resolved.info.name });
+  const inspected = await inspectAndOrderFiles(resolved.files);
+  checkResolutionCancellation(options);
+  const indices = inspected.files.map(file => resolved.files.indexOf(file));
+  const info: LocalModelInfo = { ...resolved.info, ...inspected.info, id, name: model.info.name, importedAt: model.info.importedAt,
+    ...(model.info.source ? { source: { ...model.info.source, files: indices.map(index => model.info.source!.files[index]!) } } : {}) };
+  const db = await open();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction(MODEL_STORE, 'readwrite'), store = tx.objectStore(MODEL_STORE);
+      let failure: Error | undefined;
+      const request = store.get(id);
+      request.onsuccess = () => {
+        const current = request.result as StoredModel | undefined;
+        const code = options.shouldCancel?.() ? 'LOCAL_CANCELLED' : !current ? 'LOCAL_MODEL_NOT_IMPORTED'
+          : current.info.availability === 'changed' ? 'LOCAL_SOURCE_CHANGED'
+            : current.info.availability === 'missing' ? 'LOCAL_SOURCE_MISSING'
+              : current.info.importedAt !== model.info.importedAt || JSON.stringify(current.info.source) !== JSON.stringify(model.info.source)
+                || !current.info.source && !sameSnapshot(current, snapshotModel(model)) ? 'LOCAL_SOURCE_CHANGED' : undefined;
+        if (code) { failure = new Error(code); tx.abort(); return; }
+        store.put({ ...current!, info,
+          ...(current!.fileHandles ? { fileHandles: indices.map(index => current!.fileHandles![index]!) } : {}),
+          ...(!current!.info.source ? { blobs: inspected.files } : {}) });
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = tx.onabort = () => reject(failure ?? new Error('LOCAL_STORAGE_QUOTA_OR_IO'));
+    });
+  } finally { db.close(); }
+  return { info, files: inspected.files, timings: { sourceMs, metadataMs: performance.now() - metadataStarted } };
 }
 
 export async function validateModelSource(id: string): Promise<void> {
@@ -586,9 +564,9 @@ export async function saveFileReference(info: LocalModelInfo, handles: ReadOnlyF
           // Decide reuse from the transactional record, not a stale pre-read: source
           // retirement can run while handle comparisons or file parsing are pending.
           const unchanged = current && !['missing', 'changed'].includes(current.info.availability ?? '')
-            && current.info.fingerprint === info.fingerprint
             && JSON.stringify(current.info.source?.files) === JSON.stringify(info.source?.files);
-          next = unchanged && current ? { ...info, id: current.info.id, importedAt: current.info.importedAt } : info;
+          next = unchanged && current ? { ...info, id: current.info.id, importedAt: current.info.importedAt }
+            : current?.info.id === info.id ? { ...info, id: crypto.randomUUID(), importedAt: Date.now(), fingerprint: undefined } : info;
           if (current && current.info.id !== next.id) store.delete(current.info.id);
           store.put({ info: next, fileHandles: handles } satisfies StoredModel);
         };
@@ -613,26 +591,14 @@ async function resolveFileHandles(model: StoredModel, source: FileSource, option
     for (const [index, handle] of model.fileHandles.entries()) {
       checkResolutionCancellation(options);
       if (await handle.queryPermission({ mode: 'read' }) !== 'granted') throw new Error('LOCAL_DIRECTORY_PERMISSION_REQUIRED');
-      const file = await handle.getFile(), snapshot = source.files[index]!;
+      const snapshot = source.files[index]!;
+      options.onProgress?.({ stage: 'reading-file', currentFile: snapshot.path });
+      const file = await handle.getFile();
       if (file.size !== snapshot.size || file.lastModified !== snapshot.lastModified) throw new Error('LOCAL_SOURCE_CHANGED');
       checkResolutionCancellation(options);
       files.push(file);
     }
-    const fingerprint = await fingerprintFiles(files, {
-      shouldCancel: options.shouldCancel, cancelCode: 'LOCAL_CANCELLED', onProgress: options.onProgress,
-      checkSource: async () => {
-        for (const handle of model.fileHandles!) {
-          try { if (await handle.queryPermission({ mode: 'read' }) !== 'granted') throw new Error('LOCAL_DIRECTORY_PERMISSION_REQUIRED'); }
-          catch (error) { throw new Error(sourceAccessCode(error)); }
-        }
-      },
-    });
     checkResolutionCancellation(options);
-    if (!model.info.fingerprint) {
-      await reidentifyLegacyExternalModel(model, fingerprint, options.shouldCancel);
-      throw new Error('LOCAL_SOURCE_CHANGED');
-    }
-    if (model.info.fingerprint !== fingerprint) throw new Error('LOCAL_SOURCE_CHANGED');
     await markModelAvailability(model.info.id, 'ready');
     return { info: withAvailability(model.info, 'ready'), files };
   } catch (error) {

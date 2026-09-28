@@ -10,7 +10,7 @@ test('custom live wait persists without preset clamping; invalid and overflowing
     assert.equal(validLiveBufferMs(value), true); assert.equal(normalizeSettings({ liveBufferMs: value }).liveBufferMs, value);
   }
   for (const value of [0, -1, 1.1, Infinity, NaN, '5000', MAX_TIMER_DELAY_MS + 1]) {
-    assert.equal(validLiveBufferMs(value), false); assert.equal(normalizeSettings({ liveBufferMs: value }).liveBufferMs, 2000);
+    assert.equal(validLiveBufferMs(value), false); assert.equal(normalizeSettings({ liveBufferMs: value }).liveBufferMs, 3000);
   }
   assert.equal(timeoutRetryBudget(7500, 1000), 8500);
   assert.equal(timeoutRetryBudget(MAX_TIMER_DELAY_MS, 1000), MAX_TIMER_DELAY_MS);

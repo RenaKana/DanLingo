@@ -1,0 +1,22 @@
+{
+  "m_549ef7f261be": "De verzoekenteller wordt gedeeld door alle tabbladen en services en wordt per lokale kalenderdag op dit apparaat bijgehouden. Nieuwe pogingen, aanvullende vertalingen en tests tellen ook mee. Dit is een limiet op het aantal verzoeken; stel een maximumbedrag in bij de service.",
+  "m_4e377b8b93c0": "De registratie van \"{p0}\" verwijderen? Het oorspronkelijke GGUF-bestand blijft onaangetast. Als het model in gebruik is, wordt het eerst uit het geheugen gehaald en wordt de selectie gewist. {p1}",
+  "m_e9d46d8e3ec9": "De kopie van \"{p0}\" in de extensie verwijderen? Het oorspronkelijke GGUF-bestand blijft onaangetast. Als het model in gebruik is, wordt het eerst uit het geheugen gehaald.",
+  "m_779638a3aad8": "De registratie van \"{p0}\" verwijderen? Het originele bestand blijft onaangetast. Als het model in gebruik is, wordt het eerst uit het geheugen gehaald en wordt de selectie gewist.",
+  "m_b4fe85db78aa": "Dit model verschijnt niet opnieuw wanneer de map wordt vernieuwd.",
+  "m_9a5bf1f8dda0": "Voer de API-sleutel in; als het servicedomein niet verandert, kunt u het veld leeg laten.",
+  "m_da84b511f856": "Service opslaan en autoriseren",
+  "m_ffad0837a6bc": "Deze service is nog niet geautoriseerd. Klik op 'Service opslaan en autoriseren' voordat u de instellingen sluit.",
+  "m_592a688fb6d4": "De test verstuurt het geselecteerde aantal verzoeken en kan tot servicegebruik leiden. De vertaling van de kijkpagina wordt tijdens de test gepauzeerd en daarna hervat, zonder de instelling voor in- of uitschakelen van vertaling te wijzigen.",
+  "m_41ed2767d1c6": "Weergave-instellingen",
+  "m_217cfe7db1e3": "Systeemthema",
+  "m_92618f81aee5": "Redeneren uitschakelen",
+  "m_9c41b3a9e12a": "Redeneerniveau",
+  "m_45da2d9c85d1": "Map toevoegen",
+  "m_9b826346239e": "Vertaalengine",
+  "m_aa0819dfc4d8": "Licht thema",
+  "m_a6b75d068032": "Donker thema",
+  "locale.label": "Interfacetaal",
+  "m_9dac295e3b09": "Begrijp een andere taal via danmaku.",
+  "m_03287b455f2d": "Gewone danmaku"
+}

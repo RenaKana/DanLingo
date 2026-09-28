@@ -1,8 +1,10 @@
 import type { RuntimeStatus } from '../core/types';
+import { getLocale, localizeMessage, onLocaleChange, t } from '../i18n/text.ts';
+import { bindLocalizedAttribute, bindLocalizedText } from './localized-text.ts';
 
-const connectionLabels = {
-  connecting: '正在连接', connected: '已连接', reconnecting: '正在重连',
-  disconnected: '连接已断开', ended: '直播已结束',
+const connectionLabelKeys: Record<NonNullable<RuntimeStatus['connection']>, string> = {
+  connecting: 'm_694186911ae3', connected: 'm_5be0323e8adc', reconnecting: 'm_7a58d3d9d3e3',
+  disconnected: 'm_2ab7d89557e7', ended: 'm_924840fb8407',
 };
 const count = (value: number | undefined) => Number.isFinite(value) ? Math.max(0, Math.floor(value!)) : 0;
 const statusNote = (value: string | undefined) => (value || '')
@@ -11,22 +13,23 @@ const statusNote = (value: string | undefined) => (value || '')
 
 /** Live ratios describe the recent eligible window, never an entire comment pool. */
 export function liveStatusText(status: RuntimeStatus) {
-  const connection = status.connection ? connectionLabels[status.connection] : '等待连接';
+  const connection = status.connection ? t(connectionLabelKeys[status.connection]) : t('m_d80f8bbe1ddf');
   const note = statusNote(status.note);
-  const state = status.state === 'disabled' ? '翻译已关闭' : status.state === 'configuration-needed' ? '请先配置翻译服务'
-    : status.state === 'unsupported' ? note || '当前直播暂不可用'
-    : status.state === 'finding-player' ? '等待播放器'
-    : status.state === 'degraded' ? `${connection} · ${note || '暂时使用原文'}` : connection;
+  const localizedNote = localizeMessage(status.noteMessage ?? note);
+  const state = status.state === 'disabled' ? t('m_f2b5a88401b4') : status.state === 'configuration-needed' ? t('m_89baf1f67c7c')
+    : status.state === 'unsupported' ? localizedNote || t('m_48cdf22174c6')
+    : status.state === 'finding-player' ? t('m_c5470cdfa274')
+    : status.state === 'degraded' ? `${connection} · ${localizedNote || t('m_7e354d90714c')}` : connection;
   const eligible = count(status.recentEligible);
   const translated = Math.min(eligible, count(status.recentTranslated));
-  const recent = eligible ? `近期译文 ${translated}/${eligible}（${Math.floor(translated / eligible * 100)}%）`
-    : status.recentEligible === 0 ? '近期暂无待译消息' : '近期译文 —';
-  const metrics = `${status.platform === 'bilibili' ? `聊天译文 ${count(status.translated)} · ` : ''}${recent} · 超时原文 ${count(status.timedOut)} · 过载 ${count(status.overloaded)}`
-    + (status.platform === 'bilibili' ? ` · 显示未确认 ${count(status.liveMetrics?.unconfirmed)} · 补翻生成/回写 ${count(status.liveMetrics?.repaired)}/${count(status.liveMetrics?.repairApplied)}` : '')
-    + (count(status.dropped) ? ` · 丢弃 ${count(status.dropped)}` : '');
-  const coverage = status.platform === 'bilibili' ? '范围：原生聊天；不含屏幕弹幕和醒目留言'
-    : status.coverage === 'top' ? '范围：热门聊天（Top chat）'
-    : status.coverage === 'all' ? '范围：全部聊天' : '范围未知';
+  const recent = eligible ? t('m_5bbbd3af29f5', { p0: translated, p1: eligible, p2: Math.floor(translated / eligible * 100) })
+    : status.recentEligible === 0 ? t('m_89daea60e9e5') : t('m_4738810822e0');
+  const metrics = t('m_983b906e4363', { p0: status.platform === 'bilibili' ? t('m_86449f6fa6e5', { p0: count(status.translated) }) : '', p1: recent, p2: count(status.timedOut), p3: count(status.overloaded) })
+    + (status.platform === 'bilibili' ? t('m_0cd5b2f19bb7', { p0: count(status.liveMetrics?.unconfirmed), p1: count(status.liveMetrics?.repaired), p2: count(status.liveMetrics?.repairApplied) }) : '')
+    + (count(status.dropped) ? t('m_2a133caf153f', { p0: count(status.dropped) }) : '');
+  const coverage = status.platform === 'bilibili' ? t('m_1419fbe9fd1b')
+    : status.coverage === 'top' ? t('m_2f783d5458cf')
+    : status.coverage === 'all' ? t('m_2a7345684544') : t('m_560bb54cfc3f');
   return { state, metrics, coverage };
 }
 
@@ -36,10 +39,18 @@ export function createLiveStatus() {
   host.id = 'danlingo-live-status';
   const root = host.attachShadow({ mode: 'open' });
   root.innerHTML = `<style>
-    :host{all:initial;display:block;position:static;margin-top:8px;width:100%;min-width:0;font:12px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;color:#243f30;color-scheme:light}
-    :host([hidden]){display:none!important}*{box-sizing:border-box}.panel{display:inline-flex;gap:4px 12px;flex-wrap:wrap;align-items:center;max-width:100%;padding:7px 10px;border:1px solid #d1ded4;border-radius:8px;background:#f3f7f3;overflow-wrap:anywhere}
-    .mark{font-weight:700;color:#215c3e}.metrics,.coverage,.model{color:#526c5a;font-size:11px}.model{max-width:48ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}[hidden]{display:none!important}
+    :host{all:initial;display:block;position:static;margin-top:8px;width:100%;min-width:0;font:14px/1.45 "Segoe UI","Microsoft YaHei UI",sans-serif;color:#28323a;color-scheme:light}
+    :host([hidden]){display:none!important}*{box-sizing:border-box}[hidden]{display:none!important}
+    .panel{display:flex;gap:6px 14px;flex-wrap:wrap;align-items:center;width:100%;min-width:0;padding:8px 12px;border:1px solid #d9dfe4;border-radius:6px;background:#fff;overflow-wrap:anywhere}
+    .mark{display:inline-grid;place-items:center;flex:none;width:23px;height:23px;border-radius:4px;background:#eaf2fa;color:#23649b;font-weight:700}
+    #state{font-weight:600}.model,.metrics,.coverage{color:#596772;min-width:0;font-size:14px}
+    .model{max-width:38ch;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .metrics{flex:0 1 auto}.coverage{color:#68747c}
+    #danlingo-live-repairs{margin-inline-start:auto}
+    @media(max-width:680px){.panel{gap:6px 10px}.metrics{flex-basis:100%;order:2}.coverage{order:3}#danlingo-live-repairs{order:4}}
   </style><div class="panel"><span class="mark">译</span><span id="state" role="status"></span><span id="model" class="model" hidden></span><span id="metrics" class="metrics"></span><span id="coverage" class="coverage"></span></div>`;
+  const syncDirection = () => { host.lang = getLocale(); host.dir = getLocale() === 'ar' ? 'rtl' : 'ltr'; };
+  syncDirection(); const stopLocale = onLocaleChange(syncDirection);
   let anchor: HTMLElement | null = null;
   let active = false;
   let disposed = false;
@@ -75,17 +86,21 @@ export function createLiveStatus() {
       else host.remove();
       visibility();
     },
-    update(status: RuntimeStatus, modelSummary = '') {
+    update(status: RuntimeStatus, modelSummary: string | (() => string) = '') {
       if (disposed) return;
-      const text = liveStatusText(status);
-      for (const id of ['state', 'metrics', 'coverage'] as const) root.getElementById(id)!.textContent = text[id];
+      bindLocalizedText(root.getElementById('state')!, () => liveStatusText(status).state);
+      bindLocalizedText(root.getElementById('metrics')!, () => liveStatusText(status).metrics);
+      bindLocalizedText(root.getElementById('coverage')!, () => liveStatusText(status).coverage);
       const model = root.getElementById('model')!;
-      model.textContent = modelSummary; model.title = modelSummary; model.hidden = !modelSummary;
+      const renderModel = typeof modelSummary === 'function' ? modelSummary : () => modelSummary;
+      bindLocalizedText(model, renderModel); bindLocalizedAttribute(model, 'title', renderModel); model.hidden = !renderModel();
+      model.dir = 'ltr';
       active = status.scenario === 'live';
       visibility();
     },
     dispose() {
       disposed = true; resize.disconnect();
+      stopLocale();
       document.removeEventListener('fullscreenchange', visibility); host.remove(); anchor = null;
     },
   };

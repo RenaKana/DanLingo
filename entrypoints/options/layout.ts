@@ -1,10 +1,15 @@
+
+import { t, tCount } from '../../src/i18n';
+import { bindLocalizedAttribute, bindLocalizedText } from '../../src/ui/localized-text';
+import { mountCompactService } from './service-layout';
+
 const sections = {
-  service: ['翻译服务', '选择服务与模型。'],
-  watching: ['观看设置', '选择语言和显示方式。'],
-  live: ['直播聊天', '设置直播翻译。'],
-  performance: ['性能测试', '按当前配置运行测试。'],
-  advanced: ['高级参数', '调整请求与本地推理。'],
-  data: ['数据与诊断', '管理缓存与诊断。'],
+  service: ['m_83095a6428e8', 'm_ade6d377b28b'],
+  watching: ['m_41ed2767d1c6', 'm_e4bbe2bb4b3d'],
+  live: ['m_c07e46641f5c', 'm_7220f4c3911c'],
+  performance: ['m_7c185a12004e', 'm_a39397a3b8dc'],
+  advanced: ['m_a42c8d6a892a', 'm_78aba5a7a00b'],
+  data: ['m_afcc9b5e1596', 'm_4595422d43bc'],
 } as const;
 type Section = keyof typeof sections;
 const get = (id: string) => document.getElementById(id)!;
@@ -15,48 +20,55 @@ export function mountSettingsLayout() {
   const [service, watching, live, advanced] = cards;
   const data = main.querySelector<HTMLElement>(':scope > .card')!, diagnostics = main.querySelector<HTMLElement>(':scope > details')!;
   const actions = form.querySelector<HTMLElement>(':scope > .actions')!;
-  const panels = Object.fromEntries(Object.entries(sections).map(([id, [title]]) => {
-    const panel = create('section'); panel.dataset.section = id; panel.setAttribute('aria-label', title); form.append(panel); return [id, panel];
+  const panels = Object.fromEntries(Object.entries(sections).map(([id, [titleKey]]) => {
+    const panel = create('section'); panel.dataset.section = id; bindLocalizedAttribute(panel, 'aria-label', () => t(titleKey)); form.append(panel); return [id, panel];
   })) as Record<Section, HTMLElement>;
   panels.service.append(service!); panels.watching.append(watching!); panels.live.append(live!); panels.advanced.append(advanced!); panels.data.append(data);
   data.style.marginTop = ''; diagnostics.classList.add('card'); panels.data.append(diagnostics);
   const notice = main.querySelector<HTMLElement>(':scope > .notice'); if (notice) panels.data.append(notice);
-  const titleCard = (title: string) => { const card = create('div', 'card'), heading = create('h2'); heading.textContent = title; card.append(heading); return card; };
+  const titleCard = (render: string | (() => string)) => {
+    const card = create('div', 'card'), heading = create('h2');
+    if (typeof render === 'string') heading.textContent = render; else bindLocalizedText(heading, render);
+    card.append(heading); return card;
+  };
   const backend = get('backend').closest('label')!;
-  backend.firstChild!.textContent = ''; get('backend').setAttribute('aria-label', '翻译方式');
-  const modeCard = titleCard('翻译方式'); modeCard.classList.add('backend-card'); modeCard.append(backend); service!.before(modeCard);
+  backend.firstChild!.textContent = ''; bindLocalizedAttribute(get('backend'), 'aria-label', () => t('m_da4ace1c0a46'));
+  const modeCard = titleCard(() => t('m_da4ace1c0a46')); modeCard.classList.add('backend-card'); modeCard.append(backend); service!.before(modeCard);
+  const shortcutRow = get('translation-shortcut').closest<HTMLElement>('.row')!;
+  shortcutRow.classList.add('shortcut-row'); modeCard.append(shortcutRow);
   const online = create('div', 'grid'); online.dataset.backend = 'online';
-  for (const id of ['endpoint','model','thinking-effort','api-key','remember','key-state']) {
+  for (const id of ['endpoint','local-http','model','thinking-effort','api-key','remember','key-state']) {
     const node = id === 'model' ? get(id).closest('.model-control')! : id === 'key-state' ? get(id) : get(id).closest('label')!;
     online.append(node);
   }
   const serviceGrid = service!.querySelector('.grid')!; serviceGrid.prepend(online); online.classList.add('span');
   const local = get('local-settings'); local.classList.remove('span'); local.classList.add('card'); local.dataset.backend = 'local';
-  const localTitle = create('h2'); localTitle.textContent = '本地模型'; local.prepend(localTitle); service!.before(local);
-  const runtime = document.createElement('details'), summary = create('summary'); summary.textContent = '运行明细与支持范围';
+  const localTitle = create('h2'); bindLocalizedText(localTitle, () => t('m_44ac539067ed')); local.prepend(localTitle); service!.before(local);
+  const runtime = document.createElement('details'), summary = create('summary'); bindLocalizedText(summary, () => t('m_dc461ba5dd9c'));
   const localSummary = create('div', 'status span'); localSummary.id = 'local-state-summary'; localSummary.setAttribute('role', 'status'); localSummary.setAttribute('aria-live', 'polite');
   get('local-state').before(localSummary); runtime.className = 'span'; runtime.append(summary, get('local-state'), get('local-support')); local.querySelector('.local-grid')!.append(runtime);
   get('local-state').removeAttribute('aria-live'); get('local-state').removeAttribute('role');
   const connectionDetails = service!.querySelector('details')!;
-  connectionDetails.querySelector('summary')!.textContent = '连接与协议';
+  bindLocalizedText(connectionDetails.querySelector('summary')!, () => t('m_3019152503a2'));
   const sc = titleCard('Super Chat'), scGrid = create('div', 'grid');
   const onlineSc = get('superchat-thinking').closest('label')!; onlineSc.dataset.backend = 'online';
   scGrid.append(onlineSc, get('superchat-timeout').closest('label')!); sc.append(scGrid); panels.live.append(sc);
-  const connectionCard = titleCard('高级连接'); connectionCard.dataset.backend = 'online';
-  connectionCard.append(connectionDetails); connectionDetails.querySelector('.grid')!.append(get('local-http').closest('label')!); panels.advanced.prepend(connectionCard);
-  connectionDetails.querySelector('p')!.textContent = '连接失败时，请按服务提供方的说明填写路径和思考配置。';
-  const info = document.createElement('details'), infoSummary = create('summary'); infoSummary.textContent = '连接说明';
+  const connectionCard = titleCard(() => t('m_1566c66f0727')); connectionCard.hidden = true;
+  connectionCard.append(connectionDetails); panels.advanced.prepend(connectionCard);
+  bindLocalizedText(connectionDetails.querySelector('p')!, () => t('m_e4cc63839845'));
+  const info = document.createElement('details'), infoSummary = create('summary'); bindLocalizedText(infoSummary, () => t('m_3dc98cf48188'));
   info.className = 'span'; info.append(infoSummary, get('connection-status'));
   const serviceNote = service!.querySelector(':scope > p'); if (serviceNote) info.append(serviceNote); serviceGrid.append(info);
-  service!.querySelector('h2')!.textContent = '连接与模型';
+  bindLocalizedText(service!.querySelector('h2')!, () => t('m_da6c05c52a15'));
+  mountCompactService(service!, info);
   const cacheGrid = create('div','grid'); cacheGrid.append(get('cache-size').closest('label')!, get('cache-days').closest('label')!); data.querySelector('h2')!.after(cacheGrid);
   const dataRow = data.querySelector('.row')!; dataRow.classList.add('section-actions');
-  const keyCard = titleCard('服务凭据'); keyCard.append(get('delete-key')); panels.data.insertBefore(keyCard, diagnostics);
+  const keyCard = titleCard(() => t('m_d7e84dcfb384')); keyCard.append(get('delete-key')); panels.data.insertBefore(keyCard, diagnostics);
   for (const id of ['clear-cache','delete-key']) {
     const box = create('div','confirm'); box.id = id + '-confirm'; box.hidden = true;
-    const explanation = create('p'); explanation.textContent = id === 'clear-cache' ? '清空后可能重新翻译。' : '删除后需重新配置在线凭据。';
+    const explanation = create('p'); bindLocalizedText(explanation, () => id === 'clear-cache' ? t('m_c55c062b31fe') : t('m_21b8613d3f05'));
     const row = create('div','row');
-    for (const [kind,label] of [['confirm',id === 'clear-cache' ? '确认清空' : '确认删除'],['dismiss','取消']]) { const button = document.createElement('button'); button.type='button'; button.dataset[kind!] = id; button.textContent = label!; row.append(button); }
+    for (const [kind,key] of [['confirm',id === 'clear-cache' ? 'm_3c7a4fb3566d' : 'm_a3ea3c17b401'],['dismiss','m_2cd0f3be8738']] as const) { const button = document.createElement('button'); button.type='button'; button.dataset[kind] = id; bindLocalizedText(button, () => t(key)); row.append(button); }
     box.append(explanation,row); const result = create('p','status'); result.id = id + '-result'; result.setAttribute('role','status'); result.setAttribute('aria-live','polite');
     get(id).closest('.card')!.append(box,result);
   }
@@ -66,22 +78,51 @@ export function mountSettingsLayout() {
   const localPerformance = host('local-performance-host', panels.advanced, 'local', true);
   const localSuperchat = host('local-superchat-host', sc, 'local');
   main.querySelector('header')!.remove();
-  const header = create('header','page-header'); header.innerHTML = '<div><p class="eyebrow">设置</p><h1 id="page-title" tabindex="-1"></h1><p id="page-description" class="subtle"></p></div><a id="running-task" class="badge" href="#performance" role="status" hidden></a>'; main.prepend(header);
-  const sidebar = create('aside','sidebar'); sidebar.setAttribute('aria-label','设置导航');
-  sidebar.innerHTML = '<a class="brand" href="#service"><span class="mark" aria-hidden="true">译</span><span>DanLingo<small>翻译设置</small></span></a><nav aria-label="设置分类"></nav><label class="mobile-category">设置分类<select id="category"></select></label><div class="sidebar-bottom"><label>外观<select id="theme"><option value="system">跟随系统</option><option value="light">浅色</option><option value="dark">深色</option></select></label><p class="subtle">在弹幕中看懂另一种语言。</p></div>';
-  const themeStatus = create('p','status'); themeStatus.dataset.themeStatus = ''; themeStatus.hidden = true; themeStatus.setAttribute('role','status'); sidebar.querySelector('#theme')!.parentElement!.append(themeStatus);
+  const header = create('header','page-header'); header.innerHTML = `<div class="page-heading"><p class="page-breadcrumb" data-i18n="m_83095a6428e8"></p><h1 id="page-title" tabindex="-1"></h1></div><div class="page-header-actions">
+    <a id="running-task" class="badge" href="#performance" role="status" hidden></a>
+    <div class="preferences">
+      <label class="preference-control" data-theme-control><span class="sr-only" data-i18n="m_86a63f23a076">外观</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16Z" fill="currentColor" stroke="none"/></svg>
+        <select id="theme" aria-label="外观" data-i18n-aria-label="m_86a63f23a076" data-i18n-title="m_86a63f23a076"><option value="system" data-i18n="m_217cfe7db1e3">跟随系统</option><option value="light" data-i18n="m_aa0819dfc4d8">浅色</option><option value="dark" data-i18n="m_a6b75d068032">深色</option></select>
+        <span data-theme-status class="status" role="status" aria-live="polite" hidden></span>
+      </label>
+      <label class="preference-control" data-locale-control><span class="sr-only" data-i18n="locale.label">界面语言</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>
+        <select id="ui-locale" aria-label="界面语言" data-i18n-title="locale.label"></select>
+        <span data-locale-status class="status" role="status" aria-live="polite" hidden></span>
+      </label>
+    </div>
+  </div>`; main.prepend(header);
+  const sidebar = create('aside','sidebar'); bindLocalizedAttribute(sidebar, 'aria-label', () => t('m_00127e834a9b'));
+  sidebar.innerHTML = '<a class="brand" href="#service"><span class="mark" aria-hidden="true">译</span><span>DanLingo<small data-i18n="m_a2d7ec91766f">翻译设置</small></span></a><nav aria-label="设置分类" data-i18n-aria-label="m_dfb699c54378"></nav><label class="mobile-category"><span class="sr-only" data-i18n="m_dfb699c54378">设置分类</span><select id="category" data-i18n-aria-label="m_dfb699c54378"></select></label>';
   const nav = sidebar.querySelector('nav')!, category = sidebar.querySelector<HTMLSelectElement>('#category')!;
-  for (const [id,[title]] of Object.entries(sections)) { const a = document.createElement('a'); a.href = '#' + id; a.textContent = title; nav.append(a); category.add(new Option(title,id)); }
+  const navIcons: Record<Section, string> = {
+    service: '<rect x="4" y="4" width="16" height="6" rx="1"/><rect x="4" y="14" width="16" height="6" rx="1"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/>',
+    watching: '<rect x="3" y="5" width="18" height="13" rx="2"/><path d="m10 9 5 3-5 3ZM8 21h8"/>',
+    live: '<path d="M4 4h16v12H9l-5 4Z"/><path d="M8 8h8M8 12h5"/>',
+    performance: '<path d="M4 19V5M4 19h16M8 15v-4M13 15V7M18 15V9"/>',
+    advanced: '<path d="M4 7h6M14 7h6M4 17h10M18 17h2"/><circle cx="12" cy="7" r="2"/><circle cx="16" cy="17" r="2"/>',
+    data: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/>',
+  };
+  for (const [id,[titleKey]] of Object.entries(sections)) {
+    const a = document.createElement('a'); a.href = '#' + id;
+    a.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${navIcons[id as Section]}</svg>`;
+    const label = create('span'); bindLocalizedText(label, () => t(titleKey)); a.append(label); nav.append(a);
+    const option = new Option('', id); bindLocalizedText(option, () => t(titleKey)); category.add(option);
+  }
   const shell = create('div','settings-shell'); main.before(shell); shell.append(sidebar,main);
   actions.classList.add('save-bar'); actions.prepend(get('result')); form.append(actions); form.noValidate = true;
   const show = (focus = false) => {
     const hash = location.hash.slice(1), section: Section = Object.hasOwn(sections,hash) ? hash as Section : 'service';
     for (const [id,panel] of Object.entries(panels)) panel.hidden = id !== section;
     nav.querySelectorAll('a').forEach(a => { if (a.hash === '#' + section) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
-    category.value = section; get('page-title').textContent = sections[section][0]; get('page-description').textContent = sections[section][1];
+    category.value = section;
+    header.querySelector<HTMLElement>('.page-breadcrumb')!.hidden = section !== 'service';
+    bindLocalizedText(get('page-title'), () => t(section === 'service' ? (get('backend') as HTMLSelectElement).value === 'online' ? 'm_1760b98532ec' : 'm_8b47c15ab818' : sections[section][0]));
     if (focus) { get('page-title').focus({preventScroll:true}); window.scrollTo(0,0); }
   };
   window.addEventListener('hashchange', () => show(true)); category.addEventListener('change', () => { location.hash = category.value; }); show();
+  get('backend').addEventListener('change', () => show());
   const reveal = (field: HTMLElement) => {
     const panel = field.closest<HTMLElement>('[data-section]'); if (panel) { if (location.hash !== '#' + panel.dataset.section) location.hash = panel.dataset.section!; show(); }
     for (let parent = field.parentElement; parent; parent = parent.parentElement) if (parent instanceof HTMLDetailsElement) parent.open = true;
@@ -92,13 +133,17 @@ export function mountSettingsLayout() {
     const invalid = [...form.elements].find(el => (el instanceof HTMLInputElement || el instanceof HTMLSelectElement) && el.willValidate && !el.validity.valid) as HTMLInputElement | HTMLSelectElement | undefined;
     if (!invalid) return true; reveal(invalid); setTimeout(() => invalid.reportValidity(),0); return false;
   };
-  const tasks = new Map<string, { section: Section; label: string }>();
-  const task = (id: string, active: boolean, section: Section = 'performance', label = '测试运行中') => {
+  const tasks = new Map<string, { section: Section; label: () => string }>();
+  const task = (id: string, active: boolean, section: Section = 'performance', label: () => string = () => t('m_3019ac7d103b')) => {
     if (active) tasks.set(id,{section,label}); else tasks.delete(id);
     const host = id === 'online-test' ? onlinePerformance : id === 'local-test' ? localBenchmark : undefined;
     if (host) { host.dataset.running = String(active); host.hidden = !active && host.dataset.backend !== 'both' && host.dataset.backend !== (get('backend') as HTMLSelectElement).value; }
     const entries = [...tasks.values()], link = get('running-task') as HTMLAnchorElement; link.hidden = !entries.length;
-    if (entries.length) { link.href = '#' + entries[0]!.section; link.textContent = entries[0]!.label + (entries.length > 1 ? ` · ${entries.length} 项` : ''); }
+    if (entries.length) { link.href = '#' + entries[0]!.section; bindLocalizedText(link, () => entries[0]!.label() + (entries.length > 1 ? ` · ${tCount('count.tasks', entries.length)}` : '')); }
   };
-  return { onlinePerformance, localBenchmark, localPerformance, localSuperchat, reveal, validate, task };
+  const refreshServiceTitle = () => {
+    if (!location.hash || location.hash === '#service') bindLocalizedText(get('page-title'), () =>
+      t((get('backend') as HTMLSelectElement).value === 'online' ? 'm_1760b98532ec' : 'm_8b47c15ab818'));
+  };
+  return { onlinePerformance, localBenchmark, localPerformance, localSuperchat, reveal, validate, task, refreshServiceTitle };
 }

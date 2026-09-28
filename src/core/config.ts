@@ -1,26 +1,28 @@
 import { modelsEndpointFromConnection, resolveConnection } from './connection.ts';
 export { resolveConnection } from './connection.ts';
-import type { ProviderSettings, ProviderProtocol, Settings, ThinkingEffort, TranslationStrategy } from './types.ts';
+import type { HybridCapacityProfile, ProviderSettings, ProviderProtocol, Settings, ThinkingEffort, TranslationStrategy } from './types.ts';
 import { normalizeLocalConfig } from '../local/config.ts';
 import type { LocalPerformanceConfig } from '../local/types.ts';
 import { MAX_TIMEOUT_RETRY_EXTRA_MS } from './timeout-retry.ts';
-import { validLiveBufferMs } from './live-budget.ts';
+import { validLiveBufferMs, DEFAULT_LIVE_BUFFER_MS, MAX_TIMER_DELAY_MS } from './live-budget.ts';
 
 export const MAX_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_CONCURRENCY = 64;
 export const MAX_LIVE_BATCH_WAIT_MS = 150;
 export const DEFAULT_SETTINGS: Settings = {
-  schemaVersion: 3, enabled: false, displayMode: 'translated', translationScope: 'all',
-  onlineRequestLimitPerDay: 3000,
-  endpoint: 'https://api.minimax.cn/v1/chat/completions', model: 'MiniMax-M3', profile: 'minimax',
+  schemaVersion: 3, enabled: false, displayMode: 'translated', translationScope: 'auto', bilibiliUserFilters: false, bilibiliShadowScheduler: false, bilibiliNativeTranslationOnly: false, bilibiliOwnedRelease: false,
+  bilibiliHybrid: { enabled: false, profiles: [] },
+  onlineRequestLimitPerDay: 0,
+  endpoint: '', model: '', profile: 'chat-completions', reasoningProfileOverride: 'auto',
   protocol: 'chat-completions', backend: 'online',
   localPreloadOnEntry: true,
-  thinkingEffort: 'off', superChatThinkingEffort: 'inherit', superChatTimeoutMs: 15000,
+  localIdleUnloadEnabled: true, localIdleUnloadMinutes: 5,
+  thinkingEffort: 'default', superChatThinkingEffort: 'inherit', superChatTimeoutMs: 15000,
   allowLocalHttp: false, requestTimeoutMs: 12000, thinkingRequestTimeoutMs: 120000,
-  concurrency: 2, batchSize: 100, maxBatchChars: 12000,
+  concurrency: 2, onlineConcurrency: 2, localConcurrency: 2, batchSize: 100, videoBatchSize: 20, maxBatchChars: 12000,
   sourceLanguage: 'auto', targetLanguage: 'zh-Hans',
   prefetchSeconds: 60, urgentSeconds: 5, cacheMaxEntries: 5000, cacheTtlDays: 30,
-  liveBufferMs: 2000, liveSourceLanguage: 'auto', liveFontSize: 24, liveSpeed: 120, liveOpacity: 0.85, liveDensity: 6,
+  liveBufferMs: DEFAULT_LIVE_BUFFER_MS, liveSourceLanguage: 'auto', liveFontSize: 24, liveSpeed: 120, liveOpacity: 0.85, liveDensity: 6,
   bilibiliTimeoutRetryEnabled: false, bilibiliTimeoutRetryExtraMs: 1000, bilibiliTimeoutRetryMode: 'hold',
   youtubeTimeoutRetryEnabled: false, youtubeTimeoutRetryExtraMs: 1000, youtubeTimeoutRetryMode: 'hold',
   niconicoTimeoutRetryEnabled: false, niconicoTimeoutRetryExtraMs: 1000, niconicoTimeoutRetryMode: 'hold',
@@ -206,21 +208,47 @@ export function modelsEndpoint(endpoint: string, allowLocalHttp = false, options
   return modelsEndpointFromConnection(resolveConnection({ endpoint, allowLocalHttp, ...options }));
 }
 
+function normalizeHybridProfile(value: unknown): HybridCapacityProfile {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('invalid-hybrid-profile');
+  const profile = value as Record<string, unknown>;
+  if (typeof profile.identity !== 'string' || !/^[a-f0-9]{64}$/.test(profile.identity) ||
+      !Number.isSafeInteger(profile.maxItems) || (profile.maxItems as number) < 1 || (profile.maxItems as number) > 1000 ||
+      !Number.isSafeInteger(profile.maxChars) || (profile.maxChars as number) < 1 || (profile.maxChars as number) > 60000 ||
+      (profile.p95Ms !== undefined && (typeof profile.p95Ms !== 'number' || !Number.isFinite(profile.p95Ms) || profile.p95Ms <= 0)) ||
+      (profile.sourceRecordId !== undefined && (typeof profile.sourceRecordId !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,127}$/i.test(profile.sourceRecordId))) ||
+      typeof profile.manual !== 'boolean') throw new Error('invalid-hybrid-profile');
+  return { identity: profile.identity, maxItems: profile.maxItems as number, maxChars: profile.maxChars as number,
+    ...(profile.p95Ms === undefined ? {} : { p95Ms: profile.p95Ms as number }),
+    ...(profile.sourceRecordId === undefined ? {} : { sourceRecordId: profile.sourceRecordId as string }), manual: profile.manual };
+}
+
 export function normalizeSettings(input: unknown, options: { stored?: boolean } = {}): Settings {
   const value = input && typeof input === 'object' ? input as Record<string, unknown> : {};
   const result = { ...DEFAULT_SETTINGS };
+  if (value.bilibiliHybrid !== undefined) {
+    const hybrid = value.bilibiliHybrid;
+    if (!hybrid || typeof hybrid !== 'object' || Array.isArray(hybrid)) throw new Error('invalid-hybrid-settings');
+    const { enabled, profiles } = hybrid as Record<string, unknown>;
+    if (typeof enabled !== 'boolean' || !Array.isArray(profiles) || profiles.length > 50) throw new Error('invalid-hybrid-settings');
+    result.bilibiliHybrid = { enabled, profiles: profiles.map(normalizeHybridProfile) };
+  }
   if (value.onlineRequestLimitPerDay !== undefined) {
-    if (!Number.isSafeInteger(value.onlineRequestLimitPerDay) || (value.onlineRequestLimitPerDay as number) <= 0) throw new Error('invalid-online-request-limit');
+    if (!Number.isSafeInteger(value.onlineRequestLimitPerDay) || (value.onlineRequestLimitPerDay as number) < 0) throw new Error('invalid-online-request-limit');
     result.onlineRequestLimitPerDay = value.onlineRequestLimitPerDay as number;
   }
   for (const key of ['endpoint', 'model', 'sourceLanguage', 'targetLanguage', 'liveSourceLanguage'] as const) {
     if (typeof value[key] === 'string' && value[key].trim()) result[key] = value[key].trim().slice(0, key === 'endpoint' ? 1000 : 100);
   }
-  for (const key of ['enabled', 'allowLocalHttp', 'localPreloadOnEntry'] as const) if (typeof value[key] === 'boolean') result[key] = value[key];
+  for (const key of ['enabled', 'allowLocalHttp', 'localPreloadOnEntry', 'localIdleUnloadEnabled', 'bilibiliUserFilters', 'bilibiliOwnedRelease'] as const) if (typeof value[key] === 'boolean') result[key] = value[key];
+  // Retired ordinary settings. Ignore legacy true values on reads and imports,
+  // so removing their controls cannot leave the old experiment active invisibly.
+  result.bilibiliShadowScheduler = false;
+  result.bilibiliNativeTranslationOnly = false;
   for (const key of ['translationStream', 'liveAdaptiveConcurrency', 'bilibiliTimeoutRetryEnabled', 'youtubeTimeoutRetryEnabled', 'niconicoTimeoutRetryEnabled'] as const) if (typeof value[key] === 'boolean') result[key] = value[key];
   for (const key of ['bilibiliTimeoutRetryMode', 'youtubeTimeoutRetryMode', 'niconicoTimeoutRetryMode'] as const) if (value[key] === 'hold' || value[key] === 'release') result[key] = value[key];
   if (value.displayMode === 'original' || value.displayMode === 'translated') result.displayMode = value.displayMode;
-  if (value.translationScope === 'all' || value.translationScope === 'window') result.translationScope = value.translationScope;
+  if (value.translationScope === 'all' || value.translationScope === 'window' || value.translationScope === 'auto') result.translationScope = value.translationScope;
+  else if (options.stored && value.translationScope === undefined && Object.keys(value).length) result.translationScope = 'all';
   if (value.backend === 'online' || value.backend === 'local') result.backend = value.backend;
   if (typeof value.localModelId === 'string' && value.localModelId.trim()) result.localModelId = value.localModelId.trim().slice(0, 200);
   if (value.localPerformance !== undefined) result.localPerformance = normalizeLocalConfig(value.localPerformance as Partial<LocalPerformanceConfig>);
@@ -245,9 +273,12 @@ export function normalizeSettings(input: unknown, options: { stored?: boolean } 
     result.reasoningProfileOverride = value.reasoningProfileOverride as Settings['reasoningProfileOverride'];
   }
   else if (value.reasoningProfileOverride !== undefined) throw new Error('unsupported-reasoning-profile');
+  else if (hasProfile) delete result.reasoningProfileOverride;
   const ranges = {
     requestTimeoutMs: [1000, MAX_REQUEST_TIMEOUT_MS], thinkingRequestTimeoutMs: [1000, MAX_REQUEST_TIMEOUT_MS],
-    concurrency: [1, result.backend === 'local' ? 2_147_483_647 : MAX_CONCURRENCY], batchSize: [1, 200], maxBatchChars: [500, 24000],
+    onlineConcurrency: [1, MAX_CONCURRENCY], localConcurrency: [1, 2_147_483_647],
+    localIdleUnloadMinutes: [1, Math.floor(MAX_TIMER_DELAY_MS / 60_000)],
+    batchSize: [1, 200], videoBatchSize: [1, 200], maxBatchChars: [500, 24000],
     prefetchSeconds: [5, 3600], urgentSeconds: [1, 30], cacheMaxEntries: [100, 20000], cacheTtlDays: [1, 90],
     liveFontSize: [16, 48], liveSpeed: [60, 240], liveDensity: [1, 12],
     liveMaxBatchWaitMs: [0, MAX_LIVE_BATCH_WAIT_MS], liveMaxInputTokens: [256, 24000], liveMaxOutputTokens: [256, 24000],
@@ -260,13 +291,19 @@ export function normalizeSettings(input: unknown, options: { stored?: boolean } 
     batchSize: 20, maxBatchChars: 6000, prefetchSeconds: 30, urgentSeconds: 8,
   };
   for (const key of Object.keys(ranges) as (keyof typeof ranges)[]) {
-    const n = value[key];
+    // Migrate the old shared limit only when a backend-specific value is absent.
+    const n = value[key] ?? (key === 'onlineConcurrency' || key === 'localConcurrency' ? value.concurrency : undefined);
     if (value.schemaVersion !== 2 && value.schemaVersion !== 3 && n === legacyDefaults[key]) continue;
     if (typeof n === 'number' && Number.isFinite(n)) result[key] = Math.max(ranges[key][0], Math.min(ranges[key][1], Math.floor(n)));
   }
+  if (value.videoBatchSize === undefined && typeof value.batchSize === 'number' && Number.isFinite(value.batchSize)
+    && Number.isInteger(value.batchSize) && value.batchSize >= 1 && value.batchSize <= 200) {
+    result.videoBatchSize = Math.min(20, value.batchSize);
+  }
+  result.concurrency = result.backend === 'local' ? result.localConcurrency : result.onlineConcurrency;
   if (validLiveBufferMs(value.liveBufferMs)) result.liveBufferMs = value.liveBufferMs;
   if (typeof value.liveOpacity === 'number' && Number.isFinite(value.liveOpacity)) result.liveOpacity = Math.max(0.2, Math.min(1, value.liveOpacity));
-  if (result.translationScope === 'window') result.urgentSeconds = Math.min(result.urgentSeconds, result.prefetchSeconds);
+  if (result.translationScope !== 'all') result.urgentSeconds = Math.min(result.urgentSeconds, result.prefetchSeconds);
 
   const endpointValue = typeof value.endpoint === 'string' && value.endpoint.trim() ? value.endpoint.trim() : undefined;
   const endpointInputValue = typeof value.endpointInput === 'string' && value.endpointInput.trim() ? value.endpointInput.trim() : undefined;
@@ -275,16 +312,18 @@ export function normalizeSettings(input: unknown, options: { stored?: boolean } 
     try { return completionEndpoint(endpointInputValue, result.allowLocalHttp) === completionEndpoint(endpointValue, result.allowLocalHttp); }
     catch { return false; }
   })())) suppliedEndpoint = endpointInputValue;
-  const connection = resolveConnection({ endpoint: suppliedEndpoint, allowLocalHttp: result.allowLocalHttp,
+  const connection = suppliedEndpoint ? resolveConnection({ endpoint: suppliedEndpoint, allowLocalHttp: result.allowLocalHttp,
     backend: result.backend, protocol: result.protocol, protocolOverride: result.protocolOverride,
-    endpointMode: result.endpointMode, connectionOverride: result.connectionOverride });
-  result.endpoint = connection.configuredCompletionEndpoint;
-  result.protocol = connection.protocol;
-  if (value.endpointInput !== undefined || suppliedEndpoint !== connection.configuredCompletionEndpoint) result.endpointInput = suppliedEndpoint.slice(0, 1000);
-  const inferredProfile = connection.brand === 'minimax' || connection.brand === 'deepseek' || connection.brand === 'gemini'
+    endpointMode: result.endpointMode, connectionOverride: result.connectionOverride }) : undefined;
+  if (connection) {
+    result.endpoint = connection.configuredCompletionEndpoint;
+    result.protocol = connection.protocol;
+    if (value.endpointInput !== undefined || suppliedEndpoint !== connection.configuredCompletionEndpoint) result.endpointInput = suppliedEndpoint.slice(0, 1000);
+  } else result.endpoint = '';
+  const inferredProfile = connection && (connection.brand === 'minimax' || connection.brand === 'deepseek' || connection.brand === 'gemini')
     ? connection.brand : 'chat-completions';
   if (result.reasoningProfileOverride && result.reasoningProfileOverride !== 'auto') result.profile = result.reasoningProfileOverride;
-  else if (result.reasoningProfileOverride === 'auto' || (!hasProfile && value.endpoint !== undefined)) result.profile = inferredProfile;
+  else if (connection && (value.reasoningProfileOverride === 'auto' || !hasProfile)) result.profile = inferredProfile;
   const reasoningSettings = { profile: result.profile, model: result.model };
   // Keep old saved choices visible for correction, but validate every outgoing/save request.
   const normalizeEffort = (effort: unknown) => (options.stored || result.backend === 'local') && typeof effort === 'string' && ['default','off','on','minimal','low','medium','high','max','xhigh'].includes(effort)

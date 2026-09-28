@@ -1,0 +1,21 @@
+{
+  "m_549ef7f261be": "Bộ đếm yêu cầu được dùng chung giữa tất cả các thẻ và dịch vụ, tính theo ngày dương lịch tại địa phương trên thiết bị này. Các lần thử lại, bản dịch bổ sung và bài kiểm tra cũng được tính. Đây là giới hạn số lượng yêu cầu; hãy đặt giới hạn chi phí ở phía dịch vụ.",
+  "m_4e377b8b93c0": "Xóa đăng ký \"{p0}\"? Tệp GGUF gốc sẽ không bị ảnh hưởng. Nếu mô hình đang được sử dụng, mô hình sẽ được gỡ khỏi bộ nhớ trước và bỏ chọn. {p1}",
+  "m_e9d46d8e3ec9": "Xóa bản sao \"{p0}\" trong tiện ích mở rộng? Tệp GGUF gốc sẽ không bị ảnh hưởng. Nếu mô hình đang được sử dụng, mô hình sẽ được gỡ khỏi bộ nhớ trước.",
+  "m_779638a3aad8": "Xóa đăng ký \"{p0}\"? Tệp gốc sẽ không bị ảnh hưởng. Nếu mô hình đang được sử dụng, mô hình sẽ được gỡ khỏi bộ nhớ trước và bỏ chọn.",
+  "m_b4fe85db78aa": "Mô hình này sẽ không xuất hiện lại khi làm mới thư mục.",
+  "m_da84b511f856": "Lưu dịch vụ và cấp quyền truy cập",
+  "m_ffad0837a6bc": "Dịch vụ này chưa được cấp quyền. Hãy nhấp vào \"Lưu dịch vụ và cấp quyền truy cập\" trước khi đóng cài đặt.",
+  "m_592a688fb6d4": "Bài kiểm tra sẽ gửi số lượng yêu cầu đã chọn và có thể phát sinh phí sử dụng dịch vụ. Bản dịch trang xem sẽ tạm dừng trong khi kiểm tra và tiếp tục sau khi kết thúc, không thay đổi cài đặt bật hoặc tắt dịch.",
+  "m_41ed2767d1c6": "Cài đặt xem",
+  "m_217cfe7db1e3": "Chủ đề hệ thống",
+  "m_92618f81aee5": "Tắt suy luận",
+  "m_9c41b3a9e12a": "Mức độ suy luận",
+  "m_45da2d9c85d1": "Thêm thư mục",
+  "m_9b826346239e": "Bộ máy dịch",
+  "m_aa0819dfc4d8": "Giao diện sáng",
+  "m_a6b75d068032": "Giao diện tối",
+  "locale.label": "Ngôn ngữ giao diện",
+  "m_9dac295e3b09": "Hiểu ngôn ngữ khác qua bình luận danmaku.",
+  "m_03287b455f2d": "Danmaku thông thường"
+}

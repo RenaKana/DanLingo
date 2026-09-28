@@ -30,5 +30,5 @@ export function getTimeoutRetryPolicy(settings: TimeoutRetrySettings | null | un
   if (enabled !== true) return undefined;
   const extra = settings[`${prefix}TimeoutRetryExtraMs` as keyof TimeoutRetrySettings];
   const mode = settings[`${prefix}TimeoutRetryMode` as keyof TimeoutRetrySettings];
-  return { timeoutMs: timeoutRetryBudget(typeof settings.liveBufferMs === 'number' ? settings.liveBufferMs : 2000, extra), hold: mode !== 'release' };
+  return { timeoutMs: timeoutRetryBudget(liveBufferMs(settings.liveBufferMs), extra), hold: mode !== 'release' };
 }

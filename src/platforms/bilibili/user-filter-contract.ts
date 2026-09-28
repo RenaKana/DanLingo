@@ -1,0 +1,17 @@
+// Exact functions from the observed core.ba67b466.js; compared as text, never evaluated.
+// SHA256 7ec2be66fa36dd8a5e9d63802c8a738cf4e8ff87aa8c9ef6436d395268737a83
+export const USER_FILTER_NATIVE_FUNCTIONS = {
+  "judgeWord": "function(n){var r,i,o=this.dmSettingStore.state,u=n.text,l=n.mode,c=n.uhash,d=n.uid,f=n.shooterType,p=c||d;if(f&&1===f)return eg.yC.BLOCK_DISABLED;try{u=7===l&&\"[\"===u[0]?JSON.parse(u)[4]:u}catch(n){}if(9!==l&&o.status&&(null==(r=this.blockList)?void 0:r.length)){for(var h=0;h<this.blockList.length;h++)if((i=this.blockList[h]).opened&&i.filter){if(2===i.type&&String(p)===String(i.filter))return eg.yC.BLOCK_LIST_USER;if(0===i.type)try{if(RegExp(i.filter.replace(/(\\^|\\$|\\\\|\\.|\\*|\\+|\\?|\\(|\\)|\\[|\\]|\\{|\\}|\\||\\/)/g,\"\\\\$1\"),\"i\").test(u))return eg.yC.BLOCK_LIST_KEYWORD}catch(n){this.log.w(n)}if(1===i.type)try{if(this.filterRegexp(i.filter).test(u))return eg.yC.BLOCK_LIST_REGEXP}catch(n){this.log.w(n)}}}}",
+  "isBlockDanmaku": "function(n){var r=arguments.length>1&&void 0!==arguments[1]&&arguments[1];if(n.border)return!1;if(this.judgeWord(n))return this.blockCountByReason.word++,!0;var i=this.dmSettingStore.state,o=i.typeScroll,u=i.typeTopBottom,l=i.typeColor,c=i.typeSpecial,d=i.seniorMode,f=i.preventshade,p=!u,h=!l,y=!c,m=!o,g=n.mode;if(!r){if(this.aiJudge(n,this.dmSettingStore.aiLevel))return this.blockCountByReason.aiCloud++,!0;if(this.reportFilterReg(n))return this.blockCountByReason.reportFilter++,!0}if(d&&n.weight<=10)return this.blockCountByReason.senior++,!0;if(n.colorful&&h)return this.blockCountByReason.colorful++,!0;if(m&&this.DmBlockMap.blockScroll.includes(g))return this.blockCountByReason.scroll++,!0;if(p&&this.DmBlockMap.blockTopBottom.includes(g))return this.blockCountByReason.topBottom++,!0;if(y&&(this.DmBlockMap.blockSpecial.includes(g)||2===n.pool))return this.blockCountByReason.special++,!0;if(h&&t6.blockColor.includes(g)){if(5===g||4===g||1===g||6===g||2007===g||2013===g||2008===g||2009===g){if(n.color&&\"#FFFFFF\"!==(0,t7.A)(n.color).toUpperCase())return this.blockCountByReason.color++,!0}else if(2012===g&&(1===n.modeInfo.color_type&&n.modeInfo.font_color&&\"#FFFFFF\"!==n.modeInfo.font_color.toUpperCase()||n.resource.url&&\"\"!==n.resource.url))return this.blockCountByReason.color++,!0}return!!(f&&t6.preventShade.includes(g))&&(this.blockCountByReason.preventShade++,!0)}",
+  "filterRegexp": "function(n){var r=/^\\/(.+)\\/([img]{0,3})$/.exec(n);try{return new RegExp(r[1],r[2])}catch(r){return new RegExp(n)}}"
+} as const;
+
+// Callback observed on the same real player; no speculative filter replacement.
+export const USER_FILTER_NATIVE_CALLBACK = "function(e){var t=n.blockStore.isBlockDanmaku(e);if(t){n.blockStore.dmBlockCount++;var i=e.mode,p=n.blockStore.blockCountByType;p&&(i>=3e3?p.cmd=(p.cmd||0)+1:i>=2e3?p.special=(p.special||0)+1:p.common=(p.common||0)+1)}else n.blockStore.filterPassCount++;return t}";
+
+// Same branch order, observed on the 2026-09-26 06:47Z page. Only the local
+// counter variable names differ; keep an exact allowlist, never normalize code.
+export const USER_FILTER_NATIVE_CALLBACK_CURRENT = "function(e){var t=n.blockStore.isBlockDanmaku(e);if(t){n.blockStore.dmBlockCount++;var p=e.mode,i=n.blockStore.blockCountByType;i&&(p>=3e3?i.cmd=(i.cmd||0)+1:p>=2e3?i.special=(i.special||0)+1:i.common=(i.common||0)+1)}else n.blockStore.filterPassCount++;return t}";
+
+// nano.valueOf returns a copy of the connected RootPlayer Set, without changing it.
+export const USER_FILTER_NATIVE_REGISTRY = 'function(){return(0,tu._)(rO.Nd)}';

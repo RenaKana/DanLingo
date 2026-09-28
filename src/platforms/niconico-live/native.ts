@@ -1,4 +1,4 @@
-import { validLiveBufferMs } from '../../core/live-budget.ts';
+import { validLiveBufferMs, DEFAULT_LIVE_BUFFER_MS } from '../../core/live-budget.ts';
 import { needsTranslation } from '../../core/messages.ts';
 import { getTimeoutRetryPolicy } from '../../core/timeout-retry.ts';
 import { protectText } from '../../translation/text.ts';
@@ -26,7 +26,7 @@ export function startNiconicoLiveBridge(): () => void {
     return JSON.stringify([p.no, p.date, p.date_usec ?? p.dateUsec ?? 0]);
   };
   let resourceId = watchId(), adapterSession = crypto.randomUUID();
-  let enabled = false, bufferMs = 2000, targetLanguage = 'zh-Hans', sourceLanguage = 'auto', timeoutRetryEnabled = false, timeoutRetryExtraMs: unknown = 1000, timeoutRetryMode: unknown = 'hold', lastLease = -Infinity, stopped = false, suspended = false;
+  let enabled = false, bufferMs = DEFAULT_LIVE_BUFFER_MS, targetLanguage = 'zh-Hans', sourceLanguage = 'auto', timeoutRetryEnabled = false, timeoutRetryExtraMs: unknown = 1000, timeoutRetryMode: unknown = 'hold', lastLease = -Infinity, stopped = false, suspended = false;
   let configVersion: number | undefined;
   let connection: 'connecting' | 'connected' | 'reconnecting' | 'disconnected' = 'connecting';
   let attachment: Native | null = null, lastDiscovery = -Infinity, lastSnapshot = -Infinity, wasPlayable = false;

@@ -1,11 +1,15 @@
+import { sourceProgressText } from '../../src/local/source-progress';
 import type { DirectoryInfo, DirectoryScanStatus } from '../../src/local/directory-types';
 import { directoryErrorMessage } from '../../src/local/directory-errors';
 import type { LocalModelInfo } from '../../src/local/types';
+import { formatNumber, localizeMessage, t } from '../../src/i18n';
+import { bindLocalizedAttribute, bindLocalizedText } from '../../src/ui/localized-text';
 
-export type DirectoryAction = 'scan' | 'cancel' | 'authorize' | 'authorize-file' | 'remove' | 'remove-model';
+export type DirectoryAction = 'scan' | 'cancel' | 'authorize' | 'authorize-file' | 'remove' | 'remove-model' | 'load-model';
+export interface ModelManagerState { selectedId?: string; loadedId?: string; loadingId?: string; busy?: boolean }
 function formatBytes(bytes: number): string {
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${formatNumber(Math.round(bytes / 1024))} KB`;
+  return `${formatNumber(Number((bytes / (1024 * 1024)).toFixed(1)))} MB`;
 }
 export function mountDirectoryUI(action: (action: DirectoryAction, id?: string) => Promise<void>) {
   const rows = document.getElementById('local-directories')!;
@@ -20,58 +24,71 @@ export function mountDirectoryUI(action: (action: DirectoryAction, id?: string) 
   document.getElementById('local-file-add')!.addEventListener('click', () => { void action('authorize-file'); });
   refresh.addEventListener('click', () => { void action('scan'); });
   cancel.addEventListener('click', () => { void action('cancel'); });
-  const makeButton = (label: string, run: () => void) => { const button = document.createElement('button'); button.type = 'button'; button.textContent = label; button.addEventListener('click', run); return button; };
+  const makeButton = (label: () => string, run: () => void) => { const button = document.createElement('button'); button.type = 'button'; bindLocalizedText(button, label); button.addEventListener('click', run); return button; };
   return {
-    render(directories: DirectoryInfo[], scan?: DirectoryScanStatus, busy = false, models: LocalModelInfo[] = []) {
+    render(directories: DirectoryInfo[], scan?: DirectoryScanStatus, busy = false, models: LocalModelInfo[] = [], state: ModelManagerState = {}) {
       const next = JSON.stringify(directories);
       if (signature !== next) {
         signature = next; rows.replaceChildren();
-        if (!directories.length) { const empty = document.createElement('p'); empty.className = 'subtle'; empty.textContent = '可添加文件夹或直接选择模型文件，只读引用原文件。'; rows.append(empty); }
+        if (!directories.length) { const empty = document.createElement('p'); empty.className = 'subtle'; bindLocalizedText(empty, () => t('m_ba62d1786dcd')); rows.append(empty); }
         for (const directory of directories) {
           const row = document.createElement('div'); row.className = 'local-directory'; row.dataset.directoryId = directory.id;
           const description = document.createElement('div'); description.className = 'local-directory-description';
           const name = document.createElement('strong'); name.textContent = directory.name;
           const detail = document.createElement('span'); detail.className = 'subtle';
-          detail.textContent = directory.status === 'ready' ? '只读 · 包含子文件夹' : directoryErrorMessage(directory.error ?? 'LOCAL_DIRECTORY_PERMISSION_REQUIRED');
+          bindLocalizedText(detail, () => directory.status === 'ready' ? t('m_234a9ed40ca2') : localizeMessage(directoryErrorMessage(directory.error ?? 'LOCAL_DIRECTORY_PERMISSION_REQUIRED')));
           description.append(name, detail);
           const actions = document.createElement('div'); actions.className = 'row local-directory-actions';
-          actions.append(makeButton('刷新', () => { void action('scan', directory.id); }));
-          if (directory.status !== 'ready') actions.append(makeButton('重新授权', () => { void action('authorize', directory.id); }));
+          actions.append(makeButton(() => t('m_aee887434131'), () => { void action('scan', directory.id); }));
+          if (directory.status !== 'ready') actions.append(makeButton(() => t('m_6a84698a4758'), () => { void action('authorize', directory.id); }));
           const confirmation = document.createElement('div'); confirmation.className = 'confirm'; confirmation.hidden = true;
-          const text = document.createElement('p'); text.textContent = `移除“${directory.name}”的登记？原文件不受影响；若正在使用其中的模型，将卸载并清空选择。`;
+          const text = document.createElement('p'); bindLocalizedText(text, () => t('m_779638a3aad8', { p0: directory.name }));
           const confirmActions = document.createElement('div'); confirmActions.className = 'row';
-          confirmActions.append(makeButton('确认移除', () => { confirmation.hidden = true; void action('remove', directory.id); }), makeButton('取消', () => { confirmation.hidden = true; }));
+          confirmActions.append(makeButton(() => t('m_ee7dea070d88'), () => { confirmation.hidden = true; void action('remove', directory.id); }), makeButton(() => t('m_2cd0f3be8738'), () => { confirmation.hidden = true; }));
           confirmation.append(text, confirmActions);
-          actions.append(makeButton('移除', () => { confirmation.hidden = false; })); row.append(description, actions, confirmation); rows.append(row);
+          actions.append(makeButton(() => t('m_6135d4159e89'), () => { confirmation.hidden = false; })); row.append(description, actions, confirmation); rows.append(row);
         }
       }
-      const references = models.filter(model => model.source);
+      const references = models;
       const nextModels = JSON.stringify(references);
-      manager.hidden = !references.length;
+      manager.hidden = false;
       if (modelSignature !== nextModels) {
         modelSignature = nextModels; modelRows.replaceChildren();
-        document.getElementById('local-model-manager-summary')!.textContent = `管理模型（${references.length}）`;
+        bindLocalizedText(document.getElementById('local-model-manager-summary')!, () => t('m_0d12cbfd2899', { p0: references.length }));
+        if (!references.length) { const empty = document.createElement('p'); empty.className = 'subtle'; bindLocalizedText(empty, () => t('modelManager.empty')); modelRows.append(empty); }
         for (const model of references) {
           const row = document.createElement('div'); row.className = 'local-model-entry'; row.dataset.modelId = model.id;
           const description = document.createElement('div'); description.className = 'local-directory-description';
           const name = document.createElement('strong'); name.textContent = model.name;
+          const heading = document.createElement('div'); heading.className = 'local-model-heading';
+          const source = document.createElement('span'); source.className = 'badge local-source-kind';
+          bindLocalizedText(source, () => model.source?.kind === 'files' ? t('modelManager.file') : model.source ? t('modelManager.directory') : t('m_7970e2877557'));
+          const stateBadge = document.createElement('span'); stateBadge.className = 'badge local-model-state';
+          heading.append(name, source, stateBadge);
           const detail = document.createElement('span'); detail.className = 'subtle';
-          detail.textContent = `${model.source!.directoryName}/${model.source!.files[0]?.path ?? model.name} · ${model.architecture} · ${model.quantization}${model.availability && model.availability !== 'ready' ? ' · 暂不可用' : ''}`;
-          description.append(name, detail);
+          bindLocalizedText(detail, () => `${model.source?.kind === 'directory' ? model.source.directoryName + '/' : ''}${model.source?.files[0]?.path ?? model.name} · ${formatBytes(model.bytes)} · ${model.architecture} · ${model.quantization}${model.availability && model.availability !== 'ready' ? t('m_dfa7df6e11c5') : ''}`);
+          description.append(heading, detail);
           const actions = document.createElement('div'); actions.className = 'row local-directory-actions';
-          if (model.source?.kind === 'files' && model.availability === 'permission-required') actions.append(makeButton('重新授权', () => { void action('authorize-file', model.id); }));
-          const remove = makeButton('移除', () => { void action('remove-model', model.id); }); remove.setAttribute('aria-label', `移除模型 ${model.name}`);
-          actions.append(remove); row.append(description, actions); modelRows.append(row);
+          if (model.source?.kind === 'files' && model.availability === 'permission-required') actions.append(makeButton(() => t('m_6a84698a4758'), () => { void action('authorize-file', model.id); }));
+          const remove = makeButton(() => t('m_6135d4159e89'), () => { void action('remove-model', model.id); }); bindLocalizedAttribute(remove, 'aria-label', () => t('m_6e66526ad717', { p0: model.name }));
+          remove.dataset.modelAction = 'remove';
+          const load = makeButton(() => t('modelManager.load'), () => { void action('load-model', model.id); }); load.dataset.modelAction = 'load';
+          bindLocalizedAttribute(load, 'aria-label', () => `${t('modelManager.load')} ${model.name}`);
+          actions.append(load, remove); row.append(description, actions); modelRows.append(row);
         }
       }
-      refresh.disabled = busy || !directories.length && !references.length; cancel.hidden = !busy;
-      for (const button of modelRows.querySelectorAll('button')) button.disabled = busy;
+      refresh.disabled = busy || !!state.busy || !directories.length && !references.some(model => model.source); cancel.hidden = !busy;
+      for (const button of rows.querySelectorAll('button')) button.disabled = busy || !!state.busy;
+      for (const row of modelRows.querySelectorAll<HTMLElement>('[data-model-id]')) {
+        const model = models.find(item => item.id === row.dataset.modelId)!;
+        for (const button of row.querySelectorAll('button')) button.disabled = busy || !!state.busy || button.dataset.modelAction === 'load' && !!model.availability && model.availability !== 'ready';
+        const badge = row.querySelector<HTMLElement>('.local-model-state')!;
+        bindLocalizedText(badge, () => [state.selectedId === model.id ? t('modelManager.selected') : '', state.loadingId === model.id ? t('m_d04fcbda737f') : state.loadedId === model.id ? t('modelManager.loaded') : ''].filter(Boolean).join(' · '));
+        badge.hidden = !badge.textContent;
+      }
       const relevantScan = scan?.directoryId ? directories.some(directory => directory.id === scan.directoryId) : true;
-      const stage = scan?.stage === 'fingerprinting' ? ` · 验证内容 ${formatBytes(scan.fingerprintedBytes ?? 0)} / ${formatBytes(scan.totalFingerprintBytes ?? 0)}`
-        : scan?.stage === 'persisting' ? ' · 正在保存结果' : scan?.stage === 'enumerating' ? ' · 正在检查文件' : '';
-      status.textContent = relevantScan && scan && scan.phase !== 'idle'
-        ? `${busy ? '识别中' : scan.phase === 'cancelled' ? '已取消，保留原列表' : scan.phase === 'error' ? directoryErrorMessage(scan.error) : '识别完成'}${busy ? stage : ''} · 已检查 ${scan.checkedFiles} 个文件 · 已识别 ${scan.modelsFound} 个模型 · ${(scan.elapsedMs / 1000).toFixed(1)} 秒`
-        : '';
+      bindLocalizedText(status, () => scan && (busy || scan.phase !== 'idle')
+        ? [scan.phase === 'cancelled' ? t('m_0e4401553264') : scan.phase === 'error' ? localizeMessage(directoryErrorMessage(scan.error)) : '', sourceProgressText(scan)].filter(Boolean).join('\n') : '');
       status.className = scan?.phase === 'error' ? 'status error span' : 'status span';
       const allIssues = directories.flatMap(directory =>
         (directory.id === scan?.directoryId ? scan.issues : directory.issues ?? []).map(issue => ({ ...issue, path: `${directory.name}/${issue.path}` })));
@@ -79,9 +96,9 @@ export function mountDirectoryUI(action: (action: DirectoryAction, id?: string) 
       if (issueSignature !== nextIssues) {
         issueSignature = nextIssues; issues.replaceChildren(); issues.hidden = !allIssues.length;
         if (allIssues.length) {
-          const summary = document.createElement('summary'); summary.textContent = `${allIssues.length} 项识别问题`; issues.append(summary);
+          const summary = document.createElement('summary'); bindLocalizedText(summary, () => t('m_095f3518fd06', { p0: allIssues.length })); issues.append(summary);
           const list = document.createElement('ul');
-          for (const issue of allIssues) { const item = document.createElement('li'); item.textContent = `${issue.path}：${directoryErrorMessage(issue.error)}`; list.append(item); }
+          for (const issue of allIssues) { const item = document.createElement('li'); bindLocalizedText(item, () => `${issue.path}：${localizeMessage(directoryErrorMessage(issue.error))}`); list.append(item); }
           issues.append(list);
         }
       }

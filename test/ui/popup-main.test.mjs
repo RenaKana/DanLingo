@@ -3,6 +3,9 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import ts from 'typescript';
 import vm from 'node:vm';
+import { t, localizeMessage, onLocaleChange, getLocale, setLocale } from '../../src/i18n/text.ts';
+import { LOCALES } from '../../src/i18n/locale.ts';
+import { TARGET_LANGUAGES } from '../../src/ui/languages.ts';
 
 const root = new URL('../../', import.meta.url);
 
@@ -12,15 +15,17 @@ const transpile = source => ts.transpileModule(source, {
   compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
 }).outputText;
 
-const [popupSource, statusSource, themeSource, diagnosticSource] = await Promise.all([
+const [popupSource, statusSource, themeSource, diagnosticSource, localizedSource] = await Promise.all([
   readFile(new URL('entrypoints/popup/main.ts', root), 'utf8'),
   readFile(new URL('src/ui/live-status.ts', root), 'utf8'),
   readFile(new URL('src/ui/theme.ts', root), 'utf8'),
   readFile(new URL('src/core/adapter-diagnostic.ts', root), 'utf8'),
+  readFile(new URL('src/ui/localized-text.ts', root), 'utf8'),
 ]);
 
 const popupCode = [
   'const browser = globalThis.browser;',
+  stripExports(stripImports(transpile(localizedSource))),
   stripExports(stripImports(transpile(statusSource))),
   stripExports(stripImports(transpile(themeSource))),
   stripExports(stripImports(transpile(diagnosticSource))),
@@ -71,6 +76,7 @@ class FakeElement {
     return true;
   }
   setAttribute(name, value) { this.attributes.set(name, String(value)); }
+  removeAttribute(name) { this.attributes.delete(name); }
   getAttribute(name) { return this.attributes.get(name) ?? null; }
   closest(selector) {
     return selector === '[data-theme-control]' && this.themeControl ? this.themeControl : null;
@@ -84,10 +90,20 @@ class FakeElement {
 class FakeSelect extends FakeElement {
   constructor(id, options = []) {
     super(id);
+    this.tagName = 'SELECT';
     this.options = options.map(([value, text = value]) => ({ value, textContent: text }));
     this.value = this.options[0]?.value ?? '';
   }
+  get value() { return this._value ?? ''; }
+  set value(value) { this._value = !this.options || this.options.some(option => option.value === value) ? value : ''; }
   add(option) { this.options.push(option); }
+}
+
+class FakeButton extends FakeElement {
+  constructor(id) {
+    super(id);
+    this.tagName = 'BUTTON';
+  }
 }
 
 class FakeEventTarget {
@@ -131,9 +147,9 @@ function overview({ scenario, state = 'ready', hasKey = true, settings = {} } = 
 function createHarness({ initialOverview = overview({ scenario: 'video' }), toggleResponse = null, themeStored = { theme: 'system' }, deferInitialOverview = false, deferToggle = false, deferThemeGet = false, settingsResponse = { ok: true } } = {}) {
   const elements = new Map();
   const enabled = new FakeElement('enabled');
-  const language = new FakeSelect('language', [['zh-Hans', '简体中文'], ['en', '英语']]);
+  const language = new FakeSelect('language');
   const mode = new FakeSelect('mode', [['translated', '译文优先'], ['original', '原文']]);
-  const theme = new FakeSelect('theme', [['system', '跟随系统'], ['light', '浅色'], ['dark', '深色']]);
+  const theme = new FakeButton('theme');
   const status = new FakeElement('status');
   const metrics = new FakeElement('metrics');
   const coverage = new FakeElement('coverage');
@@ -154,7 +170,11 @@ function createHarness({ initialOverview = overview({ scenario: 'video' }), togg
   const initial = deferInitialOverview ? deferred() : null;
   const toggle = deferToggle ? deferred() : null;
   const toggleCalls = [];
+  const overviewCalls = [];
+  const languageOptions = [];
   const storageWrites = [];
+  const themeSetQueue = [];
+  let storedTheme = themeStored;
   const intervals = [];
   const overviewQueue = [];
   const toggleQueue = [];
@@ -168,7 +188,7 @@ function createHarness({ initialOverview = overview({ scenario: 'video' }), togg
   const browser = {
     runtime: {
       sendMessage(message) {
-        if (message.type === 'overview') return overviewQueue.shift() ?? Promise.resolve(initialOverview);
+        if (message.type === 'overview') { overviewCalls.push(message); return overviewQueue.shift() ?? Promise.resolve(initialOverview); }
         if (message.type === 'toggle') {
           toggleCalls.push(message);
           return toggleQueue.shift() ?? Promise.resolve(toggleResponse ?? { ok: true, settings: message });
@@ -182,10 +202,41 @@ function createHarness({ initialOverview = overview({ scenario: 'video' }), togg
     storage: {
       local: {
         get() { return themeGet.promise; },
-        set(value) { storageWrites.push(value); return Promise.resolve(); },
+        set(value) {
+          storageWrites.push(value);
+          const result = themeSetQueue.shift()?.promise ?? Promise.resolve();
+          return result.then(() => {
+            storedTheme = value['ui.preferences.v1'];
+            storageChanged.emit({ 'ui.preferences.v1': { newValue: storedTheme } }, 'local');
+          });
+        },
       },
       onChanged: storageChanged,
     },
+  };
+
+  const mountTargetLanguageSelect = select => {
+    languageOptions.push(...TARGET_LANGUAGES);
+    select.options = TARGET_LANGUAGES.map(option => ({ value: option.value, textContent: option.label, disabled: false }));
+    let legacyConsumed = false;
+    select.addEventListener('change', () => {
+      if (!TARGET_LANGUAGES.some(option => option.value === select.value)) return;
+      select.options = select.options.filter(option => !option.legacy);
+      legacyConsumed = true;
+    });
+    return {
+      value: () => select.options.some(option => option.value === select.value) ? select.value : '',
+      setValue(value) {
+        const canonical = value === 'zh-CN' ? 'zh-Hans' : value === 'zh-TW' ? 'zh-Hant' : value;
+        if (canonical === select.value || (legacyConsumed && !TARGET_LANGUAGES.some(option => option.value === canonical))) return;
+        select.options = select.options.filter(option => !option.legacy);
+        if (!select.options.some(option => option.value === canonical)) {
+          select.add({ value, textContent: value, disabled: true, legacy: true });
+          select.value = value;
+        } else select.value = canonical;
+      },
+      setDisabled(disabled) { select.disabled = disabled; },
+    };
   };
 
   const document = {
@@ -194,32 +245,36 @@ function createHarness({ initialOverview = overview({ scenario: 'video' }), togg
     getElementById(id) { return elements.get(id) ?? null; },
     querySelector(selector) { return selector === '.popup-controls' ? popupControls : null; },
   };
+  const media = new FakeEventTarget();
+  media.matches = false;
+  media.addEventListener = (_type, listener) => media.addListener(listener);
+  media.removeEventListener = (_type, listener) => media.removeListener(listener);
   const window = {
     close() { closed++; },
-    matchMedia() {
-      const media = new FakeEventTarget();
-      media.matches = false;
-      media.addEventListener = media.addListener.bind(media);
-      media.removeEventListener = media.removeListener.bind(media);
-      return media;
-    },
+    matchMedia() { return media; },
     addEventListener(type, listener) { windowListeners.set(type, listener); },
     removeEventListener(type) { windowListeners.delete(type); },
   };
+  setLocale('zh-CN');
   const context = vm.createContext({
+    t, localizeMessage, onLocaleChange, getLocale,
+    TARGET_LANGUAGES, mountTargetLanguageSelect,
+    // Locale persistence/root isolation is exercised with the real initializer in i18n.test.mjs.
+    initLocale: async () => () => {}, localize: () => {},
     browser,
     document,
     window,
     Option: class {
       constructor(text, value) { this.textContent = text; this.value = value; }
     },
+    Event: class { constructor(type, options = {}) { this.type = type; Object.assign(this, options); } },
     setInterval(callback) { intervals.push(callback); return intervals.length; },
     clearInterval() {},
     setTimeout,
     clearTimeout,
     console,
   });
-  vm.runInContext(popupCode, context, { filename: 'popup-main.ts' });
+  vm.runInContext('(async () => {\n' + popupCode + '\n})()', context, { filename: 'popup-main.ts' });
   if (!deferThemeGet) themeGet.resolve({ 'ui.preferences.v1': themeStored });
 
   return {
@@ -227,11 +282,21 @@ function createHarness({ initialOverview = overview({ scenario: 'video' }), togg
     browser,
     document,
     window,
+    media,
     initial,
     toggle,
     themeGet,
     toggleCalls,
+    overviewCalls,
+    languageOptions,
     storageWrites,
+    storedTheme: () => storedTheme,
+    enqueueThemeSet(result) { themeSetQueue.push(result); },
+    initOptionsTheme() {
+      vm.runInContext(`${stripExports(stripImports(transpile(themeSource)))}\nglobalThis.initThemeForTest = initTheme;`, context);
+      const select = new FakeSelect('options-theme', [['system'], ['light'], ['dark']]);
+      return { select, dispose: context.initThemeForTest(select) };
+    },
     intervals,
     openOptions: () => openOptions,
     settingsRequests: () => settingsRequests,
@@ -281,55 +346,132 @@ test('popup preserves user quick settings while an older overview is still pendi
   const h = createHarness({ deferInitialOverview: true, deferToggle: true });
   await flush();
   h.elements.enabled.checked = false;
-  h.elements.language.value = 'fr-CA';
+  h.elements.language.value = 'fr';
   h.elements.mode.value = 'original';
+  h.elements.language.dispatchEvent({ type: 'input' });
   h.elements.language.dispatchEvent({ type: 'change' });
   assert.equal(h.toggleCalls[0].type, 'toggle');
   assert.equal(h.toggleCalls[0].enabled, false);
-  assert.equal(h.toggleCalls[0].targetLanguage, 'fr-CA');
+  assert.equal(h.toggleCalls[0].targetLanguage, 'fr');
   assert.equal(h.toggleCalls[0].displayMode, 'original');
   assert.equal(h.elements.enabled.disabled, true);
+  assert.equal(h.elements.language.disabled, true);
   assert.equal(h.elements.status.textContent, '正在应用设置…');
 
   h.initial.resolve(overview({ scenario: 'video', settings: { enabled: true, targetLanguage: 'zh-Hans' } }));
   await h.settle();
   assert.equal(h.elements.enabled.checked, false);
-  assert.equal(h.elements.language.value, 'fr-CA');
+  assert.equal(h.elements.language.value, 'fr');
   assert.equal(h.elements.mode.value, 'original');
   assert.equal(h.elements.status.textContent, '正在应用设置…');
 
-  h.enqueueOverview(overview({ scenario: 'video', settings: { enabled: false, displayMode: 'original', targetLanguage: 'fr-CA' } }));
-  h.toggle.resolve({ ok: true, settings: { enabled: false, displayMode: 'original', targetLanguage: 'fr-CA' } });
+  h.enqueueOverview(overview({ scenario: 'video', settings: { enabled: false, displayMode: 'original', targetLanguage: 'fr' } }));
+  h.toggle.resolve({ ok: true, settings: { enabled: false, displayMode: 'original', targetLanguage: 'fr' } });
   await h.settle();
   assert.equal(h.elements.enabled.disabled, false);
+  assert.equal(h.elements.language.disabled, false);
   assert.equal(h.elements.enabled.checked, false);
-  assert.equal(h.elements.language.value, 'fr-CA');
+  assert.equal(h.elements.language.value, 'fr');
 });
 
-test('popup applies a successful toggle, keeps custom language, and renders video status', async () => {
+test('popup applies a successful toggle, keeps selected language, and renders video status', async () => {
   const h = createHarness({
     initialOverview: overview({ scenario: 'video' }),
-    toggleResponse: { ok: true, settings: { enabled: false, displayMode: 'original', targetLanguage: 'fr-CA' } },
+    toggleResponse: { ok: true, settings: { enabled: false, displayMode: 'original', targetLanguage: 'fr' } },
   });
   await h.settle();
-  h.enqueueOverview(overview({ scenario: 'video', settings: { enabled: false, displayMode: 'original', targetLanguage: 'fr-CA' } }));
+  h.enqueueOverview(overview({ scenario: 'video', settings: { enabled: false, displayMode: 'original', targetLanguage: 'fr' } }));
   h.elements.enabled.checked = false;
-  h.elements.language.value = 'fr-CA';
+  h.elements.language.value = 'fr';
   h.elements.mode.value = 'original';
   h.elements.enabled.dispatchEvent({ type: 'change' });
   await h.settle();
   assert.equal(h.elements.enabled.disabled, false);
   assert.equal(h.elements.enabled.checked, false);
-  assert.equal(h.elements.language.value, 'fr-CA');
+  assert.equal(h.elements.language.value, 'fr');
   assert.equal(h.elements.mode.value, 'original');
   assert.equal(h.elements.scenario.textContent, '视频');
   assert.match(h.elements.status.textContent, /翻译已关闭|原生弹幕翻译已就绪/);
 });
 
+test('popup exposes twenty target languages and retains an unavailable legacy value until selection', async () => {
+  const values = LOCALES.map(({ code }) => code === 'zh-CN' ? 'zh-Hans' : code === 'zh-TW' ? 'zh-Hant' : code);
+  const reopened = createHarness({ initialOverview: overview({ scenario: 'video', settings: { targetLanguage: 'ru' } }) });
+  await reopened.settle();
+  assert.deepEqual(reopened.languageOptions.map(option => option.value), values);
+  assert.equal(reopened.elements.language.value, 'ru');
+
+  const legacy = createHarness({ initialOverview: overview({ scenario: 'video', settings: { targetLanguage: 'fr-CA' } }) });
+  await legacy.settle();
+  assert.equal(legacy.elements.language.value, 'fr-CA');
+  assert.equal(legacy.elements.language.options.find(option => option.value === 'fr-CA')?.disabled, true);
+  legacy.enqueueOverview(overview({ scenario: 'video', settings: { targetLanguage: 'pt-BR' } }));
+  legacy.elements.language.value = 'pt-BR';
+  legacy.elements.language.dispatchEvent({ type: 'change' });
+  assert.equal(legacy.elements.language.options.some(option => option.value === 'fr-CA'), false);
+  await legacy.settle();
+  assert.equal(legacy.toggleCalls[0].targetLanguage, 'pt-BR');
+  assert.equal(legacy.elements.language.value, 'pt-BR');
+  assert.equal(legacy.elements.language.options.some(option => option.value === 'fr-CA'), false);
+});
+
+test('popup commits one native selection and ignores keyboard events without a new change', async () => {
+  const h = createHarness({ initialOverview: overview({ scenario: 'video' }) });
+  await h.settle();
+  h.enqueueOverview(overview({ scenario: 'video', settings: { targetLanguage: 'pt-BR' } }));
+  h.elements.language.value = 'pt-BR';
+  h.elements.language.dispatchEvent({ type: 'change' });
+  let prevented = false;
+  h.elements.language.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() { prevented = true; } });
+  await h.settle();
+  assert.equal(prevented, false);
+  assert.equal(h.toggleCalls.length, 1);
+  assert.equal(h.toggleCalls[0].targetLanguage, 'pt-BR');
+  assert.equal(h.elements.language.value, 'pt-BR');
+});
+
+test('popup preserves a pending native language selection across overview and polling', async () => {
+  const h = createHarness({ deferInitialOverview: true, deferToggle: true });
+  await flush();
+  assert.equal(h.overviewCalls.length, 1);
+
+  h.elements.language.value = 'fr';
+  h.elements.language.dispatchEvent({ type: 'input' });
+  h.initial.resolve(overview({ scenario: 'video', settings: { targetLanguage: 'zh-Hans' } }));
+  await h.settle();
+  assert.equal(h.elements.language.value, 'fr');
+
+  h.intervals[0]();
+  await h.settle();
+  assert.equal(h.overviewCalls.length, 1, 'polling waits while a selection is pending');
+  assert.equal(h.elements.language.value, 'fr');
+
+  h.enqueueOverview(overview({ scenario: 'video', settings: { targetLanguage: 'fr' } }));
+  h.elements.language.dispatchEvent({ type: 'change' });
+  assert.equal(h.toggleCalls.length, 1);
+  assert.equal(h.toggleCalls[0].targetLanguage, 'fr');
+  assert.equal(h.elements.language.disabled, true);
+
+  h.toggle.resolve({ ok: true, settings: { enabled: true, displayMode: 'translated', targetLanguage: 'fr' } });
+  await h.settle();
+  assert.equal(h.elements.language.value, 'fr');
+  assert.equal(h.elements.language.disabled, false);
+});
+
+test('keyboard events on native language select do not submit without change', async () => {
+  const h = createHarness({ initialOverview: overview({ scenario: 'video' }) });
+  await h.settle();
+  h.elements.language.dispatchEvent({ type: 'keydown', key: 'Enter', preventDefault() {} });
+  h.elements.language.dispatchEvent({ type: 'keydown', key: 'Enter', isComposing: true, preventDefault() {} });
+  await h.settle();
+  assert.equal(h.toggleCalls.length, 0);
+  assert.equal(h.elements.language.value, 'zh-Hans');
+});
+
 test('popup preserves attempted values after toggle failure and ignores refresh overwrite', async () => {
   const h = createHarness({
     initialOverview: overview({ scenario: 'video', settings: { enabled: false } }),
-    toggleResponse: { ok: false, error: '服务暂时不可用' },
+    toggleResponse: { ok: false, error: 'unrecognized provider response with private details' },
   });
   await h.settle();
   h.elements.enabled.checked = true;
@@ -337,13 +479,13 @@ test('popup preserves attempted values after toggle failure and ignores refresh 
   await h.settle();
   assert.equal(h.elements.enabled.checked, true);
   assert.equal(h.elements.enabled.disabled, false);
-  assert.equal(h.elements.status.textContent, '服务暂时不可用');
+  assert.equal(h.elements.status.textContent, '设置未能应用，请重试');
 
   h.enqueueOverview(overview({ scenario: 'video', settings: { enabled: false } }));
   h.intervals[0]();
   await h.settle();
   assert.equal(h.elements.enabled.checked, true);
-  assert.equal(h.elements.status.textContent, '服务暂时不可用');
+  assert.equal(h.elements.status.textContent, '设置未能应用，请重试');
 });
 
 test('popup renders live coverage and unsupported states without losing controls', async () => {
@@ -357,6 +499,21 @@ test('popup renders live coverage and unsupported states without losing controls
   await unsupported.settle();
   assert.equal(unsupported.elements.scenario.textContent, '视频与直播');
   assert.equal(unsupported.elements.status.textContent, '请打开支持的视频或直播页面');
+});
+
+test('popup rerenders live status and metrics after a locale change without restoring external note text', async () => {
+  const response = overview({ scenario: 'live', state: 'unsupported' });
+  response.status.note = 'untrusted external diagnostic detail';
+  response.status.noteMessage = { id: 'm_086e68f6abc0' };
+  const h = createHarness({ initialOverview: response });
+  await h.settle();
+  assert.equal(h.elements.status.textContent, t('m_086e68f6abc0'));
+  setLocale('en');
+  assert.equal(h.elements.status.textContent, t('m_086e68f6abc0'));
+  assert.doesNotMatch(h.elements.status.textContent, /untrusted external diagnostic detail/);
+  assert.match(h.elements.metrics.textContent, /Recent translations.*Original text shown on timeout/);
+  assert.equal(h.elements.coverage.textContent, t('m_2a7345684544'));
+  setLocale('zh-CN');
 });
 
 test('popup prioritizes configuration, runtime, adapter failure, and recognized unresponsive page', async () => {
@@ -386,18 +543,19 @@ test('popup prioritizes configuration, runtime, adapter failure, and recognized 
 });
 
 test('theme interaction wins over late storage load, then accepts external changes', async () => {
-  const h = createHarness({ themeStored: { theme: 'light' } });
-  h.elements.theme.value = 'dark';
-  h.elements.theme.dispatchEvent({ type: 'change' });
+  const h = createHarness({ themeStored: { theme: 'dark' }, deferThemeGet: true });
+  h.elements.theme.dispatchEvent({ type: 'click' });
+  h.themeGet.resolve({ 'ui.preferences.v1': { theme: 'dark' } });
   await h.settle();
-  assert.equal(h.document.documentElement.dataset.theme, 'dark');
-  assert.equal(h.storageWrites.length, 1);
-  assert.equal(h.storageWrites[0]['ui.preferences.v1'].theme, 'dark');
-
-  h.browser.storage.onChanged.emit({ 'ui.preferences.v1': { newValue: { theme: 'light' } } }, 'local');
-  await h.settle();
-  assert.equal(h.elements.theme.value, 'light');
+  assert.equal(h.elements.theme.dataset.themePreference, 'light');
   assert.equal(h.document.documentElement.dataset.theme, 'light');
+  assert.equal(h.storageWrites.length, 1);
+  assert.equal(h.storageWrites[0]['ui.preferences.v1'].theme, 'light');
+
+  h.browser.storage.onChanged.emit({ 'ui.preferences.v1': { newValue: { theme: 'dark' } } }, 'local');
+  await h.settle();
+  assert.equal(h.elements.theme.dataset.themePreference, 'dark');
+  assert.equal(h.document.documentElement.dataset.theme, 'dark');
 });
 
 test('theme external update wins over an older initial storage read', async () => {
@@ -405,11 +563,110 @@ test('theme external update wins over an older initial storage read', async () =
   await h.settle();
   h.browser.storage.onChanged.emit({ 'ui.preferences.v1': { newValue: { theme: 'dark' } } }, 'local');
   await h.settle();
-  assert.equal(h.elements.theme.value, 'dark');
+  assert.equal(h.elements.theme.dataset.themePreference, 'dark');
   assert.equal(h.document.documentElement.dataset.theme, 'dark');
 
   h.themeGet.resolve({ 'ui.preferences.v1': { theme: 'light' } });
   await h.settle();
-  assert.equal(h.elements.theme.value, 'dark');
+  assert.equal(h.elements.theme.dataset.themePreference, 'dark');
   assert.equal(h.document.documentElement.dataset.theme, 'dark');
+});
+
+test('popup theme button cycles system, light, dark with current and next localized labels', async () => {
+  const h = createHarness();
+  await h.settle();
+  assert.equal(h.elements.theme.dataset.themePreference, 'system');
+  assert.equal(h.elements.theme.getAttribute('aria-label'), `${t('m_86a63f23a076')}: ${t('m_217cfe7db1e3')} → ${t('m_aa0819dfc4d8')}`);
+
+  h.elements.theme.dispatchEvent({ type: 'click' });
+  assert.equal(h.elements.theme.dataset.themePreference, 'light');
+  assert.equal(h.elements.theme.getAttribute('title'), `${t('m_86a63f23a076')}: ${t('m_aa0819dfc4d8')} → ${t('m_a6b75d068032')}`);
+  h.elements.theme.dispatchEvent({ type: 'click' });
+  assert.equal(h.elements.theme.dataset.themePreference, 'dark');
+  h.elements.theme.dispatchEvent({ type: 'click' });
+  assert.equal(h.elements.theme.dataset.themePreference, 'system');
+  await h.settle();
+  assert.equal(h.storedTheme().theme, 'system');
+  assert.deepEqual(h.storageWrites.map(value => value['ui.preferences.v1'].theme), ['light', 'dark', 'system']);
+  assert.equal(h.toggleCalls.length, 0, 'theme clicks do not save translation settings');
+
+  setLocale('en');
+  assert.equal(h.elements.theme.getAttribute('aria-label'), `${t('m_86a63f23a076')}: ${t('m_217cfe7db1e3')} → ${t('m_aa0819dfc4d8')}`);
+  assert.equal(h.elements.theme.getAttribute('title'), h.elements.theme.getAttribute('aria-label'));
+  setLocale('zh-CN');
+
+  const reopened = createHarness({ themeStored: h.storedTheme() });
+  await reopened.settle();
+  assert.equal(reopened.elements.theme.dataset.themePreference, 'system');
+  assert.equal(reopened.storageWrites.length, 0);
+});
+
+test('system theme follows OS changes, while explicit themes ignore them', async () => {
+  const h = createHarness();
+  await h.settle();
+  h.media.matches = true;
+  h.media.emit();
+  assert.equal(h.document.documentElement.dataset.theme, 'dark');
+  assert.equal(h.elements.theme.dataset.themePreference, 'system');
+  h.elements.theme.dispatchEvent({ type: 'click' });
+  assert.equal(h.document.documentElement.dataset.theme, 'light');
+  h.media.matches = false;
+  h.media.emit();
+  assert.equal(h.document.documentElement.dataset.theme, 'light');
+  await h.settle();
+});
+
+test('rapid theme clicks serialize persistence without blocking input or stale storage echoes', async () => {
+  const h = createHarness();
+  await h.settle();
+  const first = deferred(), second = deferred(), third = deferred();
+  h.enqueueThemeSet(first);
+  h.enqueueThemeSet(second);
+  h.enqueueThemeSet(third);
+  for (let i = 0; i < 3; i++) h.elements.theme.dispatchEvent({ type: 'click' });
+  assert.equal(h.elements.theme.dataset.themePreference, 'system');
+  assert.equal(h.elements.theme.disabled, false);
+  await h.settle();
+  assert.equal(h.storageWrites.length, 1);
+  first.resolve(); await h.settle();
+  assert.equal(h.elements.theme.dataset.themePreference, 'system');
+  assert.equal(h.storageWrites.length, 2);
+  second.resolve(); await h.settle();
+  assert.equal(h.storageWrites.length, 3);
+  third.resolve(); await h.settle();
+  assert.equal(h.storedTheme().theme, 'system');
+  assert.equal(h.elements.theme.dataset.themePreference, 'system');
+});
+
+test('theme save failure is shown beside the button and clears after a successful retry', async () => {
+  const h = createHarness();
+  await h.settle();
+  const failed = deferred();
+  h.enqueueThemeSet(failed);
+  h.elements.theme.dispatchEvent({ type: 'click' });
+  await h.settle();
+  failed.reject(new Error('storage unavailable'));
+  await h.settle();
+  assert.equal(h.elements.theme.dataset.themePreference, 'light');
+  assert.equal(h.elements.themeStatus.hidden, false);
+  assert.equal(h.elements.themeStatus.classList.contains('error'), true);
+  assert.equal(h.toggleCalls.length, 0);
+  h.elements.theme.dispatchEvent({ type: 'click' });
+  await h.settle();
+  assert.equal(h.elements.themeStatus.hidden, true);
+  assert.equal(h.elements.theme.dataset.themePreference, 'dark');
+  assert.equal(h.storedTheme().theme, 'dark');
+});
+
+test('options theme select still saves the selected value', async () => {
+  const h = createHarness();
+  await h.settle();
+  const { select, dispose } = h.initOptionsTheme();
+  await h.settle();
+  select.value = 'dark';
+  select.dispatchEvent({ type: 'change' });
+  await h.settle();
+  assert.equal(select.value, 'dark');
+  assert.equal(h.storedTheme().theme, 'dark');
+  dispose();
 });

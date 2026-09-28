@@ -13,6 +13,7 @@ import { emoteTokens } from '../src/platforms/bilibili-live/emotes';
 import { bilibiliLiveView } from '../src/platforms/bilibili-live/view';
 import { createLiveStatus } from '../src/ui/live-status';
 import { createLiveRepairs } from '../src/ui/live-repairs';
+import { getLocale, localizeMessage, messageFromSource, onLocaleChange } from '../src/i18n/text.ts';
 import type { ChatCoverage, LiveConnection, LiveMetrics, LivePlaybackState, LiveSourceMessage, ResourceSession, RuntimeStatus, Settings, TranslationOutput } from '../src/core/types';
 
 const BRIDGE = 'danlingo-live-v1';
@@ -78,9 +79,13 @@ export default defineContentScript({
     let nativeRecent: { at: number; eligible: boolean; translated: boolean }[] = [];
     let nativeCounts = { released: 0, translated: 0, original: 0, timedOut: 0, overloaded: 0, dropped: 0 };
     const post = (payload: Record<string, unknown>) => window.postMessage({ bridge: BRIDGE, from: 'content', ...payload }, location.origin);
+    // The page-world bridge receives only a supported UI locale, never storage or credentials.
+    const stopLocaleBridge = onLocaleChange(() => {
+      if (!disposed && location.origin === 'https://live.bilibili.com') post({ type: 'ui-locale', locale: getLocale() });
+    });
     const optionalBatchId = (value: unknown): string | null | undefined => value === undefined ? undefined
       : typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value : null;
-    function control() { post({ type: 'control', enabled: configuredActive() && localCanAdmit(), bufferMs: settings.liveBufferMs,
+    function control() { post({ type: 'control', uiLocale: getLocale(), enabled: configuredActive() && localCanAdmit(), bufferMs: settings.liveBufferMs,
       bilibiliTimeoutRetryEnabled: settings.bilibiliTimeoutRetryEnabled === true,
       bilibiliTimeoutRetryExtraMs: settings.bilibiliTimeoutRetryExtraMs ?? 1000, bilibiliTimeoutRetryMode: settings.bilibiliTimeoutRetryMode ?? 'hold',
       youtubeTimeoutRetryEnabled: settings.youtubeTimeoutRetryEnabled === true,
@@ -166,10 +171,11 @@ export default defineContentScript({
         ...(!native&&chatMetrics?{liveMetrics:chatMetrics}:{}),
         note: sourceNote || runtimeMessage || note || (slow ? '近期译文未达90%；可检查翻译服务与请求配置' : connection !== 'connected' ? '直播消息源未连接' : !isViewingLive() ? native ? '暂停、广告或未在直播点，等待恢复实时观看' : '聊天隐藏，暂停新增翻译' : ''),
       };
+      state.noteMessage = messageFromSource(state.note);
       const surface = player();
       const embeddedVideo = session.platform === 'bilibili' ? bilibiliLiveView(window as Window & typeof globalThis)?.document.querySelector('video') : null;
       statusView.attach(session.platform === 'youtube' ? surface?.closest<HTMLElement>('#player-container-outer') ?? surface : surface, embeddedVideo);
-      statusView.update(state, translationModelSummary(settings, localRuntime));
+      statusView.update(state, () => translationModelSummary(settings, localRuntime, value => messageFromSource(value) ? localizeMessage(value) : value));
       const captured = { ...session };
       void browser.runtime.sendMessage({ type: 'session-open', session: captured }).then(async opened => {
         if (!opened?.ok || !current(captured) || !synchronizedConfig(opened)) return;
@@ -472,7 +478,7 @@ export default defineContentScript({
     }, 1000);
     readSettings();
     ctx.onInvalidated(() => {
-      disposed = true; control(); clearSession(); clearInterval(timer); statusView.dispose(); recentRepairs.dispose();
+      disposed = true; stopLocaleBridge(); control(); clearSession(); clearInterval(timer); statusView.dispose(); recentRepairs.dispose();
       window.removeEventListener('message', receive); browser.runtime.onMessage.removeListener(settingsListener);
       window.removeEventListener('pagehide', pageHide); window.removeEventListener('pageshow', pageShow);
     });

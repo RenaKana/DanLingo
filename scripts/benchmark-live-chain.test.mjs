@@ -8,7 +8,8 @@ import { parseChainArgs, makePlan, makeOccurrences, inspectJsonlRequest, postBud
   allocateConditionBudget, reconcileSchedulerOutcomes } from './benchmark-live-chain.mjs';
 
 const args = ['--config-file', 'never-read.txt', '--test-model', 'deepseek-v4-flash', '--test-profile', 'deepseek', '--test-thinking', 'off'];
-const settings = { ...DEFAULT_SETTINGS, enabled: true, displayMode: 'translated', endpoint: 'https://synthetic.invalid/v1/chat/completions',
+const settings = { ...DEFAULT_SETTINGS, backend: 'online', reasoningProfileOverride: undefined,
+  enabled: true, displayMode: 'translated', endpoint: 'https://synthetic.invalid/v1/chat/completions',
   model: 'deepseek-v4-flash', profile: 'deepseek', thinkingEffort: 'off', sourceLanguage: 'ja', liveSourceLanguage: 'ja',
   targetLanguage: 'zh-Hans', translationStream: false, batchSize: 1, liveMaxBatchWaitMs: 0 };
 const corpus = [{ ordinal: 0, text: 'おはよう', unicodeChars: 4 }, { ordinal: 1, text: 'こんばんは', unicodeChars: 5 }];

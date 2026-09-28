@@ -9,7 +9,12 @@ const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 const rootFiles = new Set(['README.md', 'README.en.md', 'CONTRIBUTING.md', 'SECURITY.md', 'LICENSE', 'LICENSE.md',
   '.gitignore', '.gitattributes', 'package.json', 'pnpm-lock.yaml', 'tsconfig.json', 'wxt.config.ts']);
 const documents = new Set(['docs/README.md', 'docs/USAGE.md', 'docs/DEVELOPMENT.md',
-  'docs/ARCHITECTURE.md', 'docs/PRIVACY.md', 'docs/GITHUB_RELEASE.md', 'docs/RELEASE_VALIDATION.md']);
+  'docs/ARCHITECTURE.md', 'docs/PRIVACY.md', 'docs/GITHUB_RELEASE.md', 'docs/RELEASE_VALIDATION.md',
+  'docs/EDGE_STORE.md', 'docs/edge-listings.json']);
+const storeAssets = new Set(['docs/store-assets/mark.svg', 'docs/store-assets/tile.svg',
+  'docs/store-assets/icon-300.png', 'docs/store-assets/tile-440x280.png',
+  ...['01-settings-en', '02-local-model-en', '03-settings-zh-CN', '04-settings-ar'].map(name => `docs/store-assets/screenshots/${name}.png`),
+  ...[16, 32, 48, 128].map(size => `public/icon/${size}.png`)]);
 const extensions = new Set(['.ts', '.js', '.mjs', '.cjs', '.json', '.html', '.css', '.md', '.txt', '.yaml', '.yml', '.ps1', '.py', '.patch']);
 const folders = new Set(['entrypoints', 'src', 'test', 'scripts', 'public', 'vendor', '.github']);
 const nativeFiles = new Set(['README.md', 'build-info.json', 'native-policy.patch', 'source-map.json',
@@ -25,7 +30,7 @@ const reviewedTestUrls = {
 
 export function isSourceFile(path) {
   if (path.includes('\\') || path.split('/').some(part => !part || part === '.' || part === '..')) return false;
-  if (rootFiles.has(path) || documents.has(path)) return true;
+  if (rootFiles.has(path) || documents.has(path) || storeAssets.has(path)) return true;
   const parts = path.split('/');
   if (!folders.has(parts[0])) return false;
   if (parts.some(part => /^(?:node_modules|\.git|\.artifacts|\.output|\.wxt|\.pnpm-store|__pycache__|profiles?|browsers)$/i.test(part)
@@ -59,14 +64,16 @@ export async function collectSource(root = projectRoot) {
   async function walk(folder = '') {
     for (const entry of await readdir(resolve(root, folder), { withFileTypes: true })) {
       const path = folder ? `${folder}/${entry.name}` : entry.name;
-      const canDescend = folders.has(path.split('/')[0]) || path === 'docs';
+      const canDescend = folders.has(path.split('/')[0]) || path === 'docs'
+        || [...storeAssets].some(file => file.startsWith(path + '/'));
       // Never follow junctions/symlinks, including a top-level source directory.
       if (entry.isSymbolicLink()) {
         if (canDescend || isSourceFile(path)) throw new Error(`Source symlink requires review: ${path}`);
         continue;
       }
       if (entry.isDirectory()) {
-        if (canDescend && (folder !== 'docs') && !/^(?:node_modules|\.git|\.artifacts|\.output|\.wxt|\.pnpm-store|__pycache__|profiles?|browsers)$/i.test(entry.name)) await walk(path);
+        const approvedDocs = folder !== 'docs' || path === 'docs/store-assets';
+        if (canDescend && approvedDocs && !/^(?:node_modules|\.git|\.artifacts|\.output|\.wxt|\.pnpm-store|__pycache__|profiles?|browsers)$/i.test(entry.name)) await walk(path);
       } else if (entry.isFile() && isSourceFile(path)) files.push(path);
     }
   }

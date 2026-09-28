@@ -1,0 +1,21 @@
+{
+  "m_549ef7f261be": "Il contatore delle richieste è condiviso tra tutte le schede e i servizi e viene calcolato in base al giorno di calendario locale su questo dispositivo. Anche i tentativi ripetuti, le traduzioni di recupero e i test vengono conteggiati. È un limite al numero di richieste; imposta il limite di spesa presso il servizio.",
+  "m_4e377b8b93c0": "Rimuovere la registrazione di \"{p0}\"? Il file GGUF originale non verrà toccato. Se il modello è in uso, verrà prima rimosso dalla memoria e deselezionato. {p1}",
+  "m_e9d46d8e3ec9": "Eliminare la copia di \"{p0}\" nell'estensione? Il file GGUF originale non verrà toccato. Se il modello è in uso, verrà prima rimosso dalla memoria.",
+  "m_779638a3aad8": "Rimuovere la registrazione di \"{p0}\"? Il file originale non verrà toccato. Se il modello è in uso, verrà prima rimosso dalla memoria e deselezionato.",
+  "m_b4fe85db78aa": "Questo modello non ricomparirà aggiornando la cartella.",
+  "m_da84b511f856": "Salva e autorizza il servizio",
+  "m_ffad0837a6bc": "Questo servizio non è ancora autorizzato. Per chiudere le impostazioni, fai clic su «Salva e autorizza il servizio».",
+  "m_592a688fb6d4": "Il test invierà il numero di richieste selezionato e potrebbe generare consumo del servizio. Durante il test, la traduzione della pagina di visione verrà sospesa e ripresa alla fine, senza modificare l'opzione di attivazione o disattivazione della traduzione.",
+  "m_41ed2767d1c6": "Impostazioni di visione",
+  "m_217cfe7db1e3": "Tema di sistema",
+  "m_92618f81aee5": "Disattiva il ragionamento",
+  "m_9c41b3a9e12a": "Livello di ragionamento",
+  "m_45da2d9c85d1": "Aggiungi cartella",
+  "m_9b826346239e": "Motore di traduzione",
+  "m_aa0819dfc4d8": "Tema chiaro",
+  "m_a6b75d068032": "Tema scuro",
+  "locale.label": "Lingua dell’interfaccia",
+  "m_9dac295e3b09": "Comprendi un’altra lingua attraverso i danmaku.",
+  "m_03287b455f2d": "Danmaku normale"
+}

@@ -1,0 +1,8 @@
+{
+  "settings.serviceConnectionTitle": "服务连接",
+  "settings.serviceConnectionHint": "服务地址和访问凭据。",
+  "settings.modelTestTitle": "模型与测试",
+  "settings.modelTestHint": "选定模型并测试配置。",
+  "settings.requestQuotaTitle": "请求额度",
+  "settings.requestQuotaHint": "每日在线请求数量。"
+}

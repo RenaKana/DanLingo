@@ -1,0 +1,21 @@
+{
+  "m_549ef7f261be": "El contador de solicitudes se comparte entre todas las pestañas y servicios y se calcula por día natural local en este dispositivo. También cuentan los reintentos, las traducciones de recuperación y las pruebas. Es un límite de cantidad de solicitudes; establezca el límite monetario en el servicio.",
+  "m_4e377b8b93c0": "¿Quitar el registro de \"{p0}\"? El archivo GGUF original no se verá afectado. Si el modelo está en uso, primero se descargará de la memoria y se quitará la selección. {p1}",
+  "m_e9d46d8e3ec9": "¿Eliminar la copia de \"{p0}\" dentro de la extensión? El archivo GGUF original no se verá afectado. Si el modelo está en uso, primero se descargará de la memoria.",
+  "m_779638a3aad8": "¿Quitar el registro de \"{p0}\"? El archivo original no se verá afectado. Si el modelo está en uso, primero se descargará de la memoria y se quitará la selección.",
+  "m_b4fe85db78aa": "Este modelo no volverá a aparecer al actualizar la carpeta.",
+  "m_da84b511f856": "Guardar y autorizar el servicio",
+  "m_ffad0837a6bc": "Este servicio aún no está autorizado. Para cerrar la configuración, haga clic en «Guardar y autorizar el servicio».",
+  "m_592a688fb6d4": "La prueba enviará la cantidad seleccionada de solicitudes y puede generar uso del servicio. Durante la prueba, se pausará la traducción de la página de visualización y se reanudará al terminar, sin cambiar la opción de activar o desactivar la traducción.",
+  "m_41ed2767d1c6": "Ajustes de visualización",
+  "m_217cfe7db1e3": "Tema del sistema",
+  "m_92618f81aee5": "Desactivar el razonamiento",
+  "m_9c41b3a9e12a": "Nivel de razonamiento",
+  "m_45da2d9c85d1": "Añadir carpeta",
+  "m_9b826346239e": "Motor de traducción",
+  "m_aa0819dfc4d8": "Tema claro",
+  "m_a6b75d068032": "Tema oscuro",
+  "locale.label": "Idioma de la interfaz",
+  "m_9dac295e3b09": "Entiende otro idioma a través del danmaku.",
+  "m_03287b455f2d": "Danmaku normal"
+}

@@ -6,6 +6,7 @@ import ts from 'typescript';
 import * as messages from '../../src/core/messages.ts';
 import * as scheduling from '../../src/core/scheduler.ts';
 import * as stream from '../../src/core/source-stream.ts';
+import * as eligibility from '../../src/platforms/video-eligibility.ts';
 
 const compiled = ts.transpileModule(
   readFileSync(new URL('../../src/platforms/niconico/native.ts', import.meta.url), 'utf8'),
@@ -43,7 +44,7 @@ function bridge(chats, { played = true } = {}) {
       refreshComments: () => h.refreshes++ } };
   video.__reactFiber$fixture = { memoizedProps: { player } };
   const dependencies = { '../../core/messages.ts': messages, '../../core/source-stream.ts': stream,
-    '../../core/scheduler.ts': scheduling };
+    '../../core/scheduler.ts': scheduling, '../video-eligibility.ts': eligibility };
   const exports = {};
   runInNewContext(compiled, { exports, window, location, Node, HTMLVideoElement: Video,
     document: { querySelectorAll: () => [video] }, crypto, TextEncoder, URL, queueMicrotask,
@@ -128,4 +129,46 @@ test('an unplayed paused device comment can be remeasured after preparation', as
   h.prepare(normal); await Promise.resolve();
   assert.equal(h.refreshes, 1);
   assert.equal(h.stage(normal).content, '初音未来十九周年快乐');
+});
+
+test('staging false remains unknown; renewed true observations never turn raw candidates into visible claims', async t => {
+  const normal = chat('normal'), other = chat('other'); const h = bridge([normal, other]); t.after(h.dispose);
+  const initial = h.sent.find(d => d.type === 'video-eligibility');
+  assert.equal(initial.capability, 'unknown'); assert.equal(initial.display, 'unknown');
+  assert.deepEqual(initial.items, []);
+  const hidden = { visible: false, content: body };
+  assert.equal(h.stage(normal, hidden), hidden);
+  await Promise.resolve();
+  const row = h.rows.find(d => d.sourceId === 'normal');
+  const observed = h.sent.filter(d => d.type === 'video-eligibility').at(-1);
+  assert.equal(observed.reset, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(observed.items)), [{ id: row.id, originalText: body, state: 'unknown' }]);
+  assert.equal(observed.epoch, initial.epoch);
+  assert.equal(observed.sourceGeneration, initial.sourceGeneration);
+  assert.ok(!h.sent.some(d => d.type === 'video-eligibility' && d.items.some(item => item.id === h.rows.find(r => r.sourceId === 'other').id)));
+  const count = h.sent.filter(d => d.type === 'video-eligibility').length;
+  assert.equal(h.stage(normal, { visible: true, content: 'native transformed content' }).content, 'native transformed content');
+  await Promise.resolve();
+  assert.equal(h.sent.filter(d => d.type === 'video-eligibility').length, count);
+  h.stage(normal); await Promise.resolve();
+  assert.equal(h.sent.filter(d => d.type === 'video-eligibility').at(-1).items[0].state, 'eligible');
+  h.stage(normal, hidden); await Promise.resolve();
+  assert.equal(h.sent.filter(d => d.type === 'video-eligibility').at(-1).items[0].state, 'unknown',
+    'native false invalidates a prior eligible observation without claiming an exclusion');
+  h.stage(normal); await Promise.resolve();
+  assert.equal(h.sent.filter(d => d.type === 'video-eligibility').at(-1).items[0].state, 'eligible',
+    'a later true staging callback can re-admit the exact original');
+  h.seek();
+  const reset = h.sent.filter(d => d.type === 'video-eligibility').at(-1);
+  assert.equal(reset.reset, true); assert.ok(reset.epoch > observed.epoch);
+  assert.ok(reset.revision > observed.revision);
+});
+
+test('control resync advances the eligibility scope before renewed sources', t => {
+  const h = bridge([chat('normal')]); t.after(h.dispose);
+  h.send({ type: 'control', generation: 2, enabled: true, resync: true });
+  const update = h.sent.filter(d => d.type === 'video-eligibility').at(-1);
+  assert.equal(update.reset, true);
+  assert.equal(update.sourceGeneration, 2);
+  assert.ok(update.revision > 1);
 });

@@ -1,8 +1,8 @@
-import { fingerprintFiles, inspectAndOrderFiles } from './gguf.ts';
+import { inspectAndOrderFiles } from './gguf.ts';
 import type { OrderedGgufFiles } from './gguf.ts';
 import type { LocalModelInfo } from './types.ts';
-import type { DirectoryFileSnapshot, DirectoryIssue, DirectoryScanResult, DirectoryScanStatus, DirectorySource, ReadOnlyDirectoryHandle } from './directory-types.ts';
-import { commitDirectoryScan, readDirectoryScanContext, setDirectoryStatus, type StoredModel } from './storage.ts';
+import type { DirectoryFileSnapshot, DirectoryIssue, DirectoryScanResult, DirectoryScanStatus, DirectorySource } from './directory-types.ts';
+import { commitDirectoryScan, hasReusableMetadata, readDirectoryScanContext, setDirectoryStatus, type StoredModel } from './storage.ts';
 
 const SHARD_NAME = /(?:^|[-_.])(\d{5})-of-(\d{5})\.gguf$/i;
 
@@ -69,6 +69,8 @@ function snapshotFor(entry: DiscoveredFile): DirectoryFileSnapshot {
   return { path: entry.path, size: entry.file.size, lastModified: entry.file.lastModified };
 }
 
+function now(): number { return performance.now(); }
+
 function publish(options: DirectoryScanOptions, status: DirectoryScanStatus): void {
   try { options.onProgress?.({ ...status, issues: status.issues.map(issue => ({ ...issue })) }); } catch { /* progress observers cannot affect storage */ }
 }
@@ -77,7 +79,7 @@ function cancelled(options: DirectoryScanOptions): boolean {
   return options.shouldCancel?.() === true;
 }
 
-async function checkDirectoryRead(handle: ReadOnlyDirectoryHandle): Promise<void> {
+async function checkDirectoryRead(handle: import('./directory-types.ts').ReadOnlyDirectoryHandle): Promise<void> {
   try {
     if (await handle.queryPermission({ mode: 'read' }) !== 'granted') throw new Error('LOCAL_DIRECTORY_PERMISSION_REQUIRED');
   } catch (error) {
@@ -99,8 +101,16 @@ async function walkDirectory(
   const entries = typeof directoryWithEntries.entries === 'function' ? directoryWithEntries.entries() : undefined;
   if (!entries) throw new Error('LOCAL_DIRECTORY_SCAN_FAILED');
   try {
-    for await (const value of entries as AsyncIterable<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>) {
+    const iterator = (entries as AsyncIterable<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>)[Symbol.asyncIterator]();
+    for (;;) {
       if (cancelled(options)) throw new Error('LOCAL_SCAN_CANCELLED');
+      status.stage = 'enumerating';
+      const enumerationStarted = now();
+      let next: IteratorResult<[string, FileSystemFileHandle | FileSystemDirectoryHandle]>;
+      try { next = await iterator.next(); }
+      finally { status.timings!.enumerationMs += now() - enumerationStarted; }
+      if (next.done) break;
+      const value = next.value;
       const [name, entry] = value;
       if (!name || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) continue;
       const path = prefix ? `${prefix}/${name}` : name;
@@ -113,6 +123,9 @@ async function walkDirectory(
         publish(options, status);
         continue;
       }
+      status.stage = 'reading-files'; status.currentFile = path;
+      publish(options, status);
+      const accessStarted = now();
       try { files.push({ path, file: await entry.getFile() }); }
       catch (error) {
         const code = sourceAccessCode(error);
@@ -120,7 +133,11 @@ async function walkDirectory(
         publish(options, status);
         if (code === 'LOCAL_DIRECTORY_PERMISSION_REQUIRED') throw new Error(code);
         throw new Error('LOCAL_DIRECTORY_SCAN_FAILED');
+      } finally {
+        status.timings!.fileAccessMs += now() - accessStarted;
+        status.currentFile = undefined;
       }
+      status.stage = 'enumerating';
       publish(options, status);
     }
   } catch (error) {
@@ -145,20 +162,21 @@ export function groupFiles(files: DiscoveredFile[]): Group[] {
   return [...groups.values()].sort((a, b) => a.key.localeCompare(b.key));
 }
 
-function candidateFromGroup(group: Group, ordered: OrderedGgufFiles, fingerprint: string, directoryId: string, directoryName: string): StoredModel {
+function candidateFromGroup(group: Group, ordered: OrderedGgufFiles, directoryId: string, directoryName: string, previous?: StoredModel): StoredModel {
   const byFile = new Map(group.entries.map(entry => [entry.file, entry]));
   const source: DirectorySource = { kind: 'directory', directoryId, directoryName,
     files: ordered.files.map(file => snapshotFor(byFile.get(file)!)) };
-  const info = { ...ordered.info, fingerprint, source, availability: 'ready' } as LocalModelInfo;
+  const info = { ...ordered.info, ...(previous ? { id: previous.info.id, importedAt: previous.info.importedAt,
+    ...(previous.info.fingerprint ? { fingerprint: previous.info.fingerprint } : {}) } : {}), source, availability: 'ready', error: undefined } as LocalModelInfo;
   return { info };
 }
 
-function reusableModelForGroup(group: Group, fingerprint: string, previous: StoredModel[], used: Set<string>): StoredModel | undefined {
+function reusableModelForGroup(group: Group, previous: StoredModel[], directoryId: string, used: Set<string>): StoredModel | undefined {
   const key = snapshotKey(group.entries.map(snapshotFor));
   for (const model of previous) {
     const source = sourceOf(model.info);
     const availability = (model.info as LocalModelInfo & { availability?: string }).availability;
-    if (!source || sourceKey(source) !== key || model.info.fingerprint !== fingerprint || used.has(model.info.id)
+    if (!source || source.directoryId !== directoryId || sourceKey(source) !== key || used.has(model.info.id)
       || availability === 'changed' || availability === 'missing') continue;
     used.add(model.info.id);
     return model;
@@ -180,7 +198,8 @@ export async function scanDirectory(id: string, options: DirectoryScanOptions = 
     onProgress: next => options.onProgress?.({ ...next, elapsedMs: Date.now() - startedAt }),
   } : options;
   const status: DirectoryScanStatus = { phase: 'scanning', stage: 'enumerating', directoryId: id,
-    checkedFiles: 0, modelsFound: 0, elapsedMs: 0, fingerprintedBytes: 0, totalFingerprintBytes: 0, issues: [] };
+    checkedFiles: 0, modelsFound: 0, elapsedMs: 0, startedAt: Date.now(),
+    timings: { enumerationMs: 0, fileAccessMs: 0, headerMs: 0, registrationMs: 0 }, issues: [] };
   publish(progressOptions, status);
   let context;
   try {
@@ -201,55 +220,48 @@ export async function scanDirectory(id: string, options: DirectoryScanOptions = 
     }
     const discovered: DiscoveredFile[] = [];
     await walkDirectory(context.directory.handle, '', progressOptions, status, discovered);
+    await checkDirectoryRead(context.directory.handle);
     if (cancelled(options)) return terminalStatus('cancelled', id, startedAt, status);
     const candidates: StoredModel[] = [];
-    const prepared: Array<{ group: Group; ordered: OrderedGgufFiles }> = [];
-    let totalFingerprintBytes = 0;
+    const used = new Set<string>();
     for (const group of groupFiles(discovered)) {
       if (cancelled(options)) return terminalStatus('cancelled', id, startedAt, status);
       const paths = group.entries.map(entry => entry.path);
       if (context.directory.excludedModels?.some(excluded => excluded.some(path => paths.includes(path)))) continue;
+      const previous = reusableModelForGroup(group, context.models, context.directory.id, used);
+      if (previous && hasReusableMetadata(previous.info)) {
+        candidates.push(previous);
+        status.modelsFound = candidates.length;
+        publish(progressOptions, status);
+        continue;
+      }
+      const headerStarted = now();
+      status.stage = 'reading-header'; status.currentFile = paths.join(', ');
+      publish(progressOptions, status);
       try {
-        const ordered = await inspectAndOrderFiles(group.entries.map(entry => entry.file));
-        const bytes = ordered.files.reduce((sum, file) => sum + file.size, totalFingerprintBytes);
-        if (!Number.isSafeInteger(bytes)) throw new Error('LOCAL_FILE_SIZE_INVALID');
-        totalFingerprintBytes = bytes;
-        prepared.push({ group, ordered });
+        const ordered: OrderedGgufFiles = await inspectAndOrderFiles(group.entries.map(entry => entry.file));
+        candidates.push(candidateFromGroup(group, ordered, context.directory.id, context.directory.name, previous));
+        status.modelsFound = candidates.length;
       } catch (error) {
         if (cancelled(options)) return terminalStatus('cancelled', id, startedAt, status);
         status.issues.push({ path: paths.join(', '), error: codeOf(error, 'LOCAL_DIRECTORY_MODEL_INVALID') });
+      } finally {
+        status.timings!.headerMs += now() - headerStarted;
+        status.currentFile = undefined;
+        if (status.phase === 'scanning') status.stage = 'enumerating';
       }
-      publish(progressOptions, status);
-    }
-    status.totalFingerprintBytes = totalFingerprintBytes;
-    status.stage = 'fingerprinting';
-    publish(progressOptions, status);
-    const reused = new Set<string>();
-    let fingerprintedBytes = 0;
-    for (const { group, ordered } of prepared) {
       if (cancelled(options)) return terminalStatus('cancelled', id, startedAt, status);
-      const fingerprint = await fingerprintFiles(ordered.files, {
-        shouldCancel: () => cancelled(options), cancelCode: 'LOCAL_SCAN_CANCELLED',
-        checkSource: () => checkDirectoryRead(context!.directory.handle),
-        onProgress: progress => {
-          status.fingerprintedBytes = fingerprintedBytes + progress.bytesProcessed;
-          publish(progressOptions, status);
-        },
-      });
-      if (cancelled(options)) return terminalStatus('cancelled', id, startedAt, status);
-      const prior = reusableModelForGroup(group, fingerprint, context.models, reused);
-      candidates.push(prior ?? candidateFromGroup(group, ordered, fingerprint, context.directory.id, context.directory.name));
-      fingerprintedBytes += ordered.files.reduce((sum, file) => sum + file.size, 0);
-      status.fingerprintedBytes = fingerprintedBytes;
-      status.modelsFound = candidates.length;
       publish(progressOptions, status);
     }
     if (cancelled(options)) return terminalStatus('cancelled', id, startedAt, status);
+    await checkDirectoryRead(context.directory.handle);
     status.stage = 'persisting';
     publish(progressOptions, status);
+    const registrationStarted = now();
     const invalidatedIds = await commitDirectoryScan(id, context.directory.revision, candidates, {
       phase: 'complete', lastScannedAt: Date.now(), issues: status.issues,
     }, { shouldCancel: () => cancelled(options) });
+    status.timings!.registrationMs += now() - registrationStarted;
     status.phase = 'complete'; status.elapsedMs = Date.now() - startedAt;
     publish(progressOptions, status);
     return { invalidatedIds, status: { ...status, issues: status.issues.map(issue => ({ ...issue })) } };

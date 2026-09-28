@@ -2,6 +2,7 @@ import { sourceEventId, watchIdFromUrl, MAX_TEXT_LENGTH } from '../../core/messa
 import type { PlaybackClock, SourceMessage } from '../../core/types.ts';
 import { SourcePublisher } from '../../core/source-stream.ts';
 import { videoPriority } from '../../core/scheduler.ts';
+import { VideoEligibilityPublisher } from '../video-eligibility.ts';
 
 export const BRIDGE = 'danlingo.native.v1';
 const FILTER = 'danlingo-text-v1';
@@ -90,9 +91,18 @@ export function startNativeBridge(): () => void {
   let suspended = false;
   const post = (payload: Record<string, unknown>) => window.postMessage({ bridge: BRIDGE, from: 'native', session, epoch, resourceId, ...payload }, location.origin);
   const publisher = new SourcePublisher(chunk => post({ type: 'sources', sourceGeneration, ...chunk }));
+  const eligibility = new VideoEligibilityPublisher(update => post({ type: 'video-eligibility', sourceGeneration, ...update }));
   const messageId = (chat: Native) => sourceEventId(resourceId, String(chat.thread ?? ''), String(chat.fork ?? ''), String(chat.id ?? ''));
 
   function filter(chat: Native, settings: Native): Native {
+    const raw = chat.comment?.body;
+    if (player && player.watch?.video?.id === watchIdFromUrl(location.href) &&
+        ordinary(chat) && typeof settings?.visible === 'boolean' && settings.content === raw) {
+      const id = messageId(chat);
+      // The staging callback's false flag has no verified native filter-order or
+      // settings-change semantics. Clear a prior observation without excluding it.
+      if (sources.get(id)?.originalText === raw) eligibility.observe(id, raw, settings.visible ? 'eligible' : 'unknown');
+    }
     if (!enabled || mode !== 'translated' || !player || player._isInterrupting ||
         player.watch?.video?.id !== watchIdFromUrl(location.href) || !settings.visible ||
         settings.content !== chat.comment?.body || !ordinary(chat)) return settings;
@@ -120,7 +130,7 @@ export function startNativeBridge(): () => void {
   }
 
   function nextEpoch(): void {
-    epoch++; decisions.clear();
+    epoch++; decisions.clear(); eligibility.reset();
     staged = translated = original = 0;
   }
 
@@ -218,8 +228,10 @@ export function startNativeBridge(): () => void {
       if (!Number.isSafeInteger(d.generation) || d.generation < generation) return;
       lastLease = performance.now(); receivedControl = true;
       enabled = d.enabled === true; mode = d.displayMode === 'original' ? 'original' : 'translated';
-      if (generation !== d.generation || d.clear === true) { generation = d.generation; prepared.clear(); if (!everPlayed) decisions.clear(); }
+      const changed = generation !== d.generation;
+      if (changed || d.clear === true) { generation = d.generation; prepared.clear(); if (!everPlayed) decisions.clear(); }
       if (d.resync === true) { sourceGeneration = d.generation; publisher.reset(); lastSources = -Infinity; }
+      if (changed || d.clear === true || d.resync === true) eligibility.reset();
       syncFilters();
     } else if (d.type === 'sources-ack') {
       if (d.sourceGeneration === sourceGeneration) publisher.acknowledge(d.revision, d.index, performance.now());

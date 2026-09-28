@@ -10,9 +10,12 @@ test('source selection excludes local credentials, stores, raw captures and weig
   for (const path of ['测试用.txt', '.env', '.pnpm-store/index.json', '.output/manifest.json',
     '.artifacts/report.json', 'docs/LIVE_G3_PROGRESS.md', 'scripts/probes/bilibili-test-output.txt',
     'test/profile/Preferences.json', 'src/model.gguf', 'src/secret.json', 'vendor/unknown/runtime.wasm',
+    'docs/store-assets/private.png', 'public/icon/unreviewed.png', 'docs/edge-private.json',
     '../src/main.ts', 'src/../../private.json', 'src\\main.ts']) assert.equal(isSourceFile(path), false, path);
   for (const path of ['src/core/config.ts', 'test/core/config.test.mjs', 'scripts/verify-credential-safety.mjs',
-    'docs/GITHUB_RELEASE.md', '.github/workflows/ci.yml', 'vendor/wllama-3.6.1-webgpu/wllama.wasm']) assert.equal(isSourceFile(path), true, path);
+    'docs/GITHUB_RELEASE.md', 'docs/EDGE_STORE.md', 'docs/edge-listings.json', 'docs/store-assets/mark.svg',
+    'docs/store-assets/screenshots/01-settings-en.png', 'public/icon/128.png',
+    '.github/workflows/ci.yml', 'vendor/wllama-3.6.1-webgpu/wllama.wasm']) assert.equal(isSourceFile(path), true, path);
 });
 
 test('credential scanning catches known UTF8/UTF16LE and common tokens without returning values', () => {
@@ -32,9 +35,10 @@ test('credential scanning catches known UTF8/UTF16LE and common tokens without r
 test('source collection is allowlisted and does not follow source junctions', async () => {
   const root = await mkdtemp(join(tmpdir(), 'danlingo-source-test-'));
   try {
-    for (const dir of ['src', '.artifacts', 'docs']) await mkdir(join(root, dir));
-    for (const file of ['package.json', 'src/main.ts', '.artifacts/private.json', 'docs/USAGE.md', 'docs/private.md']) await writeFile(join(root, file), '{}');
-    assert.deepEqual(await collectSource(root), ['docs/USAGE.md', 'package.json', 'src/main.ts']);
+    for (const dir of ['src', '.artifacts', 'docs/store-assets/screenshots']) await mkdir(join(root, dir), { recursive: true });
+    for (const file of ['package.json', 'src/main.ts', '.artifacts/private.json', 'docs/USAGE.md', 'docs/private.md',
+      'docs/store-assets/screenshots/01-settings-en.png', 'docs/store-assets/screenshots/private.png']) await writeFile(join(root, file), '{}');
+    assert.deepEqual(await collectSource(root), ['docs/USAGE.md', 'docs/store-assets/screenshots/01-settings-en.png', 'package.json', 'src/main.ts']);
     await symlink(join(root, '.artifacts'), join(root, 'src', 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
     await assert.rejects(collectSource(root), /symlink requires review/);
   } finally {

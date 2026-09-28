@@ -1,6 +1,6 @@
 import { clockStamp, resourceFromUrl } from '../../core/resource.ts';
 import { needsTranslation } from '../../core/messages.ts';
-import { validLiveBufferMs } from '../../core/live-budget.ts';
+import { validLiveBufferMs, DEFAULT_LIVE_BUFFER_MS } from '../../core/live-budget.ts';
 import { protectText } from '../../translation/text.ts';
 import type { ChatCoverage, LiveMetrics, LivePlaybackState } from '../../core/types.ts';
 import { getTimeoutRetryPolicy } from '../../core/timeout-retry.ts';
@@ -131,7 +131,7 @@ export function startYoutubeLiveBridge(): () => void {
   const host = window as unknown as Data;
   host.__danlingoYoutubeLiveStop?.();
   let disposed = false, enabled = false, navigating = false, frozen = false, lastControl = -Infinity;
-  let bufferMs = 2000, superChatTimeoutMs = 15000, targetLanguage = 'zh-Hans', sourceLanguage = 'auto', configVersion = -1;
+  let bufferMs = DEFAULT_LIVE_BUFFER_MS, superChatTimeoutMs = 15000, targetLanguage = 'zh-Hans', sourceLanguage = 'auto', configVersion = -1;
   let timeoutRetryEnabled = false, timeoutRetryExtraMs: unknown = 1000, timeoutRetryMode: unknown = 'hold';
   let resourceId = '', adapterSession = crypto.randomUUID(), binding: Binding | null = null;
   let failedOwner: Data | null = null, observedAt = performance.now();

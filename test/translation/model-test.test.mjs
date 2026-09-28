@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { DEFAULT_SETTINGS } from '../../src/core/config.ts';
 import { testModel } from '../../src/translation/model-test.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
-const request={settings:{...DEFAULT_SETTINGS,profile:'deepseek',thinkingEffort:'high',model:'deepseek-v4-pro',endpoint:'https://provider.example/v1/chat/completions',sourceLanguage:'ja'},apiKey:'test-only-key'};
+const request={settings:onlineSettings({profile:'deepseek',thinkingEffort:'high',model:'deepseek-v4-pro',endpoint:'https://provider.example/v1/chat/completions',sourceLanguage:'ja'}),apiKey:'test-only-key'};
 const answer=items=>Response.json({choices:[{message:{content:JSON.stringify({items})}}]});
 test('model test makes one production-shaped request with selected model, thinking and language',async()=>{
   let calls=0;

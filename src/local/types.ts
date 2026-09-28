@@ -94,7 +94,7 @@ export interface LocalModelInfo {
   id: string; name: string; files: string[]; bytes: number; architecture: string;
   quantization: string; tokenizer: string; template: boolean; importedAt: number;
   translationProfile?: LocalTranslationProfile;
-  /** Versioned fixed-chunk content identity; filenames are intentionally excluded. */
+  /** Legacy copied-model content identity. External references use ID + file snapshots. */
   fingerprint?: string;
   /** Directory references contain metadata only; never serialized handles or model bytes. */
   source?: import('./directory-types.ts').DirectorySource | import('./directory-types.ts').FileSource;
@@ -113,7 +113,8 @@ export interface LocalModelInfo {
 export interface LocalState {
   phase: 'idle' | 'loading' | 'warming' | 'ready' | 'generating' | 'error';
   backend: string; model?: LocalModelInfo; stage?: string; error?: string;
-  verificationProgress?: { bytesProcessed: number; totalBytes: number };
+  currentFile?: string;
+  loadTimings?: { sourceMs?: number; metadataMs?: number; initializingMs?: number; weightsMs?: number };
   generation: number; queued: number; loadMs?: number; inferenceCalls: number;
   contextTokens: number; verifiedTranslation: false;
   gpu?: LocalGpuInfo;
@@ -123,8 +124,23 @@ export interface LocalState {
   lastMetrics?: LocalInferenceMetrics;
   nativeEvidence?: string[];
 }
+/** Private offscreen -> inference Worker payload; never sent over runtime messaging. */
+export interface PreparedLocalModel {
+  info: LocalModelInfo;
+  files: File[];
+  timings?: { sourceMs: number; metadataMs: number };
+}
+export interface SourcePreparationProgress {
+  stage: 'reading-file' | 'reading-header';
+  currentFile?: string;
+}
+export interface SourcePreparationOptions {
+  shouldCancel?: () => boolean;
+  onProgress?: (progress: SourcePreparationProgress) => void;
+}
 export type LocalControl = { action: 'state'; demand?: boolean }
-  | { action: 'list' | 'cancel' | 'unload' | 'files-changed' }
+  | { action: 'list' | 'cancel' | 'unload' }
+  | { action: 'files-changed'; modelIds?: string[] }
   | { action: 'directory-status' | 'directory-cancel' }
   | { action: 'directory-scan'; directoryId?: string }
   | { action: 'directory-remove'; directoryId: string }

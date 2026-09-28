@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "DanLingo · 彈幕翻譯"
+  },
+  "extensionDescription": {
+    "message": "在 Niconico、YouTube 與 Bilibili 原生頁面翻譯彈幕和直播聊天。"
+  },
+  "extensionShortcut": {
+    "message": "開啟或關閉彈幕翻譯"
+  }
+}

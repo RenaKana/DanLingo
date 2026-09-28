@@ -46,13 +46,19 @@ export interface DirectorySource {
 
 export interface DirectoryScanStatus {
   phase: 'idle' | 'scanning' | 'complete' | 'cancelled' | 'error';
-  stage?: 'enumerating' | 'fingerprinting' | 'persisting';
+  stage?: 'enumerating' | 'reading-files' | 'reading-header' | 'persisting';
   directoryId?: string;
+  currentFile?: string;
+  startedAt?: number;
   checkedFiles: number;
   modelsFound: number;
   elapsedMs: number;
-  fingerprintedBytes?: number;
-  totalFingerprintBytes?: number;
+  timings?: {
+    enumerationMs: number;
+    fileAccessMs: number;
+    headerMs: number;
+    registrationMs: number;
+  };
   issues: DirectoryIssue[];
   error?: string;
 }

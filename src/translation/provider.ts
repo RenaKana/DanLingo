@@ -19,6 +19,10 @@ export interface ProviderRequest {
   settings: ProviderSettings;
   apiKey: string;
   items: ProviderItem[];
+  /** Trusted engine predicate, rechecked after asynchronous gates at transmission. */
+  isItemCurrent?: (id: string) => boolean;
+  /** Final protected/current inputs immediately before the transport starts. */
+  onDispatch?: (items: readonly ProviderItem[], backend: 'local' | 'online') => void;
   signal?: AbortSignal;
   budgetMs: number;
   mode?: 'vod' | 'deadline';
@@ -30,6 +34,10 @@ export interface ProviderRequest {
 }
 export interface ProviderOptions {
   fetch?: typeof fetch; clock?: Partial<TranslationClock> | (() => number);
+  /** Opaque background-owned capability. The global guard must validate it; it never disables the guard. */
+  localPreviewPermit?: object;
+  /** Exact protected/current inputs selected for the local payload, for the host's final IPC ledger. */
+  onLocalPayload?: (items: readonly ProviderItem[]) => void;
   /** Trusted host gate: reserve durable quota immediately before each online POST. */
   beforeOnlineRequest?: (signal: AbortSignal) => Promise<void>;
   /** Optional host lifetime guard, released on every completion, timeout and cancellation. */
@@ -465,17 +473,27 @@ export async function discoverModels(request: {
   }
 }
 
+// Registered once by the trusted background. Applies to every provider instance,
+// including diagnostic/local instances, immediately before the actual transport.
+export interface ProviderTransportContext { request: ProviderRequest; localPreviewPermit?: object }
+let transportGuard: ((context: ProviderTransportContext) => Promise<void>) | undefined;
+export function setProviderTransportGuard(guard?: (context: ProviderTransportContext) => Promise<void>): void { transportGuard = guard; }
+
 /** Exactly one POST attempt. The engine owns retry scheduling and subscription deadlines. */
 export class ChatCompletionsProvider {
   private readonly fetcher: typeof fetch;
   private readonly clock: TranslationClock;
   private readonly keepAlive?: () => () => void;
   private readonly beforeOnlineRequest?: ProviderOptions['beforeOnlineRequest'];
+  private readonly localPreviewPermit?: object;
+  private readonly onLocalPayload?: ProviderOptions['onLocalPayload'];
   constructor(options: ProviderOptions = {}) {
     this.fetcher = options.fetch ?? globalThis.fetch.bind(globalThis);
     this.clock = createClock(options.clock);
     this.keepAlive = options.keepAlive;
     this.beforeOnlineRequest = options.beforeOnlineRequest;
+    this.localPreviewPermit = options.localPreviewPermit;
+    this.onLocalPayload = options.onLocalPayload;
   }
   async complete(request: ProviderRequest): Promise<ProviderResult> {
     let origin: string, endpoint: string;
@@ -487,9 +505,9 @@ export class ChatCompletionsProvider {
     if (!request.apiKey || /[\r\n]/.test(request.apiKey)) throw new ProviderError('api-key-missing-or-invalid');
     if (request.signal?.aborted) throw new ProviderError('cancelled');
     const prepared = prepareItems(request.items);
-    const safe = prepared.filter((item) => !item.protected.reason);
+    let safe = prepared.filter((item) => !item.protected.reason);
     const skipped = prepared.filter((item) => item.protected.reason);
-    const body = payload(request.settings, safe, request.mode, request.strategy, request.force);
+    let body = payload(request.settings, safe, request.mode, request.strategy, request.force);
     if (safe.length === 0) return { items: new Map(skipped.map((item) => [item.id, { reason: 'unsupported-emoticon' }])) };
     const maxAttemptTimeout = request.settings.backend === 'local' || request.benchmark || request.mode === 'vod' || request.strategy === 'superchat' || request.strategy === 'manual'
       ? MAX_REQUEST_TIMEOUT_MS : MAX_REQUEST_MS;
@@ -526,6 +544,17 @@ export class ChatCompletionsProvider {
             await this.beforeOnlineRequest(controller.signal);
             if (finished || controller.signal.aborted) return;
           }
+          if (transportGuard) await transportGuard({ request, localPreviewPermit: this.localPreviewPermit });
+          if (finished || controller.signal.aborted) return;
+          if (request.isItemCurrent) {
+            safe = safe.filter(item => request.isItemCurrent!(item.id));
+            if (!safe.length) throw new ProviderError('cancelled');
+            body = payload(request.settings, safe, request.mode, request.strategy, request.force);
+          }
+          const dispatched = safe.map(({ id, text }) => ({ id, text }));
+          if (request.settings.backend === 'local') this.onLocalPayload?.(dispatched);
+          if (finished || controller.signal.aborted) return;
+          request.onDispatch?.(dispatched, request.settings.backend === 'local' ? 'local' : 'online');
           const response = await this.fetcher(endpoint, {
             method: 'POST', redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${request.apiKey}` },

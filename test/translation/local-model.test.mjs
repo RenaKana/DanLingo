@@ -21,7 +21,7 @@ class FakeWorker {
   reply(id, data) { this.onmessage?.({data:{ id, ...data }}); }
 }
 const flush = () => new Promise(resolve => setImmediate(resolve));
-function setup() { const workers = []; const controller = new LocalController(() => { const worker = new FakeWorker(); workers.push(worker); return worker; }); return { controller, workers }; }
+function setup(prepareModel) { const workers = []; const controller = new LocalController(() => { const worker = new FakeWorker(); workers.push(worker); return worker; }, undefined, prepareModel); return { controller, workers }; }
 async function loaded(env, modelId = 'model-a') { const promise = env.controller.load(modelId, {mode:'custom',parallel:1}); const worker = env.workers.at(-1); worker.reply(worker.messages[0].id, {ok:true,model:{id:modelId,name:modelId}}); await promise; return worker; }
 
 test('GGUF checks metadata beyond filename while retaining structural companion validation', async () => {
@@ -245,16 +245,29 @@ test('fatal GPU loss rejects every native slot and waiter, and stale telemetry i
   assert.equal(worker.terminated,true);
 });
 
-test('worker failure during content verification clears progress and stops the load', async () => {
-  const env = setup(), loading = env.controller.load('a'), worker = env.workers[0];
+test('worker failure after source preparation clears current-file progress and stops the load', async () => {
+  const file = new File(['source'], 'model.gguf');
+  let finishPreparation;
+  const preparationGate = new Promise(resolve => { finishPreparation = resolve; });
+  const env = setup(async (id, options) => {
+    options.onProgress?.({ stage: 'reading-file', currentFile: file.name });
+    await preparationGate;
+    return { info: { id, name: file.name, files: [file.name], bytes: file.size, importedAt: 1, architecture: 'llama' }, files: [file] };
+  });
+  const loading = env.controller.load('a');
   const rejected = assert.rejects(loading, /WORKER_FAILED/);
-  worker.onmessage({ data: { stage: 'fingerprinting', verificationProgress: { bytesProcessed: 4, totalBytes: 16 } } });
-  assert.equal(env.controller.snapshot().verificationProgress.bytesProcessed, 4);
+  assert.equal(env.controller.snapshot().currentFile, file.name);
+  assert.equal(env.controller.snapshot().stage, 'reading-file');
+
+  finishPreparation();
+  await flush();
+  const worker = env.workers[0];
+  assert.equal(worker.messages[0].prepared.files[0], file);
   worker.onerror({ message: 'synthetic worker failure' });
   await rejected;
   const state = env.controller.snapshot();
   assert.equal(state.phase, 'error');
-  assert.equal(state.verificationProgress, undefined);
+  assert.equal(state.currentFile, undefined);
   assert.equal(state.stage, undefined);
   assert.equal(worker.terminated, true);
 });

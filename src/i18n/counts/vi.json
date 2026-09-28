@@ -1,0 +1,8 @@
+{
+  "count.tasks.zero": "{count} tác vụ",
+  "count.tasks.one": "{count} tác vụ",
+  "count.tasks.two": "{count} tác vụ",
+  "count.tasks.few": "{count} tác vụ",
+  "count.tasks.many": "{count} tác vụ",
+  "count.tasks.other": "{count} tác vụ"
+}

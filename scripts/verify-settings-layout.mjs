@@ -11,7 +11,7 @@ const {chromium}=await loadPlaywright();
 let context,page;
 const check=async(name,run)=>{await run();report.checks[name]='PASS';console.log('PASS',name);};
 try{
-  const extension=resolve(dir,'extension');await cp(resolve('.output/chrome-mv3'),extension,{recursive:true});
+  const extension=resolve(dir,'extension');await cp(resolve(process.env.DANLINGO_TEST_EXTENSION || '.output/chrome-mv3'),extension,{recursive:true});
   const manifest=JSON.parse(await readFile(resolve(extension,'manifest.json'),'utf8'));manifest.host_permissions.push('https://fixture.invalid/*');await writeFile(resolve(extension,'manifest.json'),JSON.stringify(manifest));
   context=await chromium.launchPersistentContext(resolve(dir,'profile'),{headless:true,...browserLaunchOptions("chromium"),viewport:{width:1360,height:900},args:['--disable-extensions-except='+extension,'--load-extension='+extension,'--disable-background-networking','--no-first-run','--host-resolver-rules=MAP * ~NOTFOUND']});
   await context.route(/^https?:/,route=>route.abort());
@@ -53,10 +53,19 @@ try{
   await page.setViewportSize({width:1360,height:900});
   if(!process.argv.includes('--preview-only')){
     await check('navigation-history-draft-and-no-hidden-focus',async()=>{
-      await page.locator('#model').fill('draft-model');await goto('watching');await page.locator('#target-language').fill('fr');
+      assert.equal(await page.locator('#model-test-text').isVisible(),false);
+      await page.locator('#model-test-options > summary').click();
+      await page.locator('#model-test-text').fill('A retained test sample');
+      await page.locator('#model-test-context').selectOption('video');
+      await page.locator('#model-test-options > summary').click();
+      await page.locator('#model').fill('draft-model');await goto('watching');await page.locator('#target-language').selectOption('fr');
       await goto('advanced');await page.goBack();await page.waitForFunction(()=>location.hash==='#watching');
       assert.equal(await page.locator('#target-language').inputValue(),'fr');await page.goForward();await page.waitForFunction(()=>location.hash==='#advanced');
       await goto('service');assert.equal(await page.locator('#model').inputValue(),'draft-model');
+      await page.locator('#model-test-options > summary').click();
+      assert.equal(await page.locator('#model-test-text').inputValue(),'A retained test sample');
+      assert.equal(await page.locator('#model-test-context').inputValue(),'video');
+      await page.locator('#model-test-options > summary').click();
       assert.match(await page.locator('#result').textContent(),/未保存/);
       assert.equal(await page.evaluate(()=>[...document.querySelectorAll('[data-section][hidden] input,[data-section][hidden] button')].some(el=>el.getClientRects().length>0)),false);
       await page.locator('#model').focus();await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.activeElement.closest('[data-section]')?.dataset.section),'service');
@@ -67,15 +76,15 @@ try{
       assert.equal((await rpc({type:'settings'})).ok,true);assert.equal(new URL(page.url()).hash,'#advanced');
     });
     await check('cross-section-invalid-field-revealed-and-focused',async()=>{
-      await goto('advanced');await page.locator('#concurrency').evaluate(el=>el.closest('details').open=true);await page.locator('#concurrency').fill('0');
+      await goto('advanced');await page.locator('#online-concurrency').evaluate(el=>el.closest('details').open=true);await page.locator('#online-concurrency').fill('0');
       await goto('service');const before=await page.evaluate(()=>__uiFixture.calls.filter(x=>x==='save').length);
-      await page.locator('#save').click();await page.waitForFunction(()=>document.activeElement.id==='concurrency');assert.equal(new URL(page.url()).hash,'#advanced');
-      assert.equal(await page.evaluate(()=>__uiFixture.calls.filter(x=>x==='save').length),before);await page.locator('#concurrency').fill('2');
+      await page.locator('#save').click();await page.waitForFunction(()=>document.activeElement.id==='online-concurrency');assert.equal(new URL(page.url()).hash,'#advanced');
+      assert.equal(await page.evaluate(()=>__uiFixture.calls.filter(x=>x==='save').length),before);await page.locator('#online-concurrency').fill('2');
     });
     await check('test-controls-excluded-and-save-race-preserves-new-draft',async()=>{
       await goto('performance');await page.locator('#performance-concurrency').fill('0');
       await goto('service');await page.evaluate(()=>__uiFixture.hold=true);await page.locator('#save').click();await page.waitForFunction(()=>!!__uiFixture.release);
-      await page.locator('#model').fill('edited-during-save');await goto('watching');await page.locator('#target-language').fill('ko');
+      await page.locator('#model').fill('edited-during-save');await goto('watching');await page.locator('#target-language').selectOption('ko');
       await page.evaluate(()=>{__uiFixture.hold=false;__uiFixture.release();});await page.waitForFunction(()=>!document.querySelector('#save').disabled);
       assert.match(await page.locator('#result').textContent(),/未保存/);await goto('service');assert.equal(await page.locator('#model').inputValue(),'edited-during-save');
       assert.equal((await rpc({type:'overview'})).settings.model,'draft-model');
@@ -92,7 +101,7 @@ try{
       assert.equal(await page.locator('#test-result').textContent(),'');assert.equal(await page.locator('#model').inputValue(),'new-draft');
     });
     await check('backend-switch-hides-controls-without-losing-online-draft',async()=>{
-      await page.locator('#backend').selectOption('local');assert.equal(await page.locator('#endpoint').isVisible(),false);assert.equal(await page.locator('#local-model').isVisible(),true);
+      await page.locator('#backend').selectOption('local');assert.equal(await page.locator('#endpoint').isVisible(),false);assert.equal(await page.locator('#local-model-manager').isVisible(),true);
       await goto('live');assert.equal(await page.locator('#superchat-thinking').isVisible(),false);assert.equal(await page.locator('#lp-superChatReasoning').isVisible(),true);
       await goto('service');await page.locator('#backend').selectOption('online');assert.equal(await page.locator('#model').inputValue(),'new-draft');
     });

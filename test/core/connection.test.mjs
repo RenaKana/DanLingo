@@ -14,9 +14,11 @@ import {
 import {
   ConnectionError,
   connectionDisplay,
+  LOCAL_COMPLETION_ENDPOINT,
   normalizeConnection,
   resolveConnection,
 } from '../../src/core/connection.ts';
+import { onlineSettings } from '../fixtures/online-settings.mjs';
 
 test('root, versioned and full endpoints normalize idempotently while preserving safe query parameters', () => {
   assert.equal(completionEndpoint('https://api.example.invalid'), 'https://api.example.invalid/v1/chat/completions');
@@ -92,18 +94,18 @@ test('model-aware reasoning capabilities and wire fields reject unsupported off 
   const reasoner = { profile: 'deepseek', model: 'deepseek-reasoner' };
   assert.deepEqual(reasoningCapabilities(reasoner).efforts, ['default']);
   assert.throws(() => normalizeReasoningEffort(reasoner, 'off'), { message: 'unsupported-thinking-effort' });
-  assert.throws(()=>reasoningRequestFields({ ...DEFAULT_SETTINGS, ...reasoner, thinkingEffort:'max' }),/unsupported-thinking-effort/);
-  assert.deepEqual(reasoningRequestFields({ ...DEFAULT_SETTINGS, ...reasoner, model:'deepseek-v4-pro', thinkingEffort: 'high' }),
+  assert.throws(()=>reasoningRequestFields(onlineSettings({ ...reasoner, thinkingEffort:'max' })),/unsupported-thinking-effort/);
+  assert.deepEqual(reasoningRequestFields(onlineSettings({ ...reasoner, model:'deepseek-v4-pro', thinkingEffort: 'high' })),
     { thinking: { type: 'enabled' }, reasoning_effort: 'high' });
-  const o3 = { ...DEFAULT_SETTINGS, profile: 'chat-completions', model: 'o3-mini', thinkingEffort: 'high' };
+  const o3 = onlineSettings({ profile: 'chat-completions', model: 'o3-mini', thinkingEffort: 'high' });
   assert.deepEqual(reasoningCapabilities(o3).efforts, ['default', 'low', 'medium', 'high']);
   assert.deepEqual(reasoningRequestFields(o3), { reasoning_effort: 'high' });
   assert.throws(() => reasoningRequestFields({ ...o3, thinkingEffort: 'off' }), { message: 'unsupported-thinking-effort' });
 });
 
 test('Super Chat strategy resolves independent effort and timeout without mutating saved settings', () => {
-  const settings = normalizeSettings({ ...DEFAULT_SETTINGS, profile: 'deepseek', model: 'deepseek-v4-pro', thinkingEffort: 'off',
-    superChatThinkingEffort: 'high', superChatTimeoutMs: 45000 });
+  const settings = normalizeSettings(onlineSettings({ profile: 'deepseek', model: 'deepseek-v4-pro', thinkingEffort: 'off',
+    superChatThinkingEffort: 'high', superChatTimeoutMs: 45000 }));
   const normal = effectiveStrategy(settings, 'normal');
   const superchat = effectiveStrategy(settings, 'superchat');
   assert.deepEqual([normal.thinkingEffort, normal.timeoutMs], ['off', 12000]);
@@ -118,4 +120,14 @@ test('live adaptive concurrency defaults off while explicit saved true survives 
   assert.equal(DEFAULT_SETTINGS.liveAdaptiveConcurrency, false);
   assert.equal(normalizeSettings(undefined).liveAdaptiveConcurrency, false);
   assert.equal(normalizeSettings({ liveAdaptiveConcurrency: true }).liveAdaptiveConcurrency, true);
+});
+
+test('a blank endpoint resolves to an internal dispatch URL only for local inference', () => {
+  const local = resolveConnection({ endpoint: '', backend: 'local' });
+  assert.equal(local.inputUrl, '');
+  assert.equal(local.configuredCompletionEndpoint, '');
+  assert.equal(local.completionEndpoint, LOCAL_COMPLETION_ENDPOINT);
+  assert.equal(local.origin, new URL(LOCAL_COMPLETION_ENDPOINT).origin);
+  assert.throws(() => resolveConnection({ endpoint: '' }), { message: 'invalid-address' });
+  assert.throws(() => resolveConnection({ endpoint: 'not-a-url', backend: 'local' }), { message: 'invalid-address' });
 });

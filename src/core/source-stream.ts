@@ -7,7 +7,7 @@ export interface SourceChunk {
   upserts: SourceMessage[]; removes: string[];
 }
 export function sameSource(a: SourceMessage, b: SourceMessage): boolean {
-  return a.originalText === b.originalText && a.mediaTimeMs === b.mediaTimeMs && a.renderAtMs === b.renderAtMs &&
+  return a.displayPlanEligible === b.displayPlanEligible && a.originalText === b.originalText && a.mediaTimeMs === b.mediaTimeMs && a.renderAtMs === b.renderAtMs &&
     a.translatable === b.translatable && a.sentAtEpochMs === b.sentAtEpochMs &&
     a.style.position === b.style.position && a.style.size === b.style.size && a.style.color === b.style.color &&
     a.style.font === b.style.font && (a.style.commands ?? []).join('\0') === (b.style.commands ?? []).join('\0');
@@ -23,7 +23,12 @@ export class SourcePublisher {
   private initial = true;
   private sentAt = -Infinity;
   private send: (chunk: SourceChunk) => void;
-  constructor(send: (chunk: SourceChunk) => void) { this.send = send; }
+  private byteLimit: number;
+  constructor(send: (chunk: SourceChunk) => void, byteLimit = SOURCE_CHUNK_BYTES) {
+    if (!Number.isSafeInteger(byteLimit) || byteLimit <= 1024 || byteLimit > SOURCE_CHUNK_BYTES)
+      throw new Error('invalid-source-chunk-byte-limit');
+    this.send = send; this.byteLimit = byteLimit;
+  }
   get busy(): boolean { return this.cursor < this.chunks.length; }
   get complete(): boolean { return !this.initial && !this.busy; }
   reset(): void {
@@ -47,12 +52,12 @@ export class SourcePublisher {
     };
     for (const row of upserts) {
       const size = encoder.encode(JSON.stringify(row)).length + 1;
-      if (chunk.upserts.length + chunk.removes.length >= SOURCE_CHUNK_ITEMS || bytes + size > SOURCE_CHUNK_BYTES) push();
+      if (chunk.upserts.length + chunk.removes.length >= SOURCE_CHUNK_ITEMS || bytes + size > this.byteLimit) push();
       chunk.upserts.push(row); bytes += size;
     }
     for (const id of removes) {
       const size = encoder.encode(JSON.stringify(id)).length + 1;
-      if (chunk.upserts.length + chunk.removes.length >= SOURCE_CHUNK_ITEMS || bytes + size > SOURCE_CHUNK_BYTES) push();
+      if (chunk.upserts.length + chunk.removes.length >= SOURCE_CHUNK_ITEMS || bytes + size > this.byteLimit) push();
       chunk.removes.push(id); bytes += size;
     }
     chunk.complete = true; this.chunks.push(chunk); this.sentAt = -Infinity;

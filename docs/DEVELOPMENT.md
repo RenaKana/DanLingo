@@ -11,6 +11,8 @@ pnpm run build
 pnpm run check:source
 ```
 
+`pnpm run build` 和 `.output/chrome-mv3` 适用于独立克隆的仓库，不适用于本机固定工作区。固定工作区的更新器使用临时构建输出，再同步到固定测试目录。
+
 `prepare` 生成 WXT 类型配置。安装禁用依赖生命周期脚本，随后执行项目准备步骤。构建使用 `vendor` 中带校验的运行时，不读取旧 `.artifacts`，不需要真实服务、Key 或模型权重。
 
 | 命令 | 范围 |
@@ -24,6 +26,36 @@ pnpm run check:source
 | `pnpm run prepare:github` | 生成 `.artifacts/github-prep/source-*/repository` 及哈希清单 |
 
 CI 在 Windows、Linux 执行离线检查和构建；浏览器、真实网站、真实 Provider、GPU 质量和手动安装分别验收。CI 不发布扩展，不持有真实服务凭据。
+
+## 固定工作区流程
+
+固定工作区根目录为 `D:\Tool\DanLingo-Workspace`。其更新器需要已安装的 Node.js 22.14+、pnpm 11.19.0 和 Python 3.12+；Python 仅用标准库。日常修改 `development\current` 指向的持续维护源码，版本从该目标的 `package.json` 确定并同步到 `wxt.config.ts` 的 `manifest.version`，后续升级继续沿用同一入口。每次完成用户可见的测试版更新时递增补丁版本，用户明确指定版本时按指定值；同一待交付版本构建失败后的修复和重试不再次递增。每次开发任务完成时，代理默认运行相关回归、类型检查和临时输出构建；全部通过后自动归档快照并原位同步测试版。没有后台监听或轮询，用户也可手动启动入口。
+
+测试版更新须先通过相关回归、类型检查和临时输出构建，再归档快照并原位同步 `testing\current\extension`。`Update-TestBuild.ps1` 默认执行检查与构建；构建输出不得清理或覆盖浏览器正在加载的固定目录。失败时不得报告更新成功，未完成事务先恢复。
+
+更新器始终运行自己的故障回归，项目回归默认使用全部离线测试。开发任务可在 PowerShell 中通过 `-RegressionTests @('test/core/config.test.mjs', 'test/translation/local-config.test.mjs')` 显式选择与改动有关的测试文件；快照记录实际范围，不能将相关测试通过说成全量通过。选择应覆盖变更行为，不得用选择范围掩盖本次改动造成的失败。已有无关失败须在任务验收中另记。
+
+用户手动执行时，从固定工作区根目录运行：
+
+```powershell
+.\更新测试版.cmd
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-TestBuild.ps1
+```
+
+正式版仅在明确要求时，从指定的、已经验证的测试快照原样同步到 `releases\current\extension`。不重建源码，不自动发布 Git 或商店版本。正式版最初以原始 0.3.0 ZIP 初始化，保留其文件内容。回退必须选择通道和明确的历史快照；历史记录保留版本、时间、commit、dirty 状态与哈希。
+
+```powershell
+.\更新正式版.cmd
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Update-ReleaseBuild.ps1 -Snapshot <快照目录>
+.\回退历史版本.cmd
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Restore-Build.ps1 -Channel testing -Snapshot <快照目录>
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Restore-Build.ps1 -Channel releases -Snapshot <快照目录>
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\List-Builds.ps1
+.\恢复未完成更新.cmd
+powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\Recover-Update.ps1
+```
+
+正式版和测试版的 `.cmd` 入口接受或提示必要目录；回退入口接受或提示 `testing`／`releases` 通道和快照目录。首次在 Chrome 或 Edge 通过“加载已解压的扩展”导入固定通道目录后，后续只点击“重新加载”；不要再次导入快照或临时构建目录。保留旧扩展和数据；作为新安装时可能需要重新填写服务、登记模型并授予授权。本文不表示 Chrome 或 Edge 的实际验收已经通过。
 
 ## 浏览器与真实场景
 

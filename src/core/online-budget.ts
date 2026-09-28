@@ -33,11 +33,11 @@ export function onlineBudgetDayKey(date: Date): string {
 }
 
 export function validOnlineBudgetLimit(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0;
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function assertLimit(limit: number): void {
-  if (!validOnlineBudgetLimit(limit)) throw new RangeError('Online budget limit must be a positive safe integer');
+  if (!validOnlineBudgetLimit(limit)) throw new RangeError('Online budget limit must be a nonnegative safe integer');
 }
 
 function isBudgetRecord(value: unknown, day: string): value is OnlineBudgetRecord {
@@ -47,18 +47,20 @@ function isBudgetRecord(value: unknown, day: string): value is OnlineBudgetRecor
 }
 
 function budgetState(day: string, limit: number, used: number): OnlineBudgetState {
-  const exhausted = used >= limit;
+  const exhausted = limit > 0 && used >= limit;
   return {
     day,
     limit,
     used,
-    remaining: Math.max(0, limit - used),
+    remaining: limit === 0 ? null : Math.max(0, limit - used),
     status: exhausted ? 'exhausted' : 'available',
     ...(exhausted ? { reason: 'online-daily-limit-reached' as const } : {}),
   };
 }
 
 function unavailableState(day: string, limit: number): OnlineBudgetState {
+  // Usage persistence is best-effort when the user has disabled the daily cap.
+  if (limit === 0) return { day, limit, used: null, remaining: null, status: 'available' };
   return {
     day,
     limit,
@@ -137,10 +139,16 @@ export class OnlineRequestBudget {
       database = await withAbort(this.#openDatabase(), signal);
     } catch (error) {
       if (error instanceof OnlineBudgetError && error.code === 'cancelled') throw error;
+      if (limit === 0) { throwIfAborted(signal); return unavailableState(day, limit); }
       throw new OnlineBudgetError('online-budget-storage-unavailable');
     }
     throwIfAborted(signal);
-    return this.#reserveDay(database, day, limit, signal);
+    try { return await this.#reserveDay(database, day, limit, signal); }
+    catch (error) {
+      if (limit !== 0 || error instanceof OnlineBudgetError && error.code === 'cancelled') throw error;
+      throwIfAborted(signal);
+      return unavailableState(this.#today(), limit);
+    }
   }
 
   #today(): string {
@@ -303,12 +311,12 @@ export class OnlineRequestBudget {
             return;
           }
           const used = stored === undefined ? 0 : (stored as OnlineBudgetRecord).used;
-          if (used >= limit) {
+          if (limit > 0 && used >= limit) {
             exhausted = true;
             return;
           }
 
-          const nextUsed = used + 1;
+          const nextUsed = Math.min(Number.MAX_SAFE_INTEGER, used + 1);
           result = budgetState(requestedDay, limit, nextUsed);
           store.put({ day: requestedDay, used: nextUsed } satisfies OnlineBudgetRecord);
         };
