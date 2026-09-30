@@ -132,6 +132,7 @@ function harness({ markerSession = 'video-a', onToggle = async () => {}, readSho
   const documentListeners = new Map();
   const localeListeners = new Set();
   const observers = [];
+  const styles = new WeakMap();
   const document = {
     body: null,
     documentElement: { clientWidth: 1200 },
@@ -186,7 +187,7 @@ function harness({ markerSession = 'video-a', onToggle = async () => {}, readSho
   };
   const context = {
     document,
-    getComputedStyle: () => ({ width: '24px', height: '24px', margin: '0px 24px 0px 0px' }),
+    getComputedStyle: element => ({ width: '24px', height: '24px', margin: '0px 24px 0px 0px', ...styles.get(element) }),
     MutationObserver: FakeMutationObserver,
     t: (key, params = {}) => (translations[key] ?? key).replace(/\{(\w+)\}/g, (match, name) => params[name] ?? match),
     localizeMessage: error => error instanceof Error ? error.message : '',
@@ -197,6 +198,7 @@ function harness({ markerSession = 'video-a', onToggle = async () => {}, readSho
 
   return {
     toggle, document, player, surface, marker, video, region, anchor, observers, localeListeners, documentListeners,
+    setStyle(element, style) { styles.set(element, style); },
     getButton() { return document.body.querySelector('#danlingo-fullscreen-toggle'); },
     setSessionOnMarker(session) { marker.setAttribute('data-danlingo-player', session); },
     enterFullscreen(element) {
@@ -222,6 +224,105 @@ function click(button, isTrusted = true) {
 }
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+test('uses the native full-size SVG in ordinary and compact controls, but ignores a capsule text SVG', () => {
+  const h = harness();
+  const nativeSvg = h.document.createElement('svg');
+  h.anchor.append(nativeSvg);
+  h.setStyle(h.anchor, { width: '30px', height: '30px', margin: '0px 12px 0px 0px', color: '#61666d' });
+  h.setStyle(nativeSvg, { width: '30px', height: '30px', fill: '#61666d' });
+  h.toggle.update(false, 'video-a');
+  const button = h.getButton();
+  const icons = button.children;
+  assert.equal(button.style.width, '30px');
+  assert.equal(button.style.height, '30px');
+  assert.equal(button.style.margin, '0px 12px 0px 0px');
+  assert.ok(icons.every(icon => icon.style.width === '30px' && icon.style.height === '30px'));
+
+  h.setStyle(h.anchor, { width: '28px', height: '28px' });
+  h.setStyle(nativeSvg, { width: '28px', height: '28px' });
+  h.enterFullscreen(h.player);
+  assert.equal(button.style.width, '28px');
+  assert.ok(icons.every(icon => icon.style.width === '28px' && icon.style.height === '28px'));
+
+  const capsule = h.document.createElement('span');
+  capsule.className = 'bui-switch-body';
+  const dot = h.document.createElement('span');
+  dot.className = 'bui-switch-dot';
+  const textSvg = h.document.createElement('svg');
+  dot.append(textSvg);
+  capsule.append(dot);
+  h.anchor.remove();
+  const festivalAnchor = h.document.createElement('button');
+  festivalAnchor.className = 'bpx-player-dm-switch bui bui-switch';
+  festivalAnchor.append(capsule);
+  h.region.append(festivalAnchor);
+  const settings = h.document.createElement('button');
+  settings.className = 'bpx-player-dm-setting';
+  const settingsWrapper = h.document.createElement('span');
+  settingsWrapper.className = 'bpx-common-svg-icon';
+  const settingsSvg = h.document.createElement('svg');
+  settingsWrapper.append(settingsSvg);
+  settings.append(settingsWrapper);
+  h.region.append(settings);
+  h.setStyle(festivalAnchor, { width: '30px', height: '30px', margin: '0px 12px 0px 0px', color: '#61666d' });
+  h.setStyle(textSvg, { width: '10px', height: '10px', fill: 'rgb(189, 147, 59)' });
+  h.setStyle(settingsSvg, { width: '30px', height: '24px', fill: '#757575' });
+  h.flushMutations();
+  assert.equal(button.nextSibling, festivalAnchor);
+  assert.equal(button.style.width, '30px');
+  assert.equal(button.style.color, 'rgb(189, 147, 59)');
+  assert.ok(icons.every(icon => icon.style.width === '24px' && icon.style.height === '24px'));
+  h.toggle.dispose();
+});
+
+test('uses the visible native SVG when the first 100% SVG is hidden and keeps both toggle states sized in window and fullscreen', () => {
+  const h = harness();
+  const nativeOn = h.document.createElement('svg');
+  const nativeOff = h.document.createElement('svg');
+  h.anchor.append(nativeOn, nativeOff);
+  h.setStyle(h.anchor, { width: '30px', height: '30px', margin: '0px 12px 0px 0px' });
+  const zeroRect = { left: 0, top: 0, width: 0, height: 0 };
+  const iconRect = { left: 0, top: 0, width: 24, height: 24 };
+  let danmakuEnabled = true;
+  nativeOn.getBoundingClientRect = () => danmakuEnabled ? iconRect : zeroRect;
+  nativeOff.getBoundingClientRect = () => danmakuEnabled ? zeroRect : iconRect;
+
+  const setNativeState = enabled => {
+    danmakuEnabled = enabled;
+    h.setStyle(nativeOn, enabled ? { width: '24px', height: '24px' } : { width: '100%', height: '100%' });
+    h.setStyle(nativeOff, enabled ? { width: '100%', height: '100%' } : { width: '24px', height: '24px' });
+    h.flushMutations();
+  };
+  const assertNativeGeometry = (controlSize, visibleNative) => {
+    const button = h.getButton();
+    assert.equal(button.style.width, `${controlSize}px`);
+    assert.equal(button.style.height, `${controlSize}px`);
+    assert.ok(button.children.every(icon => icon.style.width === '24px' && icon.style.height === '24px'));
+    assert.equal(visibleNative.getBoundingClientRect().width, 24);
+    assert.equal(visibleNative.getBoundingClientRect().height, 24);
+  };
+
+  h.toggle.update(false, 'video-a');
+  setNativeState(false);
+  assert.equal(h.getButton().children[0].style.display, 'none');
+  assert.equal(h.getButton().children[1].style.display, 'block');
+  assertNativeGeometry(30, nativeOff);
+  h.toggle.update(true, 'video-a');
+  assertNativeGeometry(30, nativeOff);
+  setNativeState(true);
+  assertNativeGeometry(30, nativeOn);
+
+  h.enterFullscreen(h.player);
+  h.setStyle(h.anchor, { width: '28px', height: '28px' });
+  setNativeState(false);
+  assertNativeGeometry(28, nativeOff);
+  h.toggle.update(false, 'video-a');
+  assertNativeGeometry(28, nativeOff);
+  setNativeState(true);
+  assertNativeGeometry(28, nativeOn);
+  h.toggle.dispose();
+});
 
 test('requires the matching session and follows controls in normal and fullscreen modes', () => {
   const h = harness();

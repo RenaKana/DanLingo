@@ -149,6 +149,77 @@ function background(options = {}) {
 const testUi = { id: 'test-extension', url: 'chrome-extension://test-extension/options.html' };
 const popupUi = { id: 'test-extension', url: 'chrome-extension://test-extension/popup.html' };
 
+test('explicit online model actions preserve a saved local translation route and its credentials', async () => {
+  const discoveryRequests = [], testRequests = [];
+  const h = background({ settings: { backend: 'local', localModelId: 'saved-local-model', model: 'saved-online-model',
+    profile: 'chat-completions', thinkingEffort: 'default' },
+    connectionDiscovery: { discoverConnectionModels: async (settings, apiKey) => {
+      discoveryRequests.push({ settings, apiKey }); return { models: ['draft-online-model'] };
+    } },
+    modelTesting: { testModel: async request => { testRequests.push(request); return { text: 'Translated fixture' }; } },
+  });
+  const saved = structuredClone(h.localStorage[config.SETTINGS_KEY]);
+  const key = structuredClone(h.sessionStorage[config.KEY_STORAGE_KEY]);
+  const draft = { ...(await h.send({ type: 'settings' }, testUi)).settings,
+    backend: 'online', model: 'draft-online-model' };
+  assert.equal((await h.send({ type: 'models', settings: draft }, testUi)).ok, true);
+  const tested = await h.send({ type: 'test-model', settings: draft }, testUi);
+  assert.equal(tested.ok, true, tested.error);
+  assert.equal(discoveryRequests.length, 1);
+  assert.equal(testRequests.length, 1);
+  assert.equal(testRequests[0].settings.backend, 'online');
+  assert.equal(testRequests[0].settings.model, 'draft-online-model');
+  assert.equal(testRequests[0].apiKey, key.value);
+  assert.equal(discoveryRequests[0].apiKey, key.value);
+  assert.deepEqual(h.localStorage[config.SETTINGS_KEY], saved);
+  assert.deepEqual(h.sessionStorage[config.KEY_STORAGE_KEY], key);
+  assert.equal((await h.send({ type: 'test-model', settings: { ...draft, endpoint: 'https://another-provider.example/v1' } }, testUi)).ok, false);
+  assert.equal(testRequests.length, 1, 'another origin cannot borrow the saved key');
+});
+
+test('discovered effort metadata reaches save, translation and model test without persisting runtime claims', async () => {
+  let discoveries = 0, modelTests = 0;
+  const h = background({ settings: { model: 'deepseek-flash', profile: 'deepseek', thinkingEffort: 'default' },
+    connectionDiscovery: { discoverConnectionModels: async () => {
+      discoveries++;
+      return { models: ['deepseek-flash'], capabilities: { 'deepseek-flash': { supportedLevels: ['low', 'high', 'max'], defaultLevel: 'high' } } };
+    } },
+    modelTesting: { testModel: async request => {
+      modelTests++;
+      assert.deepEqual(config.reasoningRequestFields(request.settings), { thinking: { type: 'disabled' } });
+      return { text: '测试' };
+    } },
+  });
+  const initial = (await h.send({ type: 'settings' }, testUi)).settings;
+  assert.equal((await h.send({ type: 'models', settings: initial }, testUi)).ok, true);
+  const catalog = (await h.send({ type: 'model-catalog', settings: initial }, testUi)).catalog;
+  assert.deepEqual(catalog.capabilities['deepseek-flash'].supportedLevels, ['low', 'high', 'max']);
+  const saved = await h.send({ type: 'save', settings: { ...initial, thinkingEffort: 'off' } }, testUi);
+  assert.equal(saved.ok, true, saved.error);
+  assert.equal(saved.settings.thinkingEffort, 'off');
+  assert.equal(saved.settings.modelReasoning.effort.defaultLevel, 'high');
+  assert.equal(h.localStorage[config.SETTINGS_KEY].modelReasoning, undefined);
+  assert.equal((await h.send(input('sm2'))).ok, true);
+  assert.deepEqual(config.reasoningRequestFields(h.calls.at(-1).settings), { thinking: { type: 'disabled' } });
+  assert.equal((await h.send({ type: 'test-model', settings: { ...initial, thinkingEffort: 'off' }, context: 'video' }, testUi)).ok, true);
+  assert.equal(modelTests, 1);
+  assert.equal(discoveries, 1);
+  // Changing just the credential cannot reuse another credential's capability record.
+  const rejected = await h.send({ type: 'save', settings: { ...saved.settings, thinkingEffort: 'off' }, apiKey: 'different-fixture' }, testUi);
+  assert.equal(rejected.ok, false);
+  assert.equal(h.sessionStorage[config.KEY_STORAGE_KEY].value, 'unit-test-only');
+});
+
+test('incoming settings cannot forge service capabilities for saving or testing', async () => {
+  const h = background({ settings: { model: 'deepseek-flash', profile: 'deepseek', thinkingEffort: 'default' } });
+  const initial = (await h.send({ type: 'settings' }, testUi)).settings;
+  const forged = { ...initial, thinkingEffort: 'off', modelReasoning: { model: initial.model, endpoint: initial.endpoint,
+    fetchedAt: Date.now(), effort: { supportedLevels: ['low', 'high', 'max'] } } };
+  for (const type of ['save', 'test-model']) assert.equal((await h.send({ type, settings: forged }, testUi)).ok, false);
+  assert.equal(h.localStorage[config.SETTINGS_KEY].thinkingEffort, 'default');
+  assert.equal(h.calls.length, 0);
+});
+
 test('popup target language accepts the same custom values as full settings and keeps unrelated preferences', async () => {
   const h = background({ settings: { onlineConcurrency: 8, localConcurrency: 3 } });
   const reply = await h.send({ type: 'toggle', targetLanguage: '  Klingon (tlh)  ' }, popupUi);

@@ -19,7 +19,7 @@ import * as biliEmotes from '../../src/platforms/bilibili-live/emotes.ts';
 import * as auditCache from '../../src/diagnostics/bilibili-audit-cache.ts';
 import * as userFilterWire from '../../src/platforms/bilibili/user-filter-wire.ts';
 import { createBilibiliShadowRules } from '../../src/platforms/bilibili/shadow-rules.ts';
-import { USER_FILTER_NATIVE_CALLBACK, USER_FILTER_NATIVE_FUNCTIONS } from '../../src/platforms/bilibili/user-filter-contract.ts';
+import { NATIVE_RULE_CONTRACTS } from '../../src/platforms/bilibili/native-rule-compatibility.ts';
 import * as i18nWire from '../../src/i18n/wire.ts';
 import * as i18nText from '../../src/i18n/text.ts';
 import * as translation from '../../src/translation/index.ts';
@@ -43,7 +43,7 @@ import { NativeSupplyWatch } from '../../src/diagnostics/native-supply-watch.ts'
 import * as experimentWatch from '../../src/diagnostics/bilibili-experiment-watch.ts';
 import * as userFilterSimulation from '../../src/diagnostics/user-filter-simulation.ts';
 import * as displayPlanSession from '../../src/diagnostics/display-plan-session.ts';
-import { attachBilibiliNative, resolveBilibiliBinding } from '../../src/platforms/bilibili/video.ts';
+import { attachBilibiliNative, resolveBilibiliBinding, REVIEWED_DANMAKU_BUILDS } from '../../src/platforms/bilibili/video.ts';
 
 const BUILD_ID = 'owned-chain-build';
 const MODEL = { id: 'registered-hy-1-8b', name: 'Hy-MT2-1.8B-Q4', files: ['Hy-MT2-1.8B-Q4.gguf'],
@@ -58,16 +58,10 @@ const compiledWatch = ts.transpileModule(readFileSync(new URL('../../entrypoints
   { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
 const clone = value => value === undefined ? undefined : structuredClone(value);
 const nativeFunction = source => new Function(`return (${source})`)();
-const nativeBlockMap = {
-  blockScroll: [1], blockTopBottom: [5, 4],
-  blockColor: [2012, 2015, 2007, 2008, 2009, 2013, 2002, 2003, 2000, 2001, 2004, 5, 4, 1, 6],
-  blockSpecial: [2005, 2012, 2015, 2002, 2003, 2000, 2001, 2004, 2006, 2013, 2008, 2009, 2011, 2007, 2014, 2010, 3000, 2016, 2017, 2018, 2020],
-  preventShade: [4],
-};
 
-function fixture({ planned = false, backend = 'local' } = {}) {
-  const h = { messages: [], responses: [], pageMessages: [], controls: [], fetches: [], prepared: [], earlyPrepared: [],
-    openTabs: new Map([[41, VIDEO_URL]]), currentTab: 41, currentDocument: 'document-41',
+function fixture({ planned = false, backend = 'local', url = VIDEO_URL } = {}) {
+  const h = { messages: [], responses: [], pageMessages: [], controls: [], fetches: [], fetchSignals: [], prepared: [], earlyPrepared: [],
+    videoUrl: url, openTabs: new Map([[41, url]]), currentTab: 41, currentDocument: 'document-41',
     session: clone(SESSION), local: new Map(), ephemeral: new Map(), epoch: 3 };
   h.settings = { ...config.DEFAULT_SETTINGS, enabled: planned, bilibiliOwnedRelease: true,
     backend, localModelId: MODEL.id, model: MODEL.id, sourceLanguage: 'ja', targetLanguage: 'zh',
@@ -113,7 +107,7 @@ function fixture({ planned = false, backend = 'local' } = {}) {
       } },
   };
   h.sender = (id = h.currentTab, documentId = h.currentDocument) => ({ id: h.browser.runtime.id,
-    tab: { id, url: h.openTabs.get(id) ?? VIDEO_URL }, frameId: 0, documentId, url: VIDEO_URL });
+    tab: { id, url: h.openTabs.get(id) ?? h.videoUrl }, frameId: 0, documentId, url: h.videoUrl });
   h.send = (message, sender = h.sender()) => {
     const override = h.rpcOverride?.(message, sender);
     if (override !== undefined) return Promise.resolve(override);
@@ -148,6 +142,7 @@ function fixture({ planned = false, backend = 'local' } = {}) {
     await gate?.beforeSend(attemptId, init.signal);
     gate?.sent?.(attemptId);
     h.fetches.push(JSON.parse(init.body)); h.modelState.inferenceCalls++;
+    h.fetchSignals.push(init.signal);
     if (h.localReplyGate) await h.localReplyGate;
     if (h.failLocalFetch) throw new Error('fixture-local-interface-unavailable');
     return new Response(JSON.stringify({ choices: [{ message: { content: h.replyText ?? '你好世界' }, finish_reason: 'stop' }],
@@ -312,6 +307,8 @@ test('a new document in the same tab cleans the stopped grant before rebinding',
 
 function installNativePipeline(h) {
   h.mono = 10_000;
+  const nativeRuleContract = h.nativeRuleContract ?? NATIVE_RULE_CONTRACTS[0];
+  const ruleBlockMap = clone(nativeRuleContract.blockMap);
   const playbackCalls = { pause: 0, play: 0, seek: 0 };
   const pool = [{ dmid: '1', text: 'こんにちは世界', stime: 124.5, mode: 1, rawMode: 1,
     pool: 0, uhash: 'original-author', size: 25, color: 16777215, weight: 20 },
@@ -370,7 +367,7 @@ function installNativePipeline(h) {
         if (!history?.modeStack?.length) continue;
         const state = blockStore.dmSettingStore.state;
         const lastMode = history.modeStack.at(-1).mode;
-        if (nativeBlockMap.blockTopBottom.includes(lastMode) &&
+        if (ruleBlockMap.blockTopBottom.includes(lastMode) &&
             history.blockTopBottom !== !state.typeTopBottom) {
           history.index += state.typeTopBottom ? 1 : -1;
           const projected = history.modeStack[history.index];
@@ -384,26 +381,28 @@ function installNativePipeline(h) {
         }
       }
     } }, clear() { manager.cDmlist.length = 0; },
-    getMetadata: () => ({ version: '1.1.24', lastCompiled: '2026-09-10T15:18:49+08:00' }) };
-  const player = { getManifest: () => ({ aid: '1', cid: '2', bvid: 'BV1234567890', p: 1 }),
+    getMetadata: () => h.nativeMetadata ?? ({ version: '1.1.24', lastCompiled: '2026-09-10T15:18:49+08:00' }) };
+  h.nativeManifest = { aid: '1', cid: '2', bvid: 'BV1234567890', p: 1 };
+  const player = { getManifest: () => clone(h.nativeManifest),
     danmaku: { getDanmakuX: () => danmaku }, mediaElement: () => video };
-  if (h.nativeModeStack) {
+  if (h.nativeModeStack || h.nativeRuleContract) {
     const dmSettingStore = { state: { status: true, dmarea: 50, dmdensity: 1,
       typeScroll: true, typeTopBottom: true, typeColor: h.nativeTypeColor ?? true, typeSpecial: true,
       seniorMode: false, preventshade: false } };
-    blockStore = { blockList: [], reportFilter: [], dmMap: new Map([['1', h.nativeModeStack]]),
-      DmBlockMap: nativeBlockMap, dmSettingStore,
-      aiJudge: nativeFunction('function(n,r){return this.totalFiltleredDm+=1,Math.abs(n.weight)<r&&(this.aiCloudBlockCount+=1,!0)}'),
-      reportFilterReg: nativeFunction('function(n){var r;return null!=(r=this.reportFilter)&&!!r.length&&this.reportFilter.some(function(r){if(new RegExp(r).test(n.text))return!0})}'),
+    blockStore = { blockList: h.nativeBlockList ?? [], reportFilter: [],
+      dmMap: new Map(h.nativeModeStack ? [['1', h.nativeModeStack]] : []),
+      DmBlockMap: ruleBlockMap, dmSettingStore,
+      aiJudge: nativeFunction(nativeRuleContract.aiJudge),
+      reportFilterReg: nativeFunction(nativeRuleContract.reportFilterReg),
     };
-    for (const [name, source] of Object.entries(USER_FILTER_NATIVE_FUNCTIONS))
+    for (const [name, source] of Object.entries(nativeRuleContract.methods))
       blockStore[name] = nativeFunction(source);
     manager.config.scene = { isMini: false };
-    manager.config.fn = { filter: nativeFunction(USER_FILTER_NATIVE_CALLBACK) };
+    manager.config.fn = { filter: nativeFunction(nativeRuleContract.callback) };
     player.rootStore = { rootPlayer: player, danmakuStore: { danmakuX: danmaku },
       blockStore, dmSettingStore };
   }
-  const binding = resolveBilibiliBinding(player, VIDEO_URL);
+  const binding = resolveBilibiliBinding(player, h.videoUrl);
   assert.ok(binding);
   const rules = blockStore ? createBilibiliShadowRules({ player, danmaku,
     documentScope: 'owned-chain-native-rules', now: () => h.mono,
@@ -413,7 +412,7 @@ function installNativePipeline(h) {
       : { state: 'retain', reason: 'allowed' }, ...h.rulesSnapshot }) };
   h.nativeRules = rules;
   const handlers = new Map(), docHandlers = new Map();
-  const location = { href: VIDEO_URL, origin: 'https://www.bilibili.com' };
+  const location = { href: h.videoUrl, origin: 'https://www.bilibili.com' };
   const window = { addEventListener: (kind, callback) => handlers.set(kind, callback),
     removeEventListener() {}, postMessage(data) {
       if (data.from === 'content') { contentMessages.push(data); h.attachment?.onMessage({ data }); }
@@ -461,21 +460,30 @@ function installNativePipeline(h) {
     structuredClone, setTimeout, clearTimeout, setInterval, clearInterval,
     performance: { now: () => h.mono }, location, window, document,
     require: key => { assert.ok(key in dependencies, `Unexpected content import ${key}`); return dependencies[key]; } });
-  h.attachment = attachBilibiliNative(binding, { now: () => h.mono, epochNow: () => Date.now(),
+  const attach = current => attachBilibiliNative(current, { now: () => h.mono, epochNow: () => Date.now(),
     shadowRules: rules, post: message => {
       nativeMessages.push(message);
       handlers.get('message')?.({ source: window, origin: location.origin, data: message });
     } });
+  h.attachment = attach(binding);
   exports.default.main({ setInterval: callback => { h.contentTick = callback; return 1; },
     onInvalidated: () => {} });
   h.native = { pool, timeline, setting, video, videoHandlers, manager, document, docHandlers,
     filtered, models, nativeMessages, contentMessages, playbackCalls,
+    rebind(manifest) {
+      h.attachment.stop();
+      h.nativeManifest = clone(manifest);
+      const next = resolveBilibiliBinding(player, location.href);
+      assert.ok(next, 'new manifest must bind to the current URL');
+      h.attachment = attach(next);
+      return h.attachment;
+    },
     stop: () => h.attachment.stop() };
   return h.native;
 }
 
-async function openPlannedPipeline(t, settingsPatch = {}, setup = () => {}) {
-  const h = fixture({ planned: true });
+async function openPlannedPipeline(t, settingsPatch = {}, setup = () => {}, url = VIDEO_URL) {
+  const h = fixture({ planned: true, url });
   h.settings = { ...h.settings, ...settingsPatch };
   h.local.set(config.SETTINGS_KEY, clone(h.settings));
   h.context.settings = h.settings;
@@ -490,7 +498,7 @@ async function openPlannedPipeline(t, settingsPatch = {}, setup = () => {}) {
     if (h.onlineTransport) return h.onlineTransport(...args);
     externalFetches++; throw Error('external fetch forbidden');
   };
-  Object.defineProperty(globalThis, 'location', { configurable: true, value: { href: VIDEO_URL } });
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: { href: h.videoUrl } });
   t.after(() => {
     h.native?.stop();
     globalThis.fetch = previousFetch;
@@ -541,8 +549,9 @@ async function configureHybridFixture(h, maxChars = 1000) {
   };
 }
 
-for (const lane of ['local', 'online']) test(`hybrid ${lane} crosses watch, shared engine and MAIN without playback writes`, async t => {
+for (const metadata of REVIEWED_DANMAKU_BUILDS) for (const lane of ['local', 'online']) test(`native ${metadata.version} hybrid ${lane} crosses watch, shared engine and MAIN without playback writes`, async t => {
   const { h, native, externalFetches } = await openPlannedPipeline(t, {}, async h => {
+    h.nativeMetadata = metadata;
     await configureHybridFixture(h, lane === 'local' ? 1000 : 1);
   });
   await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply));
@@ -558,6 +567,100 @@ for (const lane of ['local', 'online']) test(`hybrid ${lane} crosses watch, shar
   assert.equal(native.models[0]?.text, lane === 'local' ? '你好世界' : '在线你好世界');
   assert.equal(native.filtered[0]?.text, 'こんにちは世界');
   assert.equal(native.filtered[0]?.author, 'original-author');
+  assert.equal(externalFetches(), 0);
+});
+
+for (const callbackIndex of [0, 1]) for (const lane of ['local', 'online'])
+test(`1.1.21 festival rule profile ${callbackIndex} filters original text and completes hybrid ${lane}`, async t => {
+  const profiles = NATIVE_RULE_CONTRACTS.filter(contract => contract.id.startsWith('core-61de1491-'));
+  assert.equal(profiles.length, 2, 'both exact observed callback spellings are reviewed');
+  const { h, native, externalFetches } = await openPlannedPipeline(t, {}, async fixture => {
+    fixture.nativeMetadata = REVIEWED_DANMAKU_BUILDS.find(build => build.version === '1.1.21');
+    fixture.nativeRuleContract = profiles[callbackIndex];
+    fixture.nativeBlockList = [{ type: 0, filter: 'blocked', opened: true }];
+    fixture.nativeSecondRow = { text: 'blocked語', stime: 124.6 };
+    await configureHybridFixture(fixture, lane === 'local' ? 1000 : 1);
+  }, 'https://www.bilibili.com/festival/jzj2023?bvid=BV1234567890');
+  const originalTexts = native.timeline.map(row => row.text);
+  const snapshot = h.nativeRules.read();
+  assert.equal(snapshot.known, true, snapshot.reason ?? '');
+  assert.equal(snapshot.match(native.timeline[0]).state, 'retain');
+  assert.equal(snapshot.match(native.timeline[1]).state, 'exclude');
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply));
+  const prepared = native.contentMessages.find(row => row.type === 'prepared' && row.plannedSupply);
+  assert.deepEqual(prepared?.items.map(row => row.sourceId), ['1']);
+  const deadline = prepared.items[0].deadlineAtEpochMs;
+  const predictionEpoch = ownedUpdates(native).at(-1).predictionEpoch;
+  native.manager.containerSize = { width: 1280, height: 720 };
+  await tickPlanned(h);
+  assert.equal(ownedUpdates(native).at(-1).predictionEpoch, predictionEpoch);
+  assert.equal(ownedUpdates(native).at(-1).items.find(row => row.sourceId === '1').deadlineAtEpochMs, deadline);
+  assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 0 });
+  native.video.currentTime = 124; h.mono += 4000;
+  native.manager.fetchAndInitDm(124);
+  native.manager.fetchAndInitDm(124);
+  assert.deepEqual(native.models.map(model => model.text), [lane === 'local' ? '你好世界' : '在线你好世界']);
+  assert.equal(native.filtered[0].text, originalTexts[0]);
+  assert.equal(native.filtered[0].author, 'original-author');
+  assert.equal(native.models[0].textData.uhash, 'original-author');
+  assert.deepEqual(native.timeline.map(row => row.text), originalTexts);
+  assert.deepEqual(native.pool.map(row => row.text), originalTexts);
+  assert.equal(h.fetches.length, lane === 'local' ? 1 : 0);
+  assert.equal(h.onlineFetches.length, lane === 'online' ? 1 : 0);
+  assert.equal(externalFetches(), 0);
+});
+
+test('festival manifest switch at one URL retires the old in-flight resource and translates the new one', async t => {
+  let releaseOld;
+  const oldReply = new Promise(resolve => { releaseOld = resolve; });
+  const festivalUrl = 'https://www.bilibili.com/festival/jzj2023?bvid=BV1234567890&aid=1';
+  const { h, native, externalFetches } = await openPlannedPipeline(t, {}, fixture => {
+    fixture.localReplyGate = oldReply;
+  }, festivalUrl);
+  t.after(() => releaseOld());
+  await tickPlanned(h, () => h.fetches.length === 1);
+  const oldRequest = h.messages.find(row => row.message.type === 'translate' && row.message.planning)?.message;
+  const oldSession = oldRequest?.session;
+  assert.equal(oldSession?.resourceId, 'av1:cid2');
+  assert.equal(oldSession.urlResourceId, 'BV1234567890:p1');
+  assert.equal(native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply), false);
+
+  h.localReplyGate = undefined;
+  const previousAttachment = h.attachment;
+  const nextAttachment = native.rebind({ aid: '3', cid: '9', bvid: 'BV9876543210', p: 2 });
+  assert.notEqual(nextAttachment.session, previousAttachment.session);
+  assert.equal(h.videoUrl, festivalUrl);
+  assert.equal(h.currentDocument, 'document-41');
+  assert.equal(nextAttachment.identity.resourceId, 'av3:cid9');
+  assert.equal(nextAttachment.identity.urlResourceId, oldSession.urlResourceId);
+  await tickPlanned(h, () => h.fetches.length === 2 &&
+    native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply));
+  const newRequest = h.messages.filter(row => row.message.type === 'translate' && row.message.planning).at(-1)?.message;
+  assert.equal(newRequest?.session.resourceId, 'av3:cid9');
+  assert.equal(newRequest.session.urlResourceId, oldSession.urlResourceId);
+  assert.equal(newRequest.session.sessionId, oldSession.sessionId);
+  assert.ok(newRequest.session.generation > oldSession.generation,
+    'the watch scheduler rotates its generation when a native resource is replaced');
+  assert.notEqual(newRequest.requestId, oldRequest.requestId);
+  assert.notEqual(resource.cacheResource(newRequest.session), resource.cacheResource(oldSession));
+  assert.deepEqual(newRequest.items.map(item => item.text), oldRequest.items.map(item => item.text));
+  assert.equal(h.fetches.length, 2, 'the same source text cannot reuse the old resource computation');
+  assert.equal(h.fetchSignals[0].aborted, true, 'the old transport receives cancellation');
+  assert.equal(h.fetchSignals[1].aborted, false);
+  assert.ok(h.messages.some(row => row.message.type === 'cancel' && row.message.requestId === oldRequest.requestId));
+  assert.ok(h.messages.some(row => row.message.type === 'session-open' &&
+    resource.sameSession(row.message.session, newRequest.session)));
+  const newPrepared = native.contentMessages.filter(row => row.type === 'prepared' && row.plannedSupply);
+  assert.equal(newPrepared.length, 1);
+  assert.equal(newPrepared[0].resourceId, 'av3:cid9');
+  releaseOld();
+  await tickPlanned(h);
+  assert.deepEqual(native.contentMessages.filter(row => row.type === 'prepared' && row.plannedSupply), newPrepared,
+    'the late old response cannot prepare the replacement attachment');
+  assert.equal(h.pageMessages.filter(row => row.message.type === 'video-translation-result' &&
+    row.message.resourceId === oldSession.resourceId).length, 0);
+  assert.equal(h.responses.filter(row => row.type === 'translate')[0]?.response.ok, false);
+  assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 0 });
   assert.equal(externalFetches(), 0);
 });
 
@@ -702,6 +805,96 @@ test('enabled owned plan crosses ordinary translate and per-item prepared into M
     ['prepare', 'start', 'translate'].includes(row.message.action)), false, 'no legacy permit or budget');
 });
 
+for (const hybrid of [false, true]) test(`${hybrid ? 'hybrid local' : 'ordinary local'} fullscreen round-trip preserves pending and ready planned delivery`, async t => {
+  const clock = fixedEpochClock(t);
+  let releaseReply;
+  const replyGate = new Promise(resolve => { releaseReply = resolve; });
+  const { h, native, externalFetches } = await openPlannedPipeline(t, {}, async fixture => {
+    if (hybrid) await configureHybridFixture(fixture);
+    fixture.localReplyGate = replyGate;
+  });
+  t.after(() => releaseReply());
+  await tickPlanned(h, () => h.fetches.length === 1);
+  const request = h.messages.find(row => row.message.type === 'translate' && row.message.planning)?.message;
+  assert.deepEqual(request?.items.map(row => row.sourceId), ['1']);
+  const deadline = request.items[0].deadlineAtEpochMs;
+  const generation = ownedUpdates(native).at(-1).predictionEpoch;
+  const epoch = h.attachment.epoch;
+  assert.ok(deadline > clock.now());
+  assert.equal(h.scheduler.getStats().inflight, 1);
+  assert.equal(h.attachment.nativeSupply.summary().ready, 0);
+
+  for (const size of [{ width: 1920, height: 1080 }, { width: 500, height: 280 },
+    { width: 1280, height: 720 }]) {
+    const count = ownedUpdates(native).length;
+    Object.assign(native.manager.containerSize, size);
+    await tickPlanned(h, () => ownedUpdates(native).length > count);
+    const update = ownedUpdates(native).at(-1);
+    assert.equal(update.known, true);
+    assert.equal(update.predictionEpoch, generation);
+    assert.equal(update.epoch, epoch);
+    assert.equal(update.items[0].deadlineAtEpochMs, deadline);
+    assert.equal(h.scheduler.getStats().inflight, 1, 'resize cannot cancel an issued request');
+    assert.equal(h.attachment.nativeSupply.summary().ready, 0);
+    assert.equal(h.messages.filter(row => row.message.type === 'translate' && row.message.planning).length, 1);
+  }
+
+  releaseReply();
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply));
+  const prepared = native.contentMessages.find(row => row.type === 'prepared' && row.plannedSupply);
+  assert.equal(prepared?.items[0].deadlineAtEpochMs, deadline);
+  assert.equal(prepared.items[0].predictionEpoch, generation);
+  assert.equal(h.attachment.nativeSupply.summary().ready, 1);
+  assert.equal(h.scheduler.getStats().translated, 1);
+  for (const size of [{ width: 500, height: 280 }, { width: 1920, height: 1080 }]) {
+    const count = ownedUpdates(native).length;
+    Object.assign(native.manager.containerSize, size);
+    await tickPlanned(h, () => ownedUpdates(native).length > count);
+    assert.equal(ownedUpdates(native).at(-1).predictionEpoch, generation);
+    assert.equal(ownedUpdates(native).at(-1).items[0].deadlineAtEpochMs, deadline);
+    assert.equal(h.attachment.nativeSupply.summary().ready, 1, 'ready text survives the fullscreen round-trip');
+  }
+  assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 0 });
+  native.video.currentTime = 124; h.mono += 4000;
+  native.manager.fetchAndInitDm(124);
+  assert.equal(native.models[0]?.text, '你好世界');
+  native.models[0].textData.on = false;
+  native.manager.fetchAndInitDm(124);
+  assert.equal(native.models.length, 1, 'the native event is consumed once even after its on state is released');
+  assert.equal(h.attachment.nativeSupply.report().counts.adopted, 1);
+  assert.equal(h.messages.filter(row => row.message.type === 'translate' && row.message.planning).length, 1);
+  assert.equal(h.fetches.length, 1);
+  if (hybrid) assert.equal(h.onlineFetches.length, 0);
+  assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 1 }, 'the seek is only fixture setup');
+  assert.equal(externalFetches(), 0);
+});
+
+for (const [route, url] of [
+  ['festival', 'https://www.bilibili.com/festival/newyear?bvid=BV1234567890'],
+  ['list', 'https://www.bilibili.com/list/12345?bvid=BV1234567890&oid=1'],
+  ['watchlater', 'https://www.bilibili.com/list/watchlater?bvid=BV1234567890&oid=1'],
+  ['medialist', 'https://www.bilibili.com/medialist/play/ml12345?bvid=BV1234567890&oid=1'],
+  ['medialist watchlater', 'https://www.bilibili.com/medialist/play/watchlater?bvid=BV1234567890&oid=1'],
+]) test(`${route} URL crosses background, watch, and MAIN planned adoption`, async t => {
+  const { h, native, externalFetches } = await openPlannedPipeline(t, {}, () => {}, url);
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply));
+  const planned = h.messages.find(row => row.message.type === 'translate' && row.message.planning)?.message;
+  assert.deepEqual(planned?.items.map(row => row.sourceId), ['1']);
+  assert.equal(h.session.urlResourceId, SESSION.urlResourceId);
+  assert.equal(h.attachment.identity.urlResourceId, SESSION.urlResourceId);
+  assert.equal(native.contentMessages.find(row => row.type === 'prepared' && row.plannedSupply)?.items[0].text,
+    '你好世界');
+  assert.equal(h.fetches.length, 1);
+  assert.equal(h.attachment.nativeSupply.summary().ready, 1);
+  native.video.currentTime = 124; h.mono += 4000;
+  native.manager.fetchAndInitDm(124);
+  assert.equal(native.models[0]?.text, '你好世界');
+  assert.equal(native.filtered[0]?.text, 'こんにちは世界');
+  assert.equal(h.attachment.nativeSupply.report().counts.adopted, 1);
+  assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 1 }, 'the seek is only fixture setup');
+  assert.equal(externalFetches(), 0);
+});
+
 for (const hybrid of [false, true]) test(`${hybrid ? 'hybrid local' : 'ordinary local'} repeated and long pauses preserve a prepared owned row through resume and native adoption`, async t => {
   const clock = fixedEpochClock(t);
   const { h, native, externalFetches } = await openPlannedPipeline(t, {}, async fixture => {
@@ -762,7 +955,143 @@ for (const hybrid of [false, true]) test(`${hybrid ? 'hybrid local' : 'ordinary 
   assert.equal(externalFetches(), 0);
 });
 
-test('paused background heartbeat loss keeps the source pool until the same MAIN session resumes', async t => {
+for (const lane of ['ordinary local', 'hybrid local', 'hybrid online']) test(`${lane} cold pause prepares only the frozen five-second window and adopts after a long hold`, async t => {
+  const clock = fixedEpochClock(t);
+  const { h, native, externalFetches } = await openPlannedPipeline(t, {}, async fixture => {
+    if (lane !== 'ordinary local') await configureHybridFixture(fixture, lane === 'hybrid online' ? 1 : 1000);
+    fixture.nearRows = [[1, 120.5], [2, 126]];
+  });
+  native.video.paused = true;
+  assert.equal(h.fetches.length, 0, 'the pause precedes the first owned update');
+  await tickPlanned(h, () => h.attachment.nativeSupply.summary().ready === 2);
+
+  const update = ownedUpdates(native).at(-1);
+  assert.equal(update?.known, true);
+  assert.equal(update.suspended, true);
+  assert.equal(h.progress.nativeSupplyView.state, 'paused');
+  assert.match(h.progress.nativeSupplyView.status, /暂停中，仅准备当前五秒内译文/);
+  assert.deepEqual(update.items.map(row => row.sourceId), ['2', '1'],
+    'the near row and the later row fit the frozen horizon; the 126s row does not');
+  assert.ok(update.items.every(row => Number.isFinite(row.deadlineAtEpochMs) &&
+    row.deadlineAtEpochMs > update.sampledAtEpochMs));
+  assert.deepEqual(h.messages.filter(row => row.message.type === 'translate' && row.message.planning)
+    .flatMap(row => row.message.items.map(item => item.sourceId)).sort(), ['1', '2']);
+  const localFetches = lane === 'hybrid online' ? 0 : 2;
+  assert.equal(h.fetches.length, localFetches, 'only the configured backend handles selected text');
+  assert.equal(h.scheduler.getStats().messages, 2);
+  assert.equal(h.attachment.nativeSupply.summary().ready, 2);
+  assert.equal(native.models.length, 0, 'native rendering still waits for formal fetch');
+  if (lane !== 'ordinary local') assert.equal(h.onlineFetches.flatMap(body =>
+    JSON.parse(body.messages[1].content).items).length, lane === 'hybrid online' ? 2 : 0,
+  'manual hybrid capacity routes exactly the selected items');
+
+  const generation = update.predictionEpoch;
+  clock.advance(90_000);
+  await tickPlanned(h, () => ownedUpdates(native).at(-1)?.sampledAtEpochMs === clock.now());
+  assert.equal(ownedUpdates(native).at(-1).predictionEpoch, generation);
+  assert.deepEqual(ownedUpdates(native).at(-1).items.map(row => row.sourceId), ['2', '1']);
+  assert.equal(h.attachment.nativeSupply.summary().ready, 2);
+  native.video.paused = false;
+  native.videoHandlers.get('playing')?.();
+  await tickPlanned(h, () => ownedUpdates(native).at(-1)?.suspended === false);
+  assert.equal(ownedUpdates(native).at(-1).predictionEpoch, generation);
+  assert.equal(h.fetches.length, localFetches, 'resuming does not prepare an already sent row again');
+  assert.equal(h.messages.filter(row => row.message.type === 'translate' && row.message.planning)
+    .flatMap(row => row.message.items).length, 2);
+  if (lane === 'hybrid online') assert.equal(h.onlineFetches.flatMap(body =>
+    JSON.parse(body.messages[1].content).items).length, 2, 'resume does not send another online item');
+
+  native.video.currentTime = 120;
+  native.manager.fetchAndInitDm(120);
+  native.video.currentTime = 124;
+  native.manager.fetchAndInitDm(124);
+  assert.deepEqual(native.filtered.map(row => row.text), ['遠方の本文0', 'こんにちは世界']);
+  assert.deepEqual(native.models.map(row => row.text), Array(2).fill(
+    lane === 'hybrid online' ? '在线你好世界' : '你好世界'));
+  assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 2 });
+  assert.equal(externalFetches(), 0);
+});
+
+for (const hybrid of [false, true]) test(`${hybrid ? 'hybrid local' : 'ordinary local'} cold-paused near row cannot adopt a reply after early resume`, async t => {
+  const clock = fixedEpochClock(t);
+  let releaseReply;
+  const replyGate = new Promise(resolve => { releaseReply = resolve; });
+  const { h, native, externalFetches } = await openPlannedPipeline(t, {}, async fixture => {
+    if (hybrid) await configureHybridFixture(fixture);
+    fixture.nativeFirstRow = { stime: 120.5 };
+    fixture.localReplyGate = replyGate;
+  });
+  t.after(() => releaseReply());
+  native.video.paused = true;
+  await tickPlanned(h, () => h.fetches.length === 1);
+  const request = h.messages.find(row => row.message.type === 'translate' && row.message.planning)?.message;
+  assert.deepEqual(request?.items.map(row => row.sourceId), ['1']);
+  assert.ok(request.items[0].deadlineAtEpochMs > clock.now(), 'paused preparation receives a finite deadline');
+  assert.equal(native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply), false);
+
+  clock.advance(500);
+  native.video.paused = false;
+  native.videoHandlers.get('playing')?.();
+  await tickPlanned(h, () => ownedUpdates(native).at(-1)?.suspended === false);
+  assert.equal(ownedUpdates(native).at(-1).items.some(row => row.sourceId === '1'), false,
+    'the near row has no preparation time left after early resume');
+  releaseReply();
+  await tickPlanned(h);
+  assert.equal(native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply), false);
+  assert.equal(h.attachment.nativeSupply.summary().ready, 0);
+  assert.equal(h.fetches.length, 1, 'an attempted native row is never retried');
+  if (hybrid) assert.equal(h.onlineFetches.length, 0);
+  native.manager.fetchAndInitDm(120);
+  assert.equal(native.models.length, 0, 'an unprepared owned row stays suppressed');
+  assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 0 });
+  assert.equal(externalFetches(), 0);
+});
+
+for (const hybrid of [false, true]) test(`${hybrid ? 'hybrid local' : 'ordinary local'} refreshed paused horizon cannot extend an issued near-row request`, async t => {
+  const clock = fixedEpochClock(t);
+  let releaseReply;
+  const replyGate = new Promise(resolve => { releaseReply = resolve; });
+  const { h, native, externalFetches } = await openPlannedPipeline(t, {}, async fixture => {
+    if (hybrid) await configureHybridFixture(fixture);
+    fixture.nativeFirstRow = { stime: 120.5 };
+    fixture.localReplyGate = replyGate;
+  });
+  t.after(() => releaseReply());
+  native.video.paused = true;
+  await tickPlanned(h, () => h.fetches.length === 1);
+  const request = h.messages.find(row => row.message.type === 'translate' && row.message.planning)?.message;
+  assert.deepEqual(request?.items.map(row => row.sourceId), ['1']);
+  const issuedDeadline = request.items[0].deadlineAtEpochMs;
+  const generation = ownedUpdates(native).at(-1).predictionEpoch;
+  assert.ok(issuedDeadline > clock.now());
+
+  clock.advance(issuedDeadline - clock.now() + 1000);
+  await tickPlanned(h, () => ownedUpdates(native).at(-1)?.sampledAtEpochMs === clock.now());
+  const refreshed = ownedUpdates(native).at(-1);
+  assert.equal(refreshed.predictionEpoch, generation);
+  assert.equal(refreshed.suspended, true);
+  assert.ok(refreshed.items[0].deadlineAtEpochMs > clock.now(),
+    'the paused forecast may still advertise a finite window for current demand');
+  releaseReply();
+  await tickPlanned(h);
+  assert.equal(native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply), false,
+    'a refreshed forecast cannot revive the already issued request');
+  assert.equal(h.attachment.nativeSupply.summary().ready, 0);
+  assert.equal(h.fetches.length, 1);
+
+  native.video.paused = false;
+  native.videoHandlers.get('playing')?.();
+  await tickPlanned(h, () => ownedUpdates(native).at(-1)?.suspended === false);
+  assert.equal(h.messages.filter(row => row.message.type === 'translate' && row.message.planning).length, 1,
+    'the attempted event cannot be retried on resume');
+  native.manager.fetchAndInitDm(120);
+  assert.equal(native.models.length, 0);
+  if (hybrid) assert.equal(h.onlineFetches.length, 0);
+  assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 0 });
+  assert.equal(externalFetches(), 0);
+});
+
+test('paused background heartbeat loss keeps the source pool and re-prepares only the current window', async t => {
   const clock = fixedEpochClock(t);
   const { h, native, externalFetches } = await openPlannedPipeline(t);
   await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared' && row.plannedSupply));
@@ -788,18 +1117,25 @@ test('paused background heartbeat loss keeps the source pool until the same MAIN
   native.docHandlers.get('visibilitychange')();
   const resumeUpdates = ownedUpdates(native).length;
   await tickPlanned(h, () => ownedUpdates(native).length > resumeUpdates && ownedUpdates(native).at(-1)?.suspended === true &&
-    h.progress.nativeSupplyView.status.includes('等待播放'));
+    h.progress.nativeSupplyView.status.includes('暂停中，仅准备当前五秒内译文'));
   assert.equal(h.attachment.session, initialSession);
   assert.equal(native.nativeMessages.filter(row => row.type === 'sources').length, sourceChunks,
     'the unchanged MAIN publisher need not resend the full pool');
   assert.equal(h.scheduler.getStats().candidates, native.pool.length);
-  assert.equal(h.messages.filter(row => row.message.type === 'translate' && row.message.planning).length,
-    requests, 'background recovery while paused does not create another translation request');
+  const planned = h.messages.filter(row => row.message.type === 'translate' && row.message.planning);
+  assert.equal(planned.length, requests + 1,
+    're-established demand may prepare once while the same video remains paused');
+  assert.deepEqual(planned.at(-1).message.items.map(row => row.sourceId), ['1'],
+    'background recovery cannot expand the frozen preparation window');
+  await tickPlanned(h, () => h.attachment.nativeSupply.summary().ready === 1);
+  assert.equal(h.fetches.length, 1, 're-established demand uses the existing translation cache');
   native.video.paused = false;
   native.videoHandlers.get('playing')?.();
   await tickPlanned(h, () => ownedUpdates(native).at(-1)?.items.some(row => row.sourceId === '1') &&
     h.scheduler.getStats().messages === 1);
   assert.equal(h.scheduler.getStats().messages, 1, 'new selection rejoins the retained source without a pool resend');
+  assert.equal(h.messages.filter(row => row.message.type === 'translate' && row.message.planning).length,
+    requests + 1, 'resume does not resend the recovered demand');
   assert.equal(native.nativeMessages.filter(row => row.type === 'sources').length, sourceChunks);
   assert.deepEqual(native.playbackCalls, { pause: 0, play: 0, seek: 0 });
   assert.equal(externalFetches(), 0);

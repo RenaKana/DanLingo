@@ -1,5 +1,6 @@
 import type { PlatformResource, ResourceSession } from './types.ts';
 import { watchIdFromUrl } from './messages.ts';
+import { parseBilibiliVideoUrl } from './bilibili-video-url.ts';
 
 /** URL candidates; an adapter must additionally verify actual live playback, not replay. */
 export function resourceFromUrl(value: string): PlatformResource | null {
@@ -8,9 +9,8 @@ export function resourceFromUrl(value: string): PlatformResource | null {
   try {
     const url = new URL(value);
     if (url.origin === 'https://www.bilibili.com') {
-      const id = /^\/video\/(BV[0-9A-Za-z]{10}|av[1-9]\d*)\/?$/.exec(url.pathname)?.[1];
-      const page = url.searchParams.get('p') ?? '1';
-      if (id && /^[1-9]\d{0,4}$/.test(page)) return { platform: 'bilibili', scenario: 'video', resourceId: `${id}:p${page}` };
+      const video = parseBilibiliVideoUrl(value);
+      if (video) return { platform: 'bilibili', scenario: 'video', resourceId: video.urlResourceId };
     }
     if (url.origin === 'https://live.bilibili.com') {
       if (url.username || url.password) return null;
@@ -38,9 +38,10 @@ export function sameSession(a: ResourceSession | null | undefined, b: ResourceSe
 export function matchesResourceUrl(resource: PlatformResource | null | undefined, value: string): boolean {
   const candidate = resourceFromUrl(value);
   if (!resource || !candidate || resource.platform !== candidate.platform || resource.scenario !== candidate.scenario) return false;
-  return resource.platform === 'bilibili'
-    ? validBilibiliResource(resource) && resource.urlResourceId === candidate.resourceId
-    : sameResource(resource, candidate);
+  if (resource.platform !== 'bilibili') return sameResource(resource, candidate);
+  if (!validBilibiliResource(resource) || resource.urlResourceId !== candidate.resourceId) return false;
+  const video = resource.scenario === 'video' ? parseBilibiliVideoUrl(value) : null;
+  return video?.playbackIdentity === 'manifest' || !video?.aid || resource.resourceId.startsWith(`av${video.aid}:cid`);
 }
 export function resourceOrigin(resource: Pick<PlatformResource, 'platform' | 'scenario'>): string {
   if (resource.platform === 'bilibili') return resource.scenario === 'live' ? 'https://live.bilibili.com' : 'https://www.bilibili.com';

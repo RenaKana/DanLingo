@@ -196,7 +196,7 @@ test('planned online cached and fresh output cannot lose protected placeholders'
   assert.equal(h.prepared.length, 0);
 });
 
-test('owned pause retains prepared results, holds new subscriptions, and does not resend on resume', async t => {
+test('owned pause fills queued subscriptions, retains results, and does not resend on resume', async t => {
   const h = plannedHarness({ videoBatchSize: 1, concurrency: 1 });
   t.after(() => h.scheduler.dispose());
   const a = source('a'), b = source('b');
@@ -208,33 +208,74 @@ test('owned pause retains prepared results, holds new subscriptions, and does no
   h.scheduler.snapshot('video', 'session', { ...clock(), paused: true }, undefined, 0);
   h.scheduler.updateShadow(update(2, [a, b], { suspended: true }));
   h.calls[0].resolve([]); await flush();
-  assert.equal(h.calls.length, 1);
-  assert.deepEqual(h.scheduler.currentNativeDemand(), []);
+  assert.equal(h.calls.length, 2, 'the free slot prepares the rest of the frozen window');
+  assert.deepEqual(h.scheduler.currentNativeDemand().map(row => row.id), ['a', 'b']);
+  h.calls[1].onResult({ id: 'b', status: 'translated', text: 'Prepared B' });
+  h.calls[1].resolve([]); await flush();
   h.advance(60_000);
   h.scheduler.updateShadow(update(3, [], { suspended: true, sampledAtEpochMs: 160_000,
     items: [selection(a, 165_000), selection(b, 165_000)] }));
-  assert.equal(h.scheduler.getStats().nearPrepared, 1);
+  assert.equal(h.scheduler.getStats().nearPrepared, 2);
   assert.deepEqual(h.removed, []);
-  assert.equal(h.prepared.length, 1);
+  assert.equal(h.prepared.length, 2);
   h.scheduler.updateShadow(update(4, [], { suspended: false, sampledAtEpochMs: 160_000,
     items: [selection(a, 165_000), selection(b, 165_000)] }));
-  assert.equal(h.calls.length, 1, 'the paused clock also guards update-before-snapshot ordering');
+  assert.equal(h.calls.length, 2);
   h.scheduler.snapshot('video', 'session', clock(), undefined, 0);
   assert.deepEqual(h.calls.map(call => call.items[0].id), ['a', 'b']);
   assert.equal(h.calls[1].items[0].remainingMs, 5000);
-  h.calls[1].resolve([]); await flush();
 });
 
-test('owned suspension before the paused clock arrives blocks dispatch but keeps finite inflight delivery', async t => {
+test('owned suspension before the paused clock arrives permits fixed-window preparation', async t => {
   const h = plannedHarness(); t.after(() => h.scheduler.dispose());
   const a = source('a'), b = source('b');
   h.scheduler.snapshot('video', 'session', clock(), [a, b], 0);
   h.scheduler.updateShadow(update(1, [a]));
   h.scheduler.updateShadow(update(2, [a, b], { suspended: true }));
-  assert.equal(h.calls.length, 1);
-  assert.deepEqual(h.scheduler.currentNativeDemand(), []);
+  assert.equal(h.calls.length, 2);
+  assert.deepEqual(h.scheduler.currentNativeDemand().map(row => row.id), ['a', 'b']);
+  h.advance(1000);
+  h.scheduler.updateShadow(update(3, [a, b], { suspended: true, sampledAtEpochMs: 101_000 }));
   h.calls[0].onResult({ id: 'a', status: 'translated', text: 'Prepared while paused' });
   assert.equal(h.prepared.length, 1);
+  h.calls[0].resolve([]); await flush();
+  assert.equal(h.calls.length, 2);
+  h.calls[1].resolve([]); await flush();
+});
+
+test('cold paused owned preparation has a finite captured lease and never expands with wall time', async t => {
+  const h = plannedHarness(); t.after(() => h.scheduler.dispose());
+  const a = source('a', undefined, 500), far = source('far', undefined, 5500);
+  h.scheduler.snapshot('video', 'session', { ...clock(), paused: true }, [a, far], 0);
+  h.scheduler.updateShadow(update(1, [], { suspended: true,
+    items: [selection(a, 160_000), selection(far, 160_000)] }));
+  assert.equal(h.calls.length, 1);
+  assert.deepEqual(h.calls[0].items.map(row => row.id), ['a']);
+  assert.equal(h.calls[0].items[0].remainingMs, 60_000);
+  for (let i = 0; i < 61; i++) {
+    h.advance(1000);
+    h.scheduler.updateShadow(update(i + 2, [], { suspended: true, sampledAtEpochMs: 101_000 + i * 1000,
+      items: [selection(a, 161_000 + i * 1000), selection(far, 161_000 + i * 1000)] }));
+  }
+  assert.equal(h.calls[0].items[0].deadlineAtEpochMs, 160_000, 'refreshes cannot extend an issued lease');
+  h.calls[0].resolve([{ id: 'a', status: 'translated', text: 'Expired preparation' }]); await flush();
+  assert.equal(h.prepared.length, 0);
+  assert.equal(h.calls.length, 1, 'no retry or unbounded lookahead while paused');
+});
+
+test('resume withdraws near paused work while retaining a still-future batch member', async t => {
+  const h = plannedHarness(); t.after(() => h.scheduler.dispose());
+  const a = source('a', undefined, 500), b = source('b', undefined, 4000);
+  h.scheduler.snapshot('video', 'session', { ...clock(), paused: true }, [a, b], 0);
+  h.scheduler.updateShadow(update(1, [], { suspended: true, items: [selection(a, 160_000), selection(b, 160_000)] }));
+  h.advance(1000);
+  h.scheduler.updateShadow(update(2, [], { sampledAtEpochMs: 101_000, items: [selection(b, 104_000)] }));
+  h.scheduler.snapshot('video', 'session', clock(), undefined, 0);
+  assert.deepEqual(h.cancelled, ['a']);
+  assert.equal(h.calls[0].signal.aborted, false);
+  h.calls[0].onResult({ id: 'a', status: 'translated', text: 'Missed preparation' });
+  h.calls[0].onResult({ id: 'b', status: 'translated', text: 'Future preparation' });
+  assert.deepEqual(h.prepared.map(row => row.id), ['b']);
   h.calls[0].resolve([]); await flush();
   assert.equal(h.calls.length, 1);
 });

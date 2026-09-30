@@ -21,10 +21,11 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
     <label><span data-i18n="performance.controls.onlineModel">在线模型</span><input id="performance-online-model" type="text" list="performance-online-models" placeholder="选择或填写模型名称" data-i18n-placeholder="performance.controls.onlineModelPlaceholder" autocomplete="off" maxlength="200" required></label>
     <datalist id="performance-online-models"></datalist>
     <div class="row" style="margin-top:8px"><span id="performance-online-service" class="subtle"></span><button id="performance-online-configure" type="button" data-i18n="performance.controls.configureOnline">配置在线服务</button></div>
-    <p class="subtle" data-i18n="performance.controls.onlineNote">沿用翻译服务中的地址、密钥和思考设置。测试可能产生费用，结果会自动保存。</p>
+    <p class="subtle" data-help="m_7c185a12004e" data-i18n="performance.controls.onlineNote">沿用翻译服务中的地址、密钥和思考设置。测试可能产生费用，结果会自动保存。</p>
   </fieldset>
   <fieldset id="performance-model-field" hidden><legend data-i18n="performance.models"></legend>
     <div id="performance-models" class="performance-models"></div><div id="performance-models-note" class="subtle"></div>
+    <p data-help="performance.models" data-i18n="performance.modelQueueHelp"></p>
   </fieldset>
   <div class="grid">
     <label><span data-i18n="m_51ddb206311a"></span><input id="performance-count" type="number" min="1" max="1000" step="1" value="10" required></label>
@@ -41,8 +42,8 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
     <label data-test-local hidden><span data-i18n="performance.promptMode"></span><select id="performance-prompt"><option value="auto" data-i18n="performance.option.auto">自动</option><option value="hy-mt">HY-MT</option><option value="json">JSON</option></select></label>
   </div>
   <label class="performance-preset"><input id="performance-burst" type="checkbox"><span data-i18n="performance.burst"></span></label>
-  <p class="subtle" data-i18n="performance.burstExplanation"></p>
-  <p class="subtle" data-i18n="performance.draftNote"></p>`;
+  <p class="subtle" data-help="performance.burst" data-i18n="performance.burstExplanation"></p>
+  <p class="subtle" data-help="m_7c185a12004e" data-i18n="performance.draftNote"></p>`;
   panel.querySelector('h2')!.after(container); localize(container);
   const field = (id: string) => container.querySelector<HTMLInputElement>('#performance-' + id)!;
   field('target').replaceChildren(...TARGET_LANGUAGES.map(option => new Option(option.label, option.value)));
@@ -100,7 +101,7 @@ export function mountPerformanceControls(panel: HTMLElement, configureOnline: ()
     renderModelNote(list.length);
   }
   function renderModelNote(total: number) {
-    bindLocalizedText(modelNote, () => total ? t('performance.modelQueueNote', { count: selected.size }) : t('performance.noModels'));
+    bindLocalizedText(modelNote, () => total ? t('performance.selectedModels', { count: selected.size }) : t('performance.noModels'));
   }
   field('burst').addEventListener('change', () => {
     if (field('burst').checked) {

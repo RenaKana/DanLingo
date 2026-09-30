@@ -102,18 +102,39 @@ export function mountBilibiliFullscreenToggle(onToggle: (enabled: boolean) => Pr
     // Player styles set their own control size and spacing in each screen mode. Copy only
     // geometry, without native classes that could acquire the player's handlers.
     const nativeStyle = getComputedStyle(anchor);
-    button.style.width = parseFloat(nativeStyle.width) > 0 ? nativeStyle.width : '24px';
-    button.style.height = parseFloat(nativeStyle.height) > 0 ? nativeStyle.height : '24px';
+    const width = parseFloat(nativeStyle.width) || 24;
+    const height = parseFloat(nativeStyle.height) || 24;
+    button.style.width = `${width}px`;
+    button.style.height = `${height}px`;
     button.style.margin = nativeStyle.margin;
-    const nativeIcon = anchor.querySelector('svg');
+    // The hidden on/off SVG can retain unresolved 100% dimensions. Only use
+    // the rendered state, so parseFloat cannot mistake that percentage for pixels.
+    const nativeIcon = Array.from(anchor.querySelectorAll('svg')).find(icon => {
+      const rect = icon.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    });
     const iconStyle = nativeIcon ? getComputedStyle(nativeIcon) : nativeStyle;
-    const fill = iconStyle.fill;
-    button.style.color = fill && fill !== 'none' ? fill : nativeStyle.color || '#757575';
-    const iconWidth = parseFloat(iconStyle.width) > 0 ? iconStyle.width : '24px';
-    const iconHeight = parseFloat(iconStyle.height) > 0 ? iconStyle.height : '24px';
+    // Never sample the native switch's transient hover color.
+    const fullscreen = document.fullscreenElement || anchor.closest('.bpx-player-container[data-screen="full"], .bpx-player-container[data-screen="web"]');
+    const idleColor = fullscreen ? 'rgba(255,255,255,.9)' : 'var(--bpx-dmsend-switch-icon,#757575)';
+    const fill = anchor.matches(':hover') ? idleColor : iconStyle.fill;
+    button.style.color = hovered && !fullscreen ? 'var(--bpx-primary-color,#00aeec)' : fill && fill !== 'none' ? fill : nativeStyle.color || '#757575';
+    const nativeIconWidth = parseFloat(iconStyle.width) || 0;
+    const nativeIconHeight = parseFloat(iconStyle.height) || 0;
+    // On activity players the switch SVG can be only the 10px text inside a
+    // capsule; match the neighboring settings icon instead of that decoration.
+    const isControlIcon = nativeIconWidth >= width * .65 && nativeIconHeight >= height * .65;
+    const siblingSettings = Array.from(anchor.parentElement?.children ?? [])
+      .find(element => element.classList.contains('bpx-player-dm-setting'));
+    const settingsIcon = siblingSettings?.querySelector('.bpx-common-svg-icon')?.querySelector('svg');
+    const settingsStyle = settingsIcon ? getComputedStyle(settingsIcon) : null;
+    const settingsSize = Math.min(parseFloat(settingsStyle?.width ?? '') || 0, parseFloat(settingsStyle?.height ?? '') || 0);
+    const fallbackSize = Math.min(width, height, settingsSize || Math.min(width, height) * .8);
+    const iconWidth = isControlIcon ? nativeIconWidth : fallbackSize;
+    const iconHeight = isControlIcon ? nativeIconHeight : fallbackSize;
     for (const icon of [onIcon, offIcon]) {
-      icon.style.width = iconWidth;
-      icon.style.height = iconHeight;
+      icon.style.width = `${iconWidth}px`;
+      icon.style.height = `${iconHeight}px`;
     }
   }
 
@@ -222,8 +243,8 @@ export function mountBilibiliFullscreenToggle(onToggle: (enabled: boolean) => Pr
     event.stopPropagation();
     if (event.isTrusted) void requestToggle();
   });
-  button.addEventListener('mouseenter', () => { hovered = true; showTooltip(); });
-  button.addEventListener('mouseleave', () => { hovered = false; hideTooltip(); });
+  button.addEventListener('mouseenter', () => { hovered = true; reconcile(); showTooltip(); });
+  button.addEventListener('mouseleave', () => { hovered = false; reconcile(); hideTooltip(); });
   button.addEventListener('focus', showTooltip);
   button.addEventListener('blur', () => { if (!hovered) hideTooltip(); });
   button.addEventListener('keydown', event => { if (event.key === 'Escape') hideTooltip(); });

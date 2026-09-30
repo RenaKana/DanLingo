@@ -5,13 +5,14 @@ import { normalizeLocalConfig } from '../local/config.ts';
 import type { LocalPerformanceConfig } from '../local/types.ts';
 import { MAX_TIMEOUT_RETRY_EXTRA_MS } from './timeout-retry.ts';
 import { validLiveBufferMs, DEFAULT_LIVE_BUFFER_MS, MAX_TIMER_DELAY_MS } from './live-budget.ts';
+import { selectModelEffort } from './model-catalog.ts';
 
 export const MAX_REQUEST_TIMEOUT_MS = 120_000;
 export const MAX_CONCURRENCY = 64;
 export const MAX_LIVE_BATCH_WAIT_MS = 150;
 export const DEFAULT_SETTINGS: Settings = {
   schemaVersion: 3, enabled: false, displayMode: 'translated', translationScope: 'auto', bilibiliUserFilters: false, bilibiliShadowScheduler: false, bilibiliNativeTranslationOnly: false, bilibiliOwnedRelease: false,
-  bilibiliHybrid: { enabled: false, profiles: [] },
+  bilibiliHybrid: { enabled: false, profiles: [], adaptive: false, onlineStreaming: false },
   onlineRequestLimitPerDay: 0,
   endpoint: '', model: '', profile: 'chat-completions', reasoningProfileOverride: 'auto',
   protocol: 'chat-completions', backend: 'online',
@@ -55,17 +56,33 @@ export interface ReasoningCapabilities {
   sendsReasoningEffort: boolean;
   verified?: boolean;
   offWireValue?: 'none';
+  source?: 'service' | 'fallback';
+  /** This is the effort when thinking is enabled, not a thinking on/off default. */
+  enabledDefaultEffort?: string;
 }
+
+type ReasoningSettings = Pick<ProviderSettings, 'profile' | 'model'> & Partial<Pick<ProviderSettings, 'endpoint' | 'modelReasoning'>>;
 
 /**
  * Resolve wire capabilities from the selected reasoning dialect and model.
  * Model names refine a dialect's capabilities; they never choose the URL protocol.
  */
-export function reasoningCapabilities(settings: Pick<ProviderSettings, 'profile' | 'model'>): ReasoningCapabilities {
+export function reasoningCapabilities(settings: ReasoningSettings): ReasoningCapabilities {
   const profile = settings.profile;
   const model = settings.model.trim();
   const result = (efforts: readonly ThinkingEffort[], defaultEffort: ThinkingEffort = 'default', state = false, effort = false, offWireValue?: 'none'): ReasoningCapabilities =>
-    ({ profile, model, efforts, defaultEffort, supportsOff: efforts.includes('off'), sendsThinkingState: state, sendsReasoningEffort: effort, verified: true, offWireValue });
+    ({ profile, model, efforts, defaultEffort, supportsOff: efforts.includes('off'), sendsThinkingState: state, sendsReasoningEffort: effort, verified: true, offWireValue, source: 'fallback' });
+  const observed = settings.modelReasoning;
+  const metadata = observed?.model === model && observed.endpoint === settings.endpoint
+    ? selectModelEffort({ models: [model], fetchedAt: observed.fetchedAt, capabilities: { [model]: observed.effort } }, model) : undefined;
+  // Capability values come from the service; wire semantics come from the chosen dialect.
+  // DeepSeek's enabled-only effort list does not encode its separate thinking switch.
+  if (metadata && ['deepseek', 'gemini', 'chat-completions'].includes(profile)) {
+    const supportsOff = profile === 'deepseek' || metadata.supportedLevels.includes('none');
+    const levels = metadata.supportedLevels.filter(level => !['none', 'default', 'off', 'on'].includes(level));
+    return { ...result(['default', ...(supportsOff ? ['off'] : []), ...levels], 'default', profile === 'deepseek', true,
+      profile !== 'deepseek' && supportsOff ? 'none' : undefined), source: 'service', enabledDefaultEffort: metadata.defaultLevel };
+  }
   // Model-specific documented contracts. An unknown model is never granted a family-wide effort list.
   if (profile === 'minimax' && /^MiniMax-M3(?:-|$)/i.test(model)) return result(['default','off','on'], 'off', true);
   if (profile === 'minimax' && /^MiniMax-M2(?:[.-]|$)/i.test(model)) return result(['default']);
@@ -88,12 +105,12 @@ export function reasoningCapabilities(settings: Pick<ProviderSettings, 'profile'
   return { ...result(['default']), verified: false };
 }
 
-export function supportedReasoningEfforts(settings: Pick<ProviderSettings, 'profile' | 'model'>): readonly ThinkingEffort[] {
+export function supportedReasoningEfforts(settings: ReasoningSettings): readonly ThinkingEffort[] {
   return reasoningCapabilities(settings).efforts;
 }
 
 /** Model-aware normalization; the legacy profile-only helper remains stable for old callers. */
-export function normalizeReasoningEffort(settings: Pick<ProviderSettings, 'profile' | 'model'>, value: unknown): ThinkingEffort {
+export function normalizeReasoningEffort(settings: ReasoningSettings, value: unknown): ThinkingEffort {
   const capabilities = reasoningCapabilities(settings);
   const effort = value === undefined ? capabilities.defaultEffort : value;
   if (!capabilities.efforts.includes(effort as ThinkingEffort)) throw new Error('unsupported-thinking-effort');
@@ -222,15 +239,16 @@ function normalizeHybridProfile(value: unknown): HybridCapacityProfile {
     ...(profile.sourceRecordId === undefined ? {} : { sourceRecordId: profile.sourceRecordId as string }), manual: profile.manual };
 }
 
-export function normalizeSettings(input: unknown, options: { stored?: boolean } = {}): Settings {
+export function normalizeSettings(input: unknown, options: { stored?: boolean; modelReasoning?: ProviderSettings['modelReasoning'] } = {}): Settings {
   const value = input && typeof input === 'object' ? input as Record<string, unknown> : {};
   const result = { ...DEFAULT_SETTINGS };
   if (value.bilibiliHybrid !== undefined) {
     const hybrid = value.bilibiliHybrid;
     if (!hybrid || typeof hybrid !== 'object' || Array.isArray(hybrid)) throw new Error('invalid-hybrid-settings');
-    const { enabled, profiles } = hybrid as Record<string, unknown>;
+    const { enabled, profiles, adaptive, onlineStreaming } = hybrid as Record<string, unknown>;
     if (typeof enabled !== 'boolean' || !Array.isArray(profiles) || profiles.length > 50) throw new Error('invalid-hybrid-settings');
-    result.bilibiliHybrid = { enabled, profiles: profiles.map(normalizeHybridProfile) };
+    if ([adaptive, onlineStreaming].some(flag => flag !== undefined && typeof flag !== 'boolean')) throw new Error('invalid-hybrid-settings');
+    result.bilibiliHybrid = { enabled, profiles: profiles.map(normalizeHybridProfile), adaptive: adaptive === true, onlineStreaming: onlineStreaming === true };
   }
   if (value.onlineRequestLimitPerDay !== undefined) {
     if (!Number.isSafeInteger(value.onlineRequestLimitPerDay) || (value.onlineRequestLimitPerDay as number) < 0) throw new Error('invalid-online-request-limit');
@@ -324,9 +342,10 @@ export function normalizeSettings(input: unknown, options: { stored?: boolean } 
     ? connection.brand : 'chat-completions';
   if (result.reasoningProfileOverride && result.reasoningProfileOverride !== 'auto') result.profile = result.reasoningProfileOverride;
   else if (connection && (value.reasoningProfileOverride === 'auto' || !hasProfile)) result.profile = inferredProfile;
-  const reasoningSettings = { profile: result.profile, model: result.model };
+  if (options.modelReasoning) result.modelReasoning = options.modelReasoning;
+  const reasoningSettings = result;
   // Keep old saved choices visible for correction, but validate every outgoing/save request.
-  const normalizeEffort = (effort: unknown) => (options.stored || result.backend === 'local') && typeof effort === 'string' && ['default','off','on','minimal','low','medium','high','max','xhigh'].includes(effort)
+  const normalizeEffort = (effort: unknown) => (options.stored || result.backend === 'local') && typeof effort === 'string' && /^[a-z][a-z0-9_-]{0,31}$/.test(effort)
     ? effort as ThinkingEffort : normalizeReasoningEffort(reasoningSettings, effort);
   result.thinkingEffort = normalizeEffort(value.thinkingEffort);
   if (value.superChatThinkingEffort === 'inherit') result.superChatThinkingEffort = 'inherit';

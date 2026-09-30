@@ -6,12 +6,12 @@ import {
   DEFAULT_SETTINGS,
   normalizeSettings,
   endpointOrigin,
-  normalizeReasoningEffort,
   reasoningCapabilities,
   providerTimeoutMs,
 } from '../../src/core/config';
 import { ConnectionError, connectionDisplay, connectionErrorMessage, resolveConnection } from '../../src/core/connection';
 import type { Settings } from '../../src/core/types';
+import { selectModelEffort, type ModelCatalog } from '../../src/core/model-catalog';
 import { mountDirectoryUI, type DirectoryAction } from './directory-ui';
 import { createLocalSourcePicker } from './local-source-picker';
 import { directoryErrorMessage } from '../../src/local/directory-errors';
@@ -22,6 +22,8 @@ import { sanitizeRuntimeDiagnostics } from '../../src/ui/live-diagnostics';
 import { mountPerformanceUI } from './performance-ui';
 import { mountLocalPerformanceUI } from './local-performance-ui';
 import { mountSettingsLayout } from './layout';
+import { mountSettingsHelp } from './help-ui';
+import { renderModelTestOutput } from './model-test-ui';
 import { mountHybridUI } from './hybrid-ui';
 import { initTheme } from '../../src/ui/theme';
 import { mountCombobox } from '../../src/ui/combobox';
@@ -85,6 +87,8 @@ let providerRevision = 0;
 let testRevision = 0;
 let formRevision = 0;
 let models: string[] = [];
+let modelCatalog: ModelCatalog | undefined;
+let catalogEndpoint = '';
 let localModels: LocalModelInfo[] = [];
 let performanceUI: ReturnType<typeof mountPerformanceUI> | undefined;
 let hybridUI: ReturnType<typeof mountHybridUI> | undefined;
@@ -106,8 +110,8 @@ const endpointCombo = mountCombobox(input('endpoint'), [], { displayValue: 'valu
   if (new URL(option.value).origin !== previousOrigin && input('api-key').value) { input('api-key').value = ''; markDirty('api-key'); }
   const address = serviceAddresses.find(row => row.endpoint === option.value);
   select('endpoint-mode').value = 'auto'; select('protocol-override').value = 'auto';
-  input('local-http').checked = address?.allowLocalHttp ?? false; select('profile').value = 'auto';
-  for (const id of ['endpoint-mode', 'protocol-override', 'local-http', 'profile']) markDirty(id);
+  input('local-http').checked = address?.allowLocalHttp ?? false;
+  for (const id of ['endpoint-mode', 'protocol-override', 'local-http']) markDirty(id);
 } });
 const modelCombo = mountCombobox(input('model'));
 const languageSelect = mountTargetLanguageSelect(select('target-language'));
@@ -118,7 +122,7 @@ let sourceRegistrationPending = false;
 let sourceProgress: DirectoryScanStatus | undefined;
 let localRuntime: LocalRuntimeStatus | undefined;
 const destinationFields = ['endpoint', 'api-key', 'local-http', 'backend', 'endpoint-mode', 'protocol-override'];
-const testFields = [...destinationFields, 'model', 'profile', 'thinking-effort', 'source-language', 'live-source-language', 'target-language', 'timeout', 'thinking-timeout', 'superchat-thinking', 'superchat-timeout', 'model-test-text', 'model-test-context'];
+const testFields = [...destinationFields, 'model', 'profile', 'thinking-effort', 'source-language', 'live-source-language', 'target-language', 'timeout', 'thinking-timeout', 'superchat-thinking', 'superchat-timeout', 'model-test-text', 'local-model-test-text', 'model-test-context'];
 const dirty = new Set<string>();
 const label = (key: string) => () => t(key);
 const thinkingLabels: Record<string, () => string> = {
@@ -246,37 +250,70 @@ async function readServiceHistory() {
   serviceAddresses = response.addresses ?? [];
   renderServiceHistory();
 }
-function invalidateTest() { testRevision++; message(() => (''), false, 'test-result'); }
-function clearModels() { catalogRevision++; models = []; showModels(); message(() => (''), false, 'models-result'); input('models-cache').textContent = ''; }
+function invalidateTest() {
+  testRevision++;
+  for (const id of ['test-result', 'local-test-result']) message(() => '', false, id);
+}
+function currentCompletionEndpoint() {
+  return resolveConnection({ endpoint: input('endpoint').value, allowLocalHttp: input('local-http').checked,
+    endpointMode: select('endpoint-mode').value as Settings['endpointMode'],
+    protocolOverride: select('protocol-override').value as Settings['protocolOverride'] }).configuredCompletionEndpoint;
+}
+function currentModelReasoning(model: string): Settings['modelReasoning'] {
+  const effort = selectModelEffort(modelCatalog, model);
+  if (!effort || !modelCatalog || !catalogEndpoint) return;
+  try {
+    const endpoint = currentCompletionEndpoint();
+    if (endpoint !== catalogEndpoint) return;
+    return { model, endpoint, fetchedAt: modelCatalog.fetchedAt, effort };
+  } catch { return; }
+}
+function currentReasoningCapabilities(profile: Settings['profile']) {
+  const model = input('model').value.trim() || settings.model;
+  const modelReasoning = currentModelReasoning(model);
+  return reasoningCapabilities({ profile, model, endpoint: modelReasoning?.endpoint,
+    modelReasoning });
+}
+function refreshReasoningChoices() {
+  const profile = selectedProfile();
+  showThinking(profile, select('thinking-effort').value as Settings['thinkingEffort']);
+  showSuperchatThinking(profile, select('superchat-thinking').value as Settings['superChatThinkingEffort']);
+  renderConnection();
+}
+function clearModels() {
+  catalogRevision++; models = []; modelCatalog = undefined; catalogEndpoint = '';
+  showModels(); refreshReasoningChoices(); message(() => (''), false, 'models-result'); input('models-cache').textContent = '';
+}
 async function readCatalog() {
   const revision = ++catalogRevision;
   if (!input('endpoint').value.trim()) return;
   try {
-    const response = await browser.runtime.sendMessage({ type: 'model-catalog', settings: readForm(false, true, { backend: 'online' }), apiKey: input('api-key').value });
+    const requested = readForm(false, true, { backend: 'online' });
+    const response = await browser.runtime.sendMessage({ type: 'model-catalog', settings: requested, apiKey: input('api-key').value });
     if (revision !== catalogRevision) return;
     if (!response?.ok) throw new Error(response?.error || t('m_4e03197f1202'));
-    models = response.catalog?.models ?? []; showModels();
-    bindLocalizedText(input('models-cache'), () => response.catalog?.fetchedAt ? t('m_3c17b769a83d', { p0: formatDate(response.catalog.fetchedAt) }) : t('m_cb57ba0ce5b2'));
+    modelCatalog = response.catalog as ModelCatalog | undefined;
+    catalogEndpoint = requested.endpoint;
+    models = modelCatalog?.models ?? []; showModels(); refreshReasoningChoices();
+    bindLocalizedText(input('models-cache'), () => response.catalog?.fetchedAt ? t('m_3c17b769a83d', { p0: formatDate(response.catalog.fetchedAt) }) : '');
   } catch { if (revision === catalogRevision) bindLocalizedText(input('models-cache'), () => t('m_ed6e18c268fe')); }
 }
-function showThinking(profile: Settings['profile'], effort: Settings['thinkingEffort'], preserveInvalid = false) {
-  const currentModel = input('model').value.trim() || settings.model;
-  const capabilities = reasoningCapabilities({ profile, model: currentModel });
+function showThinking(profile: Settings['profile'], effort: Settings['thinkingEffort']) {
+  const capabilities = currentReasoningCapabilities(profile);
   const selectEl = select('thinking-effort');
   selectEl.replaceChildren(...capabilities.efforts.map(value => localizedOption(value, () => !capabilities.verified && value === 'default' ? t('m_02c99682f183') : thinkingLabels[value]?.() ?? value)));
-  if (preserveInvalid && !capabilities.efforts.includes(effort)) { const previous = localizedOption(effort, () => t('m_064844fefa8a', { p0: effort })); previous.disabled = true; selectEl.append(previous); selectEl.value = effort; return; }
-  selectEl.value = capabilities.efforts.includes(effort) ? effort : capabilities.defaultEffort;
+  if (effort && !capabilities.efforts.includes(effort)) { const previous = localizedOption(effort, () => t('m_064844fefa8a', { p0: effort })); previous.disabled = true; selectEl.append(previous); }
+  selectEl.value = effort || capabilities.defaultEffort;
 }
 function localizedOption(value: string, render: () => string): HTMLOptionElement {
   const option = new Option('', value); bindLocalizedText(option, render); return option;
 }
-function showSuperchatThinking(profile: Settings['profile'], effort: Settings['superChatThinkingEffort'] = 'inherit', preserveInvalid = false) {
-  const currentModel = input('model').value.trim() || settings.model;
-  const capabilities = reasoningCapabilities({ profile, model: currentModel });
+function showSuperchatThinking(profile: Settings['profile'], effort: Settings['superChatThinkingEffort'] = 'inherit') {
+  const capabilities = currentReasoningCapabilities(profile);
   const selectEl = select('superchat-thinking');
   selectEl.replaceChildren(localizedOption('inherit', () => t('m_99a19a8ee7f3')), ...capabilities.efforts.map(value => localizedOption(value, () => thinkingLabels[value]?.() ?? value)));
-  if (preserveInvalid && effort !== 'inherit' && !capabilities.efforts.includes(effort!)) { const previous = localizedOption(effort, () => t('m_064844fefa8a', { p0: effort })); previous.disabled = true; selectEl.append(previous); selectEl.value = effort!; return; }
-  selectEl.value = effort === 'inherit' || capabilities.efforts.includes(effort) ? effort : 'inherit';
+  if (effort && effort !== 'inherit' && !capabilities.efforts.includes(effort)) { const previous = localizedOption(effort, () => t('m_064844fefa8a', { p0: effort })); previous.disabled = true; selectEl.append(previous); }
+  selectEl.value = effort || 'inherit';
 }
 function showScope() {
   const windowOnly = select('translation-scope').value !== 'all';
@@ -303,7 +340,7 @@ function readForm(requireModel = true, connectionOnly = false, test?: { backend:
   if (test) { value.backend = test.backend; if (test.model !== undefined) value.model = test.model; }
   value.endpointInput = input('endpoint').value.trim();
   value.targetLanguage = languageSelect.value();
-  try { value.localPerformance = value.backend === 'local' || hybridUI?.enabled() ? localPerformanceUI.read() : settings.localPerformance; }
+  try { value.localPerformance = value.backend === 'local' || !test && hybridUI?.enabled() ? localPerformanceUI.read() : settings.localPerformance; }
   catch (error) {
     layout.reveal(input(Number(input('lp-microBatch').value) > Number(input('lp-batch').value) ? 'lp-microBatch' : 'lp-mode'));
     throw error;
@@ -311,22 +348,26 @@ function readForm(requireModel = true, connectionOnly = false, test?: { backend:
   value.endpointMode = 'auto';
   value.protocolOverride = 'auto';
   value.connectionOverride = undefined;
-  value.reasoningProfileOverride = 'auto';
+  value.reasoningProfileOverride = select('profile').value;
   value.localModelId = settings.localModelId ?? '';
-  value.bilibiliHybrid = hybridUI?.read() ?? settings.bilibiliHybrid;
+  // A backend-specific probe is independent of the active translation route.
+  // Keep hybrid and the other backend's draft out of its validation and payload.
+  value.bilibiliHybrid = test ? { ...settings.bilibiliHybrid, enabled: false } : hybridUI?.read() ?? settings.bilibiliHybrid;
+  if (test?.backend === 'local') { value.endpoint = ''; value.endpointInput = ''; }
   if (requireModel && String(value.backend) === 'local' && !value.localModelId) { layout.reveal(document.getElementById('local-model-manager')!); throw new UiError('modelManager.choose'); }
-  if (requireModel && hybridUI?.enabled() && !value.bilibiliOwnedRelease) { layout.reveal(input('bilibili-owned-release')); throw new Error('HYBRID_PLAN_REQUIRED'); }
-  if (requireModel && hybridUI?.enabled() && !value.localModelId) { layout.reveal(document.getElementById('local-model-manager')!); throw new UiError('modelManager.choose'); }
-  if (requireModel && hybridUI?.enabled() && !String(value.endpoint ?? '').trim()) { layout.reveal(input('endpoint')); throw new UiError('online.endpointRequired'); }
-  if (requireModel && hybridUI?.enabled() && !String(value.model ?? '').trim()) { layout.reveal(input('model')); throw new UiError('m_57904a95b74a'); }
+  if (!test && requireModel && hybridUI?.enabled() && !value.bilibiliOwnedRelease) { layout.reveal(input('bilibili-owned-release')); throw new Error('HYBRID_PLAN_REQUIRED'); }
+  if (!test && requireModel && hybridUI?.enabled() && !value.localModelId) { layout.reveal(document.getElementById('local-model-manager')!); throw new UiError('modelManager.choose'); }
+  if (!test && requireModel && hybridUI?.enabled() && !String(value.endpoint ?? '').trim()) { layout.reveal(input('endpoint')); throw new UiError('online.endpointRequired'); }
+  if (!test && requireModel && hybridUI?.enabled() && !String(value.model ?? '').trim()) { layout.reveal(input('model')); throw new UiError('m_57904a95b74a'); }
   if (String(value.backend) !== 'local' && !String(value.endpoint ?? '').trim() && (requireModel || connectionOnly)) { layout.reveal(input('endpoint')); throw new UiError('online.endpointRequired'); }
   if (requireModel && String(value.backend) !== 'local' && !String(value.model ?? '').trim()) { layout.reveal(input('model')); throw new UiError('m_57904a95b74a'); }
-  return normalizeSettings(connectionOnly ? { ...value, thinkingEffort: undefined, superChatThinkingEffort: 'inherit' } : value);
+  return normalizeSettings(connectionOnly ? { ...value, thinkingEffort: undefined, superChatThinkingEffort: 'inherit' } : value,
+    { modelReasoning: currentModelReasoning(String(value.model ?? '').trim()) });
 }
 function busy(value: boolean) {
   saving = value;
   layout.task('service', value, 'service', () => t('m_766dffe4b5ea'));
-  for (const id of ['save', 'get-models', 'test-model']) (document.getElementById(id) as HTMLButtonElement).disabled = value;
+  for (const id of ['save', 'get-models', 'test-model', 'test-local-model']) (document.getElementById(id) as HTMLButtonElement).disabled = value;
   renderLocalActions();
 }
 function renderConnection() {
@@ -380,8 +421,7 @@ function renderLocalModels() {
 }
 function renderVram() {
   const target = document.getElementById('local-vram')!, model = localModels.find(model => model.id === (settings.localModelId ?? ''));
-  bindLocalizedAttribute(target, 'title', () => model ? t('m_4ba53934bfc1') : '');
-  if (!model) { bindLocalizedText(target, () => t('m_c31184e9c25a')); return; }
+  if (!model) { bindLocalizedText(target, () => ''); return; }
   try {
     const draft = localPerformanceUI.read(), runtime = resolveLocalConfig(draft, model.id);
     const observed = localState?.model?.id === model.id && localState.runtime && localState.gpu ? {
@@ -394,11 +434,10 @@ function renderVram() {
     const labels: Record<string, () => string> = { modelBytes: () => t('m_db18831a0457'), kvBytes: () => t('m_19741f1b2b94'), computeBytes: () => t('m_c1a5b7e932eb') };
     const parts = () => Object.entries(labels).filter(([key]) => value[key as keyof typeof value] !== undefined).map(([key, render]) => `${render()} ${formatBytes(value[key as 'modelBytes']!)}`);
     const parametersDiffer = !!localState?.runtime && localState.model?.id === model.id && JSON.stringify(normalizeLocalConfig(localState.requested)) !== JSON.stringify(draft);
-    bindLocalizedText(target, () => t('m_dbf3f901407c', {
+    bindLocalizedText(target, () => t('settings.memoryUsage', {
       p0: value.totalBytes === undefined ? t('m_0363eaf0c85e') : value.lowerBound ? t('m_6ba4b8c07bdf') + formatBytes(value.totalBytes) + t('m_41ce230bffd0') : t('m_5890c084b931') + formatBytes(value.totalBytes),
       p1: parts().join(' · '), p2: value.missing.length ? t('m_463071aaadb9') + value.missing.map(key => labels[key]?.() ?? key).join('、') : '',
-      p3: value.notes.includes('LOCAL_MEMORY_ARCHITECTURE_UNKNOWN') ? t('m_b175a22ecb11') : '',
-    }) + (parametersDiffer ? t('m_20a8d4c5f3ae') : ''));
+    }) + (value.notes.includes('LOCAL_MEMORY_ARCHITECTURE_UNKNOWN') ? '\n' + t('m_b175a22ecb11') : '') + (parametersDiffer ? t('m_20a8d4c5f3ae') : ''));
   } catch { bindLocalizedText(target, () => t('m_b1de58aca38a')); }
 }
 function renderLocalLanguageIssues(): string[] {
@@ -477,7 +516,7 @@ function renderLocalActions() {
   const benchmarkBusy = localPerformanceUI.active() || onlinePerformanceActive, state = localState;
   const blocked = modelActionsBusy();
   localPerformanceUI.setBlocked(blocked);
-  for (const id of ['save', 'get-models', 'test-model']) (document.getElementById(id) as HTMLButtonElement).disabled = saving || localDeleting || selectionSaving || localLoadPending || sourceRegistrationPending || id !== 'save' && benchmarkBusy;
+  for (const id of ['save', 'get-models', 'test-model', 'test-local-model']) (document.getElementById(id) as HTMLButtonElement).disabled = saving || localDeleting || selectionSaving || localLoadPending || sourceRegistrationPending || id !== 'save' && benchmarkBusy;
   (document.getElementById('local-folder-add') as HTMLButtonElement).disabled = blocked;
   (document.getElementById('local-file-add') as HTMLButtonElement).disabled = blocked;
   const stop = document.getElementById('local-stop') as HTMLButtonElement;
@@ -622,11 +661,18 @@ function fill(response: any) {
     else if (el.type === 'checkbox') (el as HTMLInputElement).checked = settings[key] === true;
     else el.value = String(settings[key] ?? '');
   }
-  select('profile').value = 'auto';
+  if (!dirty.has('profile')) {
+    let inferred: Settings['profile'] = 'chat-completions';
+    try {
+      const { brand } = resolveConnection({ endpoint: input('endpoint').value, allowLocalHttp: input('local-http').checked });
+      if (brand !== 'unknown') inferred = brand;
+    } catch { /* Keep a saved manual dialect when the address is incomplete. */ }
+    select('profile').value = settings.reasoningProfileOverride ?? (settings.profile === inferred ? 'auto' : settings.profile);
+  }
   select('endpoint-mode').value = 'auto';
   select('protocol-override').value = 'auto';
   if (!dirty.has('superchat-thinking')) select('superchat-thinking').value = settings.superChatThinkingEffort ?? 'inherit';
-  if (!dirty.has('thinking-effort')) showThinking(selectedProfile(), settings.thinkingEffort);
+  showThinking(selectedProfile(), dirty.has('thinking-effort') ? select('thinking-effort').value as Settings['thinkingEffort'] : settings.thinkingEffort);
   showSuperchatThinking(selectedProfile(), dirty.has('superchat-thinking') ? select('superchat-thinking').value as Settings['superChatThinkingEffort'] : settings.superChatThinkingEffort ?? 'inherit');
   if (!dirty.has('bilibili-hybrid')) hybridUI?.fill(settings.bilibiliHybrid);
   showScope(); showLocalIdleUnload(); showBilibiliTimeoutRetry(); showBackend(); renderLocalModels(); renderLocalState(localState);
@@ -706,8 +752,6 @@ for (const event of ['input', 'change']) document.getElementById('settings-form'
   if (['backend', 'model', 'endpoint', 'local-http'].includes(target.id)) {
     const previous = select('thinking-effort').value, previousSC = select('superchat-thinking').value;
     showThinking(selectedProfile(), previous as Settings['thinkingEffort']); showSuperchatThinking(selectedProfile(), previousSC as Settings['superChatThinkingEffort']);
-    if (select('thinking-effort').value !== previous) markDirty('thinking-effort');
-    if (select('superchat-thinking').value !== previousSC) markDirty('superchat-thinking');
   }
   if (testFields.includes(target.id)) renderConnection();
   if (['backend', 'source-language', 'live-source-language', 'target-language'].includes(target.id)) renderLocalState(localState);
@@ -717,72 +761,71 @@ for (const event of ['input', 'change']) document.getElementById('settings-form'
     'endpoint-mode', 'protocol-override'].includes(target.id)) void hybridUI.refresh();
 });
 select('profile').addEventListener('change', () => {
-  const profile = selectedProfile();
-  showThinking(profile, normalizeReasoningEffort({ profile, model: input('model').value || settings.model }, undefined));
-  showSuperchatThinking(profile, 'inherit'); renderConnection();
+  refreshReasoningChoices();
 });
 select('translation-scope').addEventListener('change', showScope);
 document.getElementById('local-stop')!.addEventListener('click', () => { void localCommand({ action: localLoadPending || ['loading', 'warming'].includes(localState?.phase ?? '') ? 'cancel' : 'unload' }); });
 document.getElementById('get-models')!.addEventListener('click', async () => {
   if (saving) return;
   busy(true); message(() => (t('m_511a3880b9b9')), false, 'models-result'); const revision = providerRevision;
+  const catalogRequest = ++catalogRevision;
   try {
-    const normalized = readForm(false, true);
-    if (normalized.backend === 'local') {
-      const local = await browser.runtime.sendMessage({ type: 'local-control', control: { action: 'list' } });
-      if (!local?.ok) throw new Error(local?.error || t('m_1594c90bb738'));
-      localModels = Array.isArray(local.models) ? local.models : []; renderLocalModels(); renderLocalState(local.state);
-      if (!localModels.length) throw new UiError('m_74a211665fed');
-      message(() => (t('m_786e3ca18248', { p0: localModels.length })), false, 'models-result');
-      return;
-    }
+    const normalized = readForm(false, true, { backend: 'online' });
     const submittedKey = input('api-key').value; const origin = endpointOrigin(normalized.endpoint, normalized.allowLocalHttp);
     if (!await browser.permissions.request({ origins: [origin + '/*'] })) throw new UiError('m_5c6b58748487');
     if (revision !== providerRevision) throw new UiError('m_2f2a14b4b16d');
     const result = await browser.runtime.sendMessage({ type: 'models', settings: normalized, apiKey: submittedKey });
     if (revision !== providerRevision) throw new UiError('m_2f2a14b4b16d');
+    if (catalogRequest !== catalogRevision) return;
     if (!result?.ok) throw new Error(result?.error || t('m_b3a0e7fec424'));
     if (!Array.isArray(result.models) || !result.models.length) throw new UiError('m_3421b10a28f4');
-    models = result.models;
     if (result.effectiveEndpoint) {
       input('endpoint').value = result.effectiveEndpoint; select('endpoint-mode').value = 'auto'; markDirty('endpoint'); renderConnection();
     }
+    modelCatalog = { models: result.models, fetchedAt: result.fetchedAt, capabilities: result.capabilities };
+    catalogEndpoint = currentCompletionEndpoint();
+    models = modelCatalog.models;
     if (!input('model').value.trim()) { input('model').value = models[0]!; markDirty('model'); invalidateTest(); }
-    catalogRevision++; showModels(); bindLocalizedText(input('models-cache'), () => t('m_3c17b769a83d', { p0: formatDate(result.fetchedAt) }));
+    showModels(); bindLocalizedText(input('models-cache'), () => t('m_3c17b769a83d', { p0: formatDate(result.fetchedAt) }));
     message(() => (t('m_d541191d70a4', { p0: models.length })), false, 'models-result');
     void readServiceHistory();
-    showThinking(selectedProfile(), select('thinking-effort').value as Settings['thinkingEffort']);
-    showSuperchatThinking(selectedProfile(), select('superchat-thinking').value as Settings['superChatThinkingEffort']); renderConnection();
+    refreshReasoningChoices();
   } catch (error) { if (revision !== providerRevision) return; message(() => (errorMessage(error, t('m_b3a0e7fec424')) + t('m_9b6e0c624428')), true, 'models-result'); }
   finally { busy(false); }
 });
-document.getElementById('test-model')!.addEventListener('click', async () => {
+async function runModelTest(backend: 'online' | 'local') {
   if (saving) return;
-  busy(true); const revision = testRevision; message(() => (t('m_ff3f7614f8e7')), false, 'test-result');
+  const resultId = backend === 'online' ? 'test-result' : 'local-test-result';
+  const output = document.getElementById(resultId + '-output')!; output.hidden = true;
+  const textId = backend === 'online' ? 'model-test-text' : 'local-model-test-text';
+  busy(true); const revision = testRevision; message(() => (t('m_ff3f7614f8e7')), false, resultId);
   try {
-    const normalized = readForm(); const submittedKey = input('api-key').value;
-    if (normalized.backend !== 'local') {
+    const normalized = readForm(true, false, { backend });
+    const submittedKey = backend === 'online' ? input('api-key').value : '';
+    if (backend === 'online') {
       const origin = endpointOrigin(normalized.endpoint, normalized.allowLocalHttp);
       if (!await browser.permissions.request({ origins: [origin + '/*'] })) throw new UiError('m_5c6b58748487');
     }
     if (revision !== testRevision) return;
-    const testModelName = normalized.backend === 'local'
+    const testModelName = backend === 'local'
       ? localModels.find(model => model.id === normalized.localModelId)?.name
         ?? (localState?.model?.id === normalized.localModelId ? localState?.model?.name : undefined) ?? t('m_44ac539067ed')
       : normalized.model;
-    message(() => (t('m_eeff17c695e6', { p0: testModelName, p1: Math.ceil(providerTimeoutMs(normalized) / 1000) })), false, 'test-result');
+    message(() => (t('m_eeff17c695e6', { p0: testModelName, p1: Math.ceil(providerTimeoutMs(normalized) / 1000) })), false, resultId);
     const result = await browser.runtime.sendMessage({ type: 'test-model', settings: normalized, apiKey: submittedKey,
-      text: (document.getElementById('model-test-text') as HTMLTextAreaElement).value,
-      context: select('model-test-context').value });
+      text: (document.getElementById(textId) as HTMLTextAreaElement).value,
+      ...(backend === 'local' ? { context: select('model-test-context').value } : {}) });
     if (revision !== testRevision) return;
     if (!result?.ok) throw new Error(result?.error || t('m_d3b1da3088dd'));
-    void readServiceHistory();
+    if (backend === 'online') void readServiceHistory();
     const verification = () => result.verification === 'basic-language-check' ? t('m_20d0aaef5c92') : t('m_a3e6a2003aba');
-    const timing = () => result.local ? t('m_03ac907910fc', { p0: Math.round(result.local.queueMs), p1: Math.round(result.local.inferenceMs) }) : '';
-    message(() => (t('m_b1887f6b2172', { p0: result.model, p1: verification(), p2: formatNumber(Number((result.elapsedMs / 1000).toFixed(2))), p3: result.targetLanguage ?? normalized.targetLanguage, p4: result.promptMode === 'hy-mt' ? t('m_f9042fe0fe55') : t('m_8e1dfd9d2eff'), p5: result.sourceText, p6: result.text, p7: timing() })), false, 'test-result');
-  } catch (error) { if (revision === testRevision) message(() => (errorMessage(error, t('m_d3b1da3088dd'))), true, 'test-result'); }
+    message(verification, false, resultId);
+    renderModelTestOutput(output, result);
+  } catch (error) { if (revision === testRevision) message(() => (errorMessage(error, t('m_d3b1da3088dd'))), true, resultId); }
   finally { busy(false); }
-});
+}
+document.getElementById('test-model')!.addEventListener('click', () => { void runModelTest('online'); });
+document.getElementById('test-local-model')!.addEventListener('click', () => { void runModelTest('local'); });
 const actions: Array<[string, string, string]> = [['clear-cache', 'clear-cache', 'm_5265ad8f9163'], ['delete-key', 'delete-key', 'm_f954966d0999']];
 for (const [id, type, textKey] of actions) {
   const trigger = document.getElementById(id) as HTMLButtonElement, box = document.getElementById(id + '-confirm')!;
@@ -824,6 +867,7 @@ performanceUI = mountPerformanceUI({ container: layout.onlinePerformance,
     layout.reveal(input('endpoint'));
   },
 });
+mountSettingsHelp();
 window.addEventListener('beforeunload', event => { if (dirty.size) { event.preventDefault(); event.returnValue = ''; } });
 let closing = false;
 async function closeEmbedded(save = false) {

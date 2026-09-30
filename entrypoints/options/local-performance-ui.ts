@@ -22,13 +22,13 @@ export function mountLocalPerformanceUI(options: { container: HTMLElement; bench
       ${number('batch','m_320b5d80f8cf',1)}${number('microBatch','m_d9cd6e90503a',1)}
       ${pick('flashAttention','m_9c46a3de7716',tri)}${numberOrAuto('cpuThreads','m_290505a7ff35',1)}
       <label class="check"><input id="lp-warmup" type="checkbox">${text('m_2318cc377cab')}</label><label class="check"><input id="lp-measureGpu" type="checkbox">${text('m_67683411e145')}</label><label class="check"><input id="lp-allowAutoFallback" type="checkbox">${text('m_2ab2ef60dd82')}</label>
-    </div><p class="subtle" data-i18n="m_aaac380652a7"></p></details>
+    </div><p class="subtle" data-help="m_3bc5d38ef64c" data-i18n="m_aaac380652a7"></p></details>
     <details open><summary data-i18n="m_dc83ee271478"></summary><div class="grid">
       ${number('temperature','m_b958ce8b871a',0,'any')}${pick('superChatReasoning','m_800392eac5fb',tri)}
       ${number('normalMaxTokens','m_60306e85df5f',1)}${number('superChatMaxTokens','m_c6bdc7b4fd98',1)}${number('manualMaxTokens','m_44482da483fb',1)}
       ${pick('promptMode','m_e51da3f7bf33',[['auto','performance.option.auto'],['hy-mt','m_d7501b035b87'],['json','m_db1a21a0bc2e']])}${pick('languageValidation','m_3b0dfce307bf',[['strict','m_8460a55f2e45'],['off','m_3fd47edce45b']])}
       <label class="check"><input id="lp-reusePromptCache" type="checkbox">${text('m_9d35867032e6')}</label>
-    </div><p class="subtle" data-i18n="m_cbf1dc20202e"></p></details>
+    </div><p class="subtle" data-help="m_dc83ee271478" data-i18n="m_cbf1dc20202e"></p></details>
     <details id="lb-panel"><summary data-i18n="m_da7d187f43f6"></summary><div class="grid">
       <label><span data-i18n="m_b3f23c6aecad"></span><input id="lb-parallels" value="1,2,4,8,16" required></label>
       <label><span data-i18n="m_df241b1bda02"></span><input id="lb-count" type="number" min="1" max="256" value="32" required></label>
@@ -37,7 +37,7 @@ export function mountLocalPerformanceUI(options: { container: HTMLElement; bench
       <div class="row span"><label class="check"><input id="lb-short" type="checkbox" checked>${text('m_fac695ef1b5f')}</label><label class="check"><input id="lb-normal" type="checkbox" checked>${text('m_9f1a4751fb5f')}</label><label class="check"><input id="lb-long" type="checkbox" checked>${text('m_215ebca85988')}</label></div>
     </div><div class="row"><button id="lb-start" type="button" data-i18n="m_21f42d45babb"></button><button id="lb-stop" type="button" disabled data-i18n="m_ca4d973c0b00"></button><button id="lb-export" type="button" disabled data-i18n="m_fb48367b485c"></button><button id="lb-apply" type="button" disabled data-i18n="m_8262d39027d5"></button></div>
     <p id="lb-status" class="status" role="status" aria-live="polite" data-i18n="m_62cdc8713bcf">未运行</p><div id="lb-charts" class="chart-grid"></div><div id="lb-results"></div>
-    <p class="subtle" data-i18n="m_9e086a57f016"></p>
+    <p class="subtle" data-help="m_da7d187f43f6" data-i18n="m_9e086a57f016"></p>
     </details>`;
   options.container.append(panel);
   const benchmarkPanel = panel.querySelector<HTMLDetailsElement>('#lb-panel')!;
@@ -45,7 +45,7 @@ export function mountLocalPerformanceUI(options: { container: HTMLElement; bench
   const sc = document.createElement('div'); sc.className = 'grid';
   sc.append(panel.querySelector('#lp-superChatReasoning')!.closest('label')!, panel.querySelector('#lp-superChatMaxTokens')!.closest('label')!);
   options.superchatContainer.append(sc);
-  const reasoningNote = document.createElement('p'); reasoningNote.className = 'subtle'; sc.after(reasoningNote);
+  const reasoningNote = document.createElement('p'); reasoningNote.className = 'subtle'; reasoningNote.dataset.help = 'm_800392eac5fb'; sc.after(reasoningNote);
   localize(panel); localize(benchmarkPanel); localize(sc);
   // These controls belong to the benchmark action, never to settings submission.
   for (const field of benchmarkPanel.querySelectorAll<HTMLInputElement>('input')) field.setAttribute('form', 'local-benchmark-controls');

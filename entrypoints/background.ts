@@ -29,7 +29,7 @@ import { withLocalRuntime } from '../src/local/provider-settings';
 import { translationLanguageIssue, translationLanguageMessage } from '../src/local/translation-profile';
 import { LocalAutoLoader } from '../src/local/auto-load';
 import type { LocalRuntimeStatus } from '../src/local/auto-load';
-import { ModelCatalogStore, modelCatalogScope } from '../src/core/model-catalog';
+import { ModelCatalogStore, MODEL_CATALOG_KEY, modelCatalogScope, selectModelEffort } from '../src/core/model-catalog';
 import { ServiceHistory } from '../src/core/service-history';
 import { OnlineRequestBudget, OnlineBudgetError } from '../src/core/online-budget';
 import { getTranslationShortcut, registerTranslationShortcutHandler } from '../src/core/translation-shortcut';
@@ -237,7 +237,8 @@ export default defineBackground(() => {
     const capacity = settings.bilibiliHybrid?.profiles.find(profile => profile.identity === capacityKey);
     if (!capacity || !settings.localModelId) throw new Error('请为当前本地模型和参数设置混合容量');
     let local: Settings = { ...settings, backend: 'local', concurrency: settings.localConcurrency, batchSize: 1 };
-    const online: Settings = { ...settings, backend: 'online', concurrency: settings.onlineConcurrency, batchSize: settings.videoBatchSize };
+    const online: Settings = { ...settings, backend: 'online', concurrency: settings.onlineConcurrency, batchSize: settings.videoBatchSize,
+      translationStream: settings.bilibiliHybrid?.onlineStreaming === true };
     const state = !testPause && !localChoiceLoading ? await localLoader.peekReady(local).catch(() => undefined) : undefined;
     if (state) local = withLocalRuntime(local, state);
     else {
@@ -252,6 +253,7 @@ export default defineBackground(() => {
     const localReady = !!state && await hybridCapacityIdentity(withLocalRuntime(settings, state)) === capacityKey &&
       !translationLanguageIssue(local.localTranslationProfile, local.sourceLanguage, local.targetLanguage);
     return { local, online, localReady, onlineReady, capacityKey, maxItems: capacity.maxItems,
+      adaptive: settings.bilibiliHybrid?.adaptive === true, onlineStreaming: settings.bilibiliHybrid?.onlineStreaming === true,
       maxChars: capacity.maxChars, ...(capacity.p95Ms ? { p95Ms: capacity.p95Ms } : {}),
       onLocalNeeded: () => {
         if (!state && !testPause && !localChoiceLoading && capturedVersion === version)
@@ -318,12 +320,33 @@ export default defineBackground(() => {
 
   async function config(): Promise<{ settings: Settings; apiKey: string; remembered: boolean }> {
     await ready;
-    const [local, session] = await Promise.all([browser.storage.local.get([SETTINGS_KEY, KEY_STORAGE_KEY]), browser.storage.session.get(KEY_STORAGE_KEY)]);
+    const [local, session] = await Promise.all([browser.storage.local.get([SETTINGS_KEY, KEY_STORAGE_KEY, MODEL_CATALOG_KEY]), browser.storage.session.get(KEY_STORAGE_KEY)]);
     const settings = normalizeSettings(local[SETTINGS_KEY], { stored: true });
     const origin = configuredOrigin(settings);
     const value = (record: any): string => origin && record?.origin === origin && typeof record.value === 'string' ? record.value : '';
     const localKey = value(local[KEY_STORAGE_KEY]);
-    return { settings, apiKey: value(session[KEY_STORAGE_KEY]) || localKey, remembered: !!localKey };
+    const apiKey = value(session[KEY_STORAGE_KEY]) || localKey;
+    if (local[MODEL_CATALOG_KEY]) await attachModelReasoning(settings, apiKey);
+    return { settings, apiKey, remembered: !!localKey };
+  }
+  async function attachModelReasoning(settings: Settings, apiKey: string): Promise<void> {
+    delete settings.modelReasoning;
+    if (!apiKey || !settings.endpoint || !settings.model) return;
+    const catalog = await catalogs.read(await modelCatalogScope(settings, apiKey));
+    const effort = selectModelEffort(catalog, settings.model);
+    if (effort && catalog) settings.modelReasoning = { model: settings.model, endpoint: settings.endpoint, fetchedAt: catalog.fetchedAt, effort };
+  }
+  /** Submitted capability fields are untrusted; resolve against the actual destination/key. */
+  async function normalizeSubmittedSettings(value: unknown, submittedKey?: unknown): Promise<Settings> {
+    if (submittedKey !== undefined && (typeof submittedKey !== 'string' || submittedKey.length > 4096 || /[\r\n]/.test(submittedKey)))
+      throw new Error('API Key 格式无效');
+    const draft = normalizeSettings(value, { stored: true });
+    const existing = await config();
+    const origin = configuredOrigin(draft);
+    const apiKey = typeof submittedKey === 'string' && submittedKey || (origin && configuredOrigin(existing.settings) === origin ? existing.apiKey : '');
+    await attachModelReasoning(draft, apiKey);
+    if (hybridEnabled(draft)) normalizeSettings({ ...draft, backend: 'online' }, { modelReasoning: draft.modelReasoning });
+    return normalizeSettings(value, { modelReasoning: draft.modelReasoning });
   }
   let settingsWrites: Promise<unknown> = Promise.resolve();
   function serializeSettingsWrite<T>(operation: () => Promise<T>): Promise<T> {
@@ -334,7 +357,9 @@ export default defineBackground(() => {
   function updateSettings(change: (latest: Settings) => Settings | Promise<Settings>): Promise<Settings> {
     return serializeSettingsWrite(async () => {
       const next = await change((await config()).settings);
-      await browser.storage.local.set({ [SETTINGS_KEY]: next }); return next;
+      const saved = next.modelReasoning ? { ...next } : next;
+      delete saved.modelReasoning;
+      await browser.storage.local.set({ [SETTINGS_KEY]: saved }); return next;
     });
   }
   async function safeConfig() {
@@ -1493,7 +1518,11 @@ export default defineBackground(() => {
         }
       }
       const engineStats = engine.stats();
-      return { ok: true, performancePaused: !!testPause, engineNotice: engineStats.rateLimitedUntil ? '翻译服务限流，等待后继续准备' : '',
+      const hybridStreamFailure = resource.platform === 'bilibili' && resource.scenario === 'video'
+        && engineStats.lastError?.reason === 'hybrid-stream-unsupported'
+        && hybridEnabled((await config()).settings) && (await config()).settings.bilibiliHybrid?.onlineStreaming === true;
+      return { ok: true, performancePaused: !!testPause, engineNotice: engineStats.rateLimitedUntil ? '翻译服务限流，等待后继续准备'
+        : hybridStreamFailure ? 'hybrid-stream-unsupported' : '',
         ...(resource.platform === 'bilibili' && resource.scenario === 'video' ? { hybridStats: engineStats.hybrid } : {}) };
     }
     if (message.type === 'cancel-video-items' && tabId !== null && typeof message.requestId === 'string' &&
@@ -1701,13 +1730,13 @@ export default defineBackground(() => {
       if ((await currentResource(tabId))?.platform === 'bilibili' && !liveSessionMatches(tabId, sender, message.session)) return videoChanging();
       if (!['auto', 'all', 'window'].includes(message.translationScope) || !Number.isInteger(message.prefetchSeconds) || message.prefetchSeconds < 5 || message.prefetchSeconds > 3600) return { ok: false, error: '请输入 5–3600 秒' };
       const { settings } = await config();
-      const updated = normalizeSettings({ ...settings, translationScope: message.translationScope, prefetchSeconds: message.prefetchSeconds });
+      const updated = normalizeSettings({ ...settings, translationScope: message.translationScope, prefetchSeconds: message.prefetchSeconds }, { stored: true });
       if (await currentVideo(tabId) !== resourceId) return videoChanging();
       await updateSettings(latest => ({ ...latest, translationScope: updated.translationScope, prefetchSeconds: updated.prefetchSeconds })); await broadcast(); return safeConfig();
     }
     if (!ui) return { ok: false, error: '此操作仅限扩展设置页' };
     if (message.type === 'hybrid-capacity') {
-      const draft = normalizeSettings(message.settings);
+      const draft = normalizeSettings(message.settings, { stored: true });
       const identity = await hybridCapacityIdentity(draft);
       return { ok: true, identity, profile: draft.bilibiliHybrid?.profiles.find(profile => profile.identity === identity),
         recommendation: recommendHybridCapacity(await performanceHistory.list(), identity) };
@@ -1929,7 +1958,7 @@ export default defineBackground(() => {
     if (message.type === 'performance-start') {
       if (localChoiceLoading) return { ok: false, error: '本地模型正在使用中，请结束当前翻译或测试后再试' };
       if (performanceBatch?.state === 'running' || testPause || performanceTest?.report.state === 'running' || modelTest) return { ok: false, error: '已有测试正在运行' };
-      const settings = normalizeSettings(message.settings);
+      const settings = await normalizeSubmittedSettings(message.settings, message.apiKey);
       if (message.modelIds !== undefined) {
         const ids: unknown = message.modelIds;
         if (settings.backend !== 'local' || !Array.isArray(ids) || ids.length < 1 || ids.length > 20 ||
@@ -2040,8 +2069,8 @@ export default defineBackground(() => {
         const discovered = await discoverConnectionModels(settings, key, { signal: controller.signal });
         if (capturedVersion !== version) return { ok: false, error: '配置已变化，请重新获取模型' };
         const fetchedAt = Date.now();
-        await catalogs.write(await modelCatalogScope(settings, key), discovered.models, fetchedAt);
-        if (discovered.effectiveEndpoint) await catalogs.write(await modelCatalogScope({ ...settings, endpoint: discovered.effectiveEndpoint, endpointMode: discovered.effectiveEndpointMode }, key), discovered.models, fetchedAt);
+        await catalogs.write(await modelCatalogScope(settings, key), discovered.models, fetchedAt, discovered.capabilities);
+        if (discovered.effectiveEndpoint) await catalogs.write(await modelCatalogScope({ ...settings, endpoint: discovered.effectiveEndpoint, endpointMode: discovered.effectiveEndpointMode }, key), discovered.models, fetchedAt, discovered.capabilities);
         await serviceHistory.record(discovered.effectiveEndpoint ? { ...settings, endpoint: discovered.effectiveEndpoint, endpointMode: discovered.effectiveEndpointMode } : settings).catch(() => {});
         return { ok: true, ...discovered, fetchedAt };
       } catch (error) {
@@ -2065,7 +2094,7 @@ export default defineBackground(() => {
       const capturedVersion = version;
       let timeoutMs = 0;
       try {
-        const settings = normalizeSettings(message.settings);
+        const settings = await normalizeSubmittedSettings(message.settings, message.apiKey);
         if (settings.backend === 'local') {
           if (!settings.localModelId) return { ok: false, error: '请选择可用的本地模型' };
         } else {
@@ -2119,7 +2148,7 @@ export default defineBackground(() => {
       } finally { if (modelTest === controller) modelTest = undefined; }
     }
     if (message.type === 'save') {
-      const settings = normalizeSettings(message.settings);
+      const settings = await normalizeSubmittedSettings(message.settings, message.apiKey);
       const useHybrid = hybridEnabled(settings);
       if (useHybrid) {
         const identity = await hybridCapacityIdentity(settings);

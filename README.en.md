@@ -4,7 +4,7 @@
 
 Translate danmaku and live chat directly on Niconico, YouTube and Bilibili. Connect your own Chat Completions service or load a local GGUF model in the extension.
 
-**Release version: 0.5.1, available for manual installation from [GitHub Releases](https://github.com/RenaKana/DanLingo/releases).** This release completes all 20 interface locales for new settings, performance tests and danmaku status. Edge Add-ons is not publicly available yet; store review is separate from GitHub publication, and an in-review submission is not an approval. Chrome Web Store submission is postponed.
+**Release version: 0.5.16, available for manual installation from [GitHub Releases](https://github.com/RenaKana/DanLingo/releases).** This release updates Bilibili player compatibility, translation scheduling, model capability discovery and settings controls. Edge Add-ons version 0.5.1 remains in review and is not publicly available; store review is separate from GitHub publication. Chrome Web Store submission is postponed.
 
 The interface supports 20 languages, follows the browser by default, and can be set independently of the translation source and target languages. The popup and Settings page share nine target-language presets and both accept a custom target language.
 

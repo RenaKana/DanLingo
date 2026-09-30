@@ -21,3 +21,17 @@ test('nested manual full-path override cannot silently discover an auto-normaliz
   }),{message:'models-endpoint-ambiguous'});
   assert.equal(calls,0);
 });
+
+test('connection discovery keeps sanitized metadata with the resolved proxy endpoint',async()=>{
+  let calls=0;
+  const result=await discoverConnectionModels(settings,'fixture',{fetch:async()=>{
+    calls++;
+    return calls===1 ? new Response('',{status:404}) : Response.json({data:[
+      {id:'next-model',effort:{supported_levels:['ultra','low'],default_level:'ultra',other:'ignored'}},
+    ]});
+  }});
+  assert.equal(calls,2);
+  assert.equal(result.effectiveEndpoint,'https://gateway.example/team/proxy/v1?tenant=test');
+  assert.deepEqual(result.models,['next-model']);
+  assert.deepEqual(result.capabilities['next-model'],{supportedLevels:['ultra','low'],defaultLevel:'ultra'});
+});

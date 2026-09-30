@@ -22,7 +22,9 @@ try {
     await cp(extensionSource, extension, { recursive: true });
     const entry = resolve(directory, 'hybrid-fixture-entry.ts');
     const modulePath = resolve('entrypoints/options/hybrid-ui.ts').replaceAll('\\', '/');
+    const progressPath = resolve('src/ui/progress.ts').replaceAll('\\', '/');
     await writeFile(entry, `import { mountHybridUI } from ${JSON.stringify(modulePath)};
+import { createProgress } from ${JSON.stringify(progressPath)};
 const base = { backend: 'online', localModelId: 'fixture-local', model: 'fixture-online',
   endpoint: 'https://fixture.invalid/v1', localConcurrency: 2, onlineRequestLimitPerDay: 0 };
 let draft = { ...base }, requestCount = 0, suggestionAvailable = true;
@@ -38,7 +40,23 @@ const ui = mountHybridUI({ container: document.querySelector('#hybrid-host'),
   }, changed: () => { window.__hybridFixture.dirty++; }, enabledChanged: () => {}, reveal: () => {} });
 window.__hybridFixture = { ui, get draft() { return draft; }, setModel(model) { draft.localModelId = model; return ui.refresh(); },
   setSuggestion(available) { suggestionAvailable = available; }, get requests() { return requestCount; }, dirty: 0 };
-ui.fill({ enabled: false, profiles: [] });`);
+ui.fill({ enabled: false, profiles: [] });
+const progress = createProgress(async () => {}, () => {});
+progress.attach('fixture-player', 'fixture-resource', 'bilibili');
+const supply = { visible: true, planned: true, state: 'running', status: '', actionText: '',
+  actionHidden: true, actionDisabled: true };
+const hybrid = { local: { actualRequests: 4 }, online: { actualRequests: 3 } };
+window.__hybridFixture.showPerformance = performance => progress.updateNativeSupply({
+  ...supply, hybrid: { ...hybrid, performance } });
+window.__hybridFixture.showError = () => progress.update({ enabled: true, displayMode: 'translated',
+  translationScope: 'window', prefetchSeconds: 5, urgentSeconds: 2 },
+  { total: 1, candidates: 1, filtered: 0, eligibilityUnknown: 0, translated: 0, messages: 1,
+    failed: 1, nearPrepared: 0, nearTotal: 1, sourceComplete: true,
+    skipped: { special: 0, language: 0, emoticon: 0 } }, 'hybrid-stream-unsupported', true);
+window.__hybridFixture.showPerformance({ local: { status: 'stable', samples: 4, expectedMs: 740.8, lastBatchItems: 2 },
+  online: { status: 'slowing', samples: 3, expectedMs: 1260.1, firstContentMs: 226.4,
+    charsPerSecond: 73.6, lastBatchItems: 4 } });
+progress.nativeSupplyHost.getRootNode().querySelector('#progress-details').open = true;`);
     const requireWxt = createRequire(import.meta.resolve('wxt'));
     const { build } = await import(pathToFileURL(requireWxt.resolve('vite')).href);
     await build({ configFile: false, logLevel: 'error', build: { outDir: extension,
@@ -46,7 +64,10 @@ ui.fill({ enabled: false, profiles: [] });`);
     const sourceCss = await readFile('entrypoints/options/options.css', 'utf8');
     await writeFile(resolve(extension, 'hybrid-fixture.html'), `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>${sourceCss}</style>
       <style>body{font:14px sans-serif;margin:24px;color:#222}#hybrid-host{max-width:720px}</style>
-      <body><div id="hybrid-host"></div><script type="module" src="hybrid-fixture.js"></script>`);
+      <body><div id="hybrid-host"></div><div id="fixture-player-wrap"><div id="playerWrap">
+        <div data-danlingo-player="fixture-player"><video></video></div></div></div>
+      <style>#fixture-player-wrap{margin-top:20px}#playerWrap{height:180px}#playerWrap video{width:320px;height:180px}</style>
+      <script type="module" src="hybrid-fixture.js"></script>`);
   }
   const { chromium } = await loadPlaywright();
   context = await chromium.launchPersistentContext(resolve(directory, 'profile'), {
@@ -65,9 +86,23 @@ ui.fill({ enabled: false, profiles: [] });`);
     await page.goto(origin + '/hybrid-fixture.html');
     await page.locator('#bilibili-hybrid').waitFor();
     assert.equal(await page.locator('#bilibili-hybrid').isChecked(), false);
+    assert.equal(await page.locator('#hybrid-adaptive').isChecked(), false);
+    assert.equal(await page.locator('#hybrid-online-streaming').isChecked(), false);
+    assert.deepEqual(await page.evaluate(() => {
+      const { adaptive, onlineStreaming } = window.__hybridFixture.ui.read(); return { adaptive, onlineStreaming };
+    }), { adaptive: false, onlineStreaming: false });
     report.checks.push('off-by-default');
     await page.locator('#bilibili-hybrid').check();
     await page.waitForFunction(() => window.__hybridFixture.requests >= 1);
+    const beforeFlags = await page.evaluate(() => ({ requests: window.__hybridFixture.requests, dirty: window.__hybridFixture.dirty }));
+    await page.locator('#hybrid-adaptive').check();
+    await page.locator('#hybrid-online-streaming').check();
+    assert.equal(await page.evaluate(() => window.__hybridFixture.requests), beforeFlags.requests);
+    assert.equal(await page.evaluate(() => window.__hybridFixture.dirty), beforeFlags.dirty + 2);
+    assert.deepEqual(await page.evaluate(() => {
+      const { adaptive, onlineStreaming } = window.__hybridFixture.ui.read(); return { adaptive, onlineStreaming };
+    }), { adaptive: true, onlineStreaming: true });
+    report.checks.push('independent-flags-do-not-requery-capacity');
     assert.equal(await page.locator('#hybrid-max-items').inputValue(), '3');
     assert.equal(await page.locator('#hybrid-max-chars').inputValue(), '1200');
     assert.equal((await page.evaluate(() => window.__hybridFixture.ui.read())).profiles.length, 0);
@@ -80,6 +115,8 @@ ui.fill({ enabled: false, profiles: [] });`);
     assert.equal(manual.p95Ms, 450);
     assert.equal(manual.sourceRecordId, 'fixture-record');
     await page.evaluate(() => window.__hybridFixture.ui.refresh());
+    assert.equal(await page.locator('#hybrid-adaptive').isChecked(), true);
+    assert.equal(await page.locator('#hybrid-online-streaming').isChecked(), true);
     assert.equal(await page.locator('#hybrid-max-items').inputValue(), '2');
     assert.equal((await page.evaluate(() => window.__hybridFixture.ui.read())).profiles[0].manual, true);
     assert.match(await page.locator('#hybrid-status').innerText(), /建议 4 条/);
@@ -88,14 +125,19 @@ ui.fill({ enabled: false, profiles: [] });`);
     await page.evaluate(() => window.__hybridFixture.setModel('changed-model'));
     await page.waitForFunction(() => document.querySelector('#hybrid-max-items')?.value === '3');
     assert.equal((await page.evaluate(() => window.__hybridFixture.ui.read())).profiles.length, 1);
+    assert.equal(await page.locator('#hybrid-adaptive').isChecked(), true);
+    assert.equal(await page.locator('#hybrid-online-streaming').isChecked(), true);
     await page.setViewportSize({ width: 390, height: 780 });
     const narrow = resolve(directory, 'hybrid-source-narrow.png');
     await page.locator('#hybrid-host').screenshot({ path: narrow }); report.screenshots.push(narrow);
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
-    report.checks.push('manual-profile-retained-and-identity-change-needs-new-choice');
+    report.checks.push('manual-profile-and-switches-retained-on-identity-change');
     await page.evaluate(() => window.__hybridFixture.ui.fill({ enabled: true,
+      adaptive: true, onlineStreaming: false,
       profiles: Array.from({ length: 50 }, (_, index) => ({ identity: (100 + index).toString(16).padStart(64, '0'),
         maxItems: 2, maxChars: 1000, manual: true })) }));
+    assert.equal(await page.locator('#hybrid-adaptive').isChecked(), true);
+    assert.equal(await page.locator('#hybrid-online-streaming').isChecked(), false);
     await page.locator('#hybrid-apply').waitFor({ state: 'visible' });
     await page.locator('#hybrid-apply').click();
     const bounded = await page.evaluate(() => window.__hybridFixture.ui.read().profiles);
@@ -119,6 +161,27 @@ ui.fill({ enabled: false, profiles: [] });`);
     assert.equal(await page.locator('#hybrid-max-chars').inputValue(), '900');
     assert.equal((await page.evaluate(() => window.__hybridFixture.ui.read())).profiles.at(-1).manual, true);
     report.checks.push('missing-record-requires-manual-limit-and-new-record-preserves-it');
+    const supply = page.locator('#danlingo-progress').locator('#native-supply-host');
+    await supply.waitFor({ state: 'visible' });
+    assert.equal(await supply.locator('#hybrid-local-status').innerText(), '稳定');
+    assert.equal(await supply.locator('#hybrid-local-expected').innerText(), '740.8');
+    assert.equal(await supply.locator('#hybrid-local-batch').innerText(), '2');
+    assert.equal(await supply.locator('#hybrid-online-status').innerText(), '变慢');
+    assert.equal(await supply.locator('#hybrid-online-first-content').innerText(), '226.4');
+    assert.equal(await supply.locator('#hybrid-online-rate').innerText(), '73.6');
+    assert.equal(await supply.locator('#hybrid-online-batch').innerText(), '4');
+    const progressShot = resolve(directory, 'hybrid-progress-narrow.png');
+    await supply.screenshot({ path: progressShot }); report.screenshots.push(progressShot);
+    await page.evaluate(() => window.__hybridFixture.showPerformance({ local: { status: 'learning', samples: 0 } }));
+    for (const id of ['hybrid-local-status', 'hybrid-local-expected', 'hybrid-local-batch',
+      'hybrid-online-status', 'hybrid-online-first-content', 'hybrid-online-rate']) {
+      assert.equal(await supply.locator('#' + id).innerText(), '—', id);
+    }
+    report.checks.push('performance-metrics-and-missing-data-in-progress-details');
+    await page.evaluate(() => window.__hybridFixture.showError());
+    assert.equal(await page.locator('#danlingo-progress').locator('#note').innerText(),
+      catalogs['zh-CN']['hybrid.error.streamUnsupported']);
+    report.checks.push('unsupported-streaming-error-points-to-hybrid-toggle');
   } else {
     const buildInfo = JSON.parse(await readFile(resolve(extension, 'danlingo-build.json'), 'utf8'));
     const manifest = JSON.parse(await readFile(resolve(extension, 'manifest.json'), 'utf8'));
@@ -165,8 +228,12 @@ ui.fill({ enabled: false, profiles: [] });`);
     await settingsSection(page, 'watching');
     await page.locator('#bilibili-hybrid').waitFor();
     assert.equal(await page.locator('#bilibili-hybrid').isChecked(), false);
+    assert.equal(await page.locator('#hybrid-adaptive').isChecked(), false);
+    assert.equal(await page.locator('#hybrid-online-streaming').isChecked(), false);
     report.checks.push('off-by-default');
     await page.locator('#bilibili-hybrid').check();
+    await page.locator('#hybrid-adaptive').check();
+    await page.locator('#hybrid-online-streaming').check();
     await page.waitForFunction(() => window.__hybridTrace.capacity.length >= 1);
     assert.equal(await page.locator('#hybrid-apply').isEnabled(), true);
     assert.equal((await page.evaluate(() => window.__hybridTrace.saves.length)), 0);
@@ -217,6 +284,8 @@ ui.fill({ enabled: false, profiles: [] });`);
     assert.equal(saved.backend, 'local');
     assert.equal(saved.onlineRequestLimitPerDay, 0);
     assert.equal(saved.bilibiliHybrid.enabled, true);
+    assert.equal(saved.bilibiliHybrid.adaptive, true);
+    assert.equal(saved.bilibiliHybrid.onlineStreaming, true);
     assert.ok(saved.bilibiliHybrid.profiles.some(profile => profile.identity === 'b'.repeat(64) && profile.maxItems === 2 && profile.maxChars === 900 && profile.manual));
     assert.deepEqual(await page.evaluate(() => window.__hybridTrace.permissionRequests), [
       { origins: ['https://fixture.invalid/*'] }, { origins: ['https://fixture.invalid/*'] }]);
@@ -232,6 +301,10 @@ ui.fill({ enabled: false, profiles: [] });`);
       assert.equal(await page.locator('#hybrid-max-items').inputValue(), '2');
       assert.equal(await page.locator('#hybrid-max-chars').inputValue(), '900');
       assert.equal(await page.locator('#bilibili-hybrid').isChecked(), true);
+      assert.equal(await page.locator('#hybrid-adaptive').isChecked(), true);
+      assert.equal(await page.locator('#hybrid-online-streaming').isChecked(), true);
+      assert.equal(await page.locator('[data-i18n="hybrid.adaptive"]').textContent(), catalogs[code]['hybrid.adaptive']);
+      assert.equal(await page.locator('[data-i18n="hybrid.onlineStreaming"]').textContent(), catalogs[code]['hybrid.onlineStreaming']);
       assert.equal(await page.evaluate(() => document.activeElement.id), 'hybrid-max-items');
       assert.ok((await page.locator('#hybrid-status').innerText()).includes(catalogs[code]['hybrid.manualLimit']));
       assert.deepEqual(await page.evaluate(() => ({ capacity: __hybridTrace.capacity.length,
@@ -244,6 +317,8 @@ ui.fill({ enabled: false, profiles: [] });`);
     await page.setViewportSize({ width: 390, height: 780 });
     await settingsSection(page, 'watching');
     assert.equal(await page.locator('#bilibili-hybrid').isChecked(), true);
+    assert.equal(await page.locator('#hybrid-adaptive').isChecked(), true);
+    assert.equal(await page.locator('#hybrid-online-streaming').isChecked(), true);
     assert.equal(await page.locator('#hybrid-controls').isVisible(), true);
     assert.equal(await page.locator('#hybrid-max-items').inputValue(), '2');
     assert.equal(await page.locator('#hybrid-max-chars').inputValue(), '900');

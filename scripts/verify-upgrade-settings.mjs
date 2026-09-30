@@ -209,7 +209,7 @@ try{
       await until(async()=>page.locator('#local-result').evaluate(el=>el.classList.contains('error')&&!!el.textContent?.trim()),'visible native load rejection');
       assert.equal((await rpc({type:'local-control',control:{action:'state'}})).state.error,'LOCAL_MODEL_LOAD_REJECTED');
       assert.match(await page.locator('#local-result').textContent(),/未能初始化模型/);
-      await page.locator('#local-stop').click();await until(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='idle','unload after failed row load');
+      assert.equal(await page.locator('#local-stop').isVisible(),false,'failed load has no loaded model to unload');
       await page.locator('#save').click();
       await until(async()=>(await rpc({type:'settings'})).settings?.backend==='local','local backend saved');
       await page.reload();await page.locator('#performance-start').waitFor({state:'attached'});await page.waitForFunction(id=>!!document.querySelector(`#local-model-entries [data-model-id="${id}"]`),selected);const local=await rpc({type:'settings'});assert.equal(local.hasKey,true);assert.equal(local.settings.model,'deepseek-v4-flash');assert.equal(local.settings.localModelId,selected);

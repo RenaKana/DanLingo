@@ -1,6 +1,6 @@
 {
   "name": "danlingo",
-  "version": "0.5.1",
+  "version": "0.5.16",
   "private": true,
   "description": "Translate danmaku and live chat on Niconico, YouTube and Bilibili with online services or local GGUF models.",
   "license": "MIT",

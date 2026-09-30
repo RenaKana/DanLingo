@@ -7,12 +7,30 @@ import type { ProtectedText } from './text.ts';
 import { hyTranslationPrompt, localPromptMode, localQualityIssue, localSingleItem } from './local-policy.ts';
 import { translationPrompt } from '../local/translation-profile.ts';
 import type { LocalInferenceMetrics } from '../local/types.ts';
+import { parseModelEffortMetadata } from '../core/model-capabilities.ts';
+import type { ModelEffortMetadata } from '../core/model-capabilities.ts';
 export { placeholderTokens, placeholdersIntact } from './text.ts';
 
 export interface ProviderItem { id: string; text: string }
 export interface ProviderOutput { text?: string; reason?: string }
 export interface ProviderResult { items: Map<string, ProviderOutput>; usage?: Usage; duplicateIds?: string[]; local?: LocalInferenceMetrics }
 interface PreparedItem extends ProviderItem { protected: ProtectedText }
+export const HYBRID_JSONL_PROMPT_VERSION = 'danlingo-hybrid-jsonl-v1';
+/** Numeric, monotonic transport observations. No source or translated content is included. */
+export interface ProviderObservation {
+  dispatchedAt: number;
+  observedAt: number;
+  inputChars: number;
+  items: number;
+  streaming: boolean;
+  firstContentAt?: number;
+  lastContentAt?: number;
+  contentChunks: number;
+  outputChars: number;
+  firstChunkChars?: number;
+  validItems: number;
+  lastItemAt?: number;
+}
 export interface ProviderRequest {
   /** Explicit latency test: same live payload, full configured timeout. */
   benchmark?: boolean;
@@ -26,6 +44,10 @@ export interface ProviderRequest {
   signal?: AbortSignal;
   budgetMs: number;
   mode?: 'vod' | 'deadline';
+  /** Separate JSONL wire protocol for online hybrid routing; does not change live or VOD modes. */
+  responseProtocol?: 'hybrid-jsonl-v1';
+  /** Passive snapshots after dispatch, content and validated items, including final failure. */
+  onObservation?: (snapshot: ProviderObservation) => void;
   strategy?: TranslationStrategy;
   /** Explicit user retranslation: bypass native prefix reuse and strengthen the target instruction. */
   force?: boolean;
@@ -53,8 +75,9 @@ export class ProviderError extends Error {
   readonly status?: number;
   readonly usage?: Usage;
   readonly partialItems?: Map<string, ProviderOutput>;
+  readonly observation?: ProviderObservation;
   constructor(reason: string, retryable = false, status?: number, retryAfterMs?: number,
-    partial?: { usage?: Usage; partialItems?: Map<string, ProviderOutput> }) {
+    partial?: { usage?: Usage; partialItems?: Map<string, ProviderOutput>; observation?: ProviderObservation }) {
     super(reason);
     this.name = 'ProviderError';
     this.code = reason;
@@ -64,13 +87,14 @@ export class ProviderError extends Error {
         : status === 404 || status === 405 || status === 422 ? 'endpoint'
           : reason === 'cancelled' || reason === 'timeout' || reason === 'expired' ? 'cancelled'
             : reason.startsWith('http-') ? 'transport'
-              : reason.startsWith('invalid-') || reason.startsWith('unsupported-') ? 'configuration'
+              : reason === 'hybrid-stream-unsupported' || reason.startsWith('invalid-') || reason.startsWith('unsupported-') ? 'configuration'
                 : reason.includes('response') || reason.includes('stream') ? 'response' : 'transport';
     this.retryable = retryable;
     this.status = status;
     this.retryAfterMs = retryAfterMs;
     this.usage = partial?.usage;
     this.partialItems = partial?.partialItems;
+    this.observation = partial?.observation;
   }
 }
 
@@ -91,6 +115,18 @@ const SYSTEM_PROMPT = [
 
 function object(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+function explicitStreamUnsupported(raw: unknown): boolean {
+  const error = object(object(raw)?.error);
+  if (!error) return false;
+  const fields = [error.param, error.code, error.type, error.message]
+    .filter((value): value is string => typeof value === 'string')
+    .map(value => value.toLowerCase().replace(/[_-]/g, ' '));
+  const mentionsStream = (value: string) => /\bstream(?:ing)?\b/.test(value);
+  const unsupported = (value: string) => /\b(?:unsupported|not supported|does not support|not implemented)\b|不支持/.test(value);
+  const param = typeof error.param === 'string' ? error.param.toLowerCase().replace(/[_-]/g, ' ') : '';
+  return fields.some(value => mentionsStream(value) && unsupported(value))
+    || (/^stream(?:ing)?(?: options?)?$/.test(param) && fields.some(unsupported));
 }
 function tokenCount(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : undefined;
@@ -139,8 +175,9 @@ function prepareItems(items: ProviderItem[]): PreparedItem[] {
   return items.map((item) => ({ ...item, protected: protectText(item.text) }));
 }
 
-function payload(settings: ProviderSettings, safe: PreparedItem[], mode?: 'vod' | 'deadline', strategy: TranslationStrategy = 'normal', force = false): Record<string, unknown> {
-  const compact = mode === 'deadline';
+function payload(settings: ProviderSettings, safe: PreparedItem[], mode?: 'vod' | 'deadline', strategy: TranslationStrategy = 'normal', force = false,
+  responseProtocol?: ProviderRequest['responseProtocol']): Record<string, unknown> {
+  const compact = mode === 'deadline' || (settings.backend !== 'local' && responseProtocol === 'hybrid-jsonl-v1');
   const stream = settings.backend !== 'local' && compact && settings.translationStream === true;
   const body: Record<string, unknown> = {
     model: settings.model, stream,
@@ -297,7 +334,9 @@ function parseResult(raw: unknown, inputs: PreparedItem[], compact = false): Pro
 interface AttemptProgress { usage?: Usage; items: Map<string, ProviderOutput>; duplicateIds: Set<string> }
 
 async function readCompactStream(response: Response, signal: AbortSignal, inputs: PreparedItem[], progress: AttemptProgress,
-  onItem: (id: string, output: ProviderOutput) => void): Promise<ProviderResult> {
+  onItem: (id: string, output: ProviderOutput) => void,
+  observeContent?: (content: string) => void, observeItem?: () => void,
+  hybridProtocol = false): Promise<ProviderResult> {
   const advertised = Number(response.headers.get('content-length'));
   if (Number.isFinite(advertised) && advertised > MAX_RESPONSE_BYTES) {
     void response.body?.cancel().catch(() => undefined);
@@ -331,7 +370,10 @@ async function readCompactStream(response: Response, signal: AbortSignal, inputs
     seen.add(index);
     const output = row.length === 2 ? validateText(input, row[1]) : { reason: 'invalid-response' };
     progress.items.set(input.id, output);
-    if (output.text !== undefined) onItem(input.id, { ...output });
+    if (output.text !== undefined) {
+      observeItem?.();
+      onItem(input.id, { ...output });
+    }
   };
   const acceptEvent = () => {
     if (!eventData.length) return;
@@ -342,14 +384,20 @@ async function readCompactStream(response: Response, signal: AbortSignal, inputs
     // Usage frames are cumulative for the attempt. Replace/merge fields, never sum repeated frames.
     const usage = readUsage(envelope?.usage);
     if (usage) progress.usage = { ...progress.usage, ...usage };
-    if (object(envelope?.error)) throw new ProviderError('provider-stream-error', true);
+    if (object(envelope?.error)) {
+      const unsupported = hybridProtocol && explicitStreamUnsupported(envelope);
+      throw new ProviderError(unsupported ? 'hybrid-stream-unsupported' : 'provider-stream-error', !unsupported);
+    }
     const choices = Array.isArray(envelope?.choices) ? envelope.choices : [];
     for (const rawChoice of choices) {
       const choice = object(rawChoice);
       if (choice?.index !== undefined && choice.index !== 0) continue;
       const delta = object(choice?.delta);
       if (doneMarker) continue;
-      if (typeof delta?.content === 'string') jsonlText += delta.content;
+      if (typeof delta?.content === 'string' && delta.content.length) {
+        observeContent?.(delta.content);
+        jsonlText += delta.content;
+      }
       let newline: number;
       while ((newline = jsonlText.indexOf('\n')) !== -1) {
         acceptLine(jsonlText.slice(0, newline)); jsonlText = jsonlText.slice(newline + 1);
@@ -431,10 +479,20 @@ async function readJson(response: Response, signal: AbortSignal): Promise<unknow
 }
 
 /** Read-only discovery. It does not imply that a listed model supports Chat Completions. */
-export async function discoverModels(request: {
+export interface ModelDiscoveryRequest {
   endpoint: string; allowLocalHttp: boolean; apiKey: string; timeoutMs: number; signal?: AbortSignal;
   protocolOverride?: ProviderSettings['protocolOverride']; endpointMode?: ProviderSettings['endpointMode'];
-}, fetcher: typeof fetch = globalThis.fetch.bind(globalThis)): Promise<string[]> {
+}
+export interface DiscoveredModelCatalog { models: string[]; capabilities?: Record<string, ModelEffortMetadata> }
+
+function sameEffort(a: ModelEffortMetadata | undefined, b: ModelEffortMetadata | undefined): boolean {
+  return a === b || !!a && !!b && a.defaultLevel === b.defaultLevel
+    && a.supportedLevels.length === b.supportedLevels.length
+    && a.supportedLevels.every(level => b.supportedLevels.includes(level));
+}
+
+export async function discoverModelCatalog(request: ModelDiscoveryRequest,
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis)): Promise<DiscoveredModelCatalog> {
   let url: string;
   try { url = modelsEndpoint(request.endpoint, request.allowLocalHttp, {
     protocolOverride: request.protocolOverride, endpointMode: request.endpointMode,
@@ -461,16 +519,33 @@ export async function discoverModels(request: {
     if (signal.aborted) throw new ProviderError(timeout.aborted ? 'timeout' : 'cancelled');
     if (!Array.isArray(raw?.data)) throw new ProviderError('invalid-response');
     const models = new Set<string>();
+    const capabilities: Record<string, ModelEffortMetadata> = Object.create(null);
+    const conflicting = new Set<string>();
     for (const value of raw.data.slice(0, 1000)) {
-      const id = object(value)?.id;
-      if (typeof id === 'string' && id.trim() === id && id.length > 0 && id.length <= 100 && !/[\u0000-\u001f\u007f]/.test(id)) models.add(id);
+      const model = object(value);
+      const id = model && Object.hasOwn(model, 'id') ? model.id : undefined;
+      if (typeof id !== 'string' || id.trim() !== id || id.length === 0 || id.length > 100 || /[\u0000-\u001f\u007f]/.test(id)) continue;
+      const metadata = parseModelEffortMetadata(value);
+      if (!models.has(id)) {
+        models.add(id);
+        if (metadata) capabilities[id] = metadata;
+      } else if (!conflicting.has(id) && !sameEffort(Object.hasOwn(capabilities, id) ? capabilities[id] : undefined, metadata)) {
+        delete capabilities[id];
+        conflicting.add(id);
+      }
     }
     if (!models.size) throw new ProviderError('empty-model-list');
-    return [...models];
+    return { models: [...models], ...(Object.keys(capabilities).length ? { capabilities } : {}) };
   } catch (error) {
     if (signal.aborted) throw new ProviderError(timeout.aborted ? 'timeout' : 'cancelled');
     throw error instanceof ProviderError ? error : new ProviderError('network-error');
   }
+}
+
+/** Backward-compatible names-only discovery, using the same single GET. */
+export async function discoverModels(request: ModelDiscoveryRequest,
+  fetcher: typeof fetch = globalThis.fetch.bind(globalThis)): Promise<string[]> {
+  return (await discoverModelCatalog(request, fetcher)).models;
 }
 
 // Registered once by the trusted background. Applies to every provider instance,
@@ -496,6 +571,7 @@ export class ChatCompletionsProvider {
     this.onLocalPayload = options.onLocalPayload;
   }
   async complete(request: ProviderRequest): Promise<ProviderResult> {
+    const hybridProtocol = request.settings.backend !== 'local' && request.responseProtocol === 'hybrid-jsonl-v1';
     let origin: string, endpoint: string;
     try {
       const connection = resolveConnection(request.settings);
@@ -507,7 +583,7 @@ export class ChatCompletionsProvider {
     const prepared = prepareItems(request.items);
     let safe = prepared.filter((item) => !item.protected.reason);
     const skipped = prepared.filter((item) => item.protected.reason);
-    let body = payload(request.settings, safe, request.mode, request.strategy, request.force);
+    let body = payload(request.settings, safe, request.mode, request.strategy, request.force, request.responseProtocol);
     if (safe.length === 0) return { items: new Map(skipped.map((item) => [item.id, { reason: 'unsupported-emoticon' }])) };
     const maxAttemptTimeout = request.settings.backend === 'local' || request.benchmark || request.mode === 'vod' || request.strategy === 'superchat' || request.strategy === 'manual'
       ? MAX_REQUEST_TIMEOUT_MS : MAX_REQUEST_MS;
@@ -515,6 +591,25 @@ export class ChatCompletionsProvider {
     if (!Number.isFinite(timeout) || timeout <= 0) throw new ProviderError('expired');
     const controller = new AbortController();
     const progress: AttemptProgress = { items: new Map(), duplicateIds: new Set() };
+    let observation: ProviderObservation | undefined;
+    const observe = (): ProviderObservation | undefined => {
+      if (!observation) return undefined;
+      const snapshot = { ...observation, observedAt: this.clock.now() };
+      if (request.onObservation) {
+        try { void Promise.resolve(request.onObservation({ ...snapshot })).catch(() => undefined); }
+        catch { /* Observers cannot affect delivery. */ }
+      }
+      return snapshot;
+    };
+    const observeJson = (raw: unknown, result: ProviderResult) => {
+      if (!observation) return;
+      const envelope = object(raw);
+      const choice = Array.isArray(envelope?.choices) ? object(envelope.choices[0]) : undefined;
+      const content = object(choice?.message)?.content;
+      observation.outputChars = typeof content === 'string' ? content.length : 0;
+      observation.validItems = [...result.items.values()].filter(output => output.text !== undefined).length;
+      if (observation.validItems) observation.lastItemAt = this.clock.now();
+    };
     // Race the entire attempt (including body reads), even if an injected fetch ignores AbortSignal.
     return new Promise<ProviderResult>((resolve, reject) => {
       let finished = false;
@@ -525,11 +620,13 @@ export class ChatCompletionsProvider {
         this.clock.clearTimeout(timer);
         request.signal?.removeEventListener('abort', cancel);
         releaseKeepAlive();
+        const finalObservation = observe();
         if (error) {
           controller.abort();
           reject(new ProviderError(error.message, error.retryable, error.status, error.retryAfterMs, {
             usage: error.usage ?? progress.usage,
             partialItems: error.partialItems ?? (progress.items.size ? new Map(progress.items) : undefined),
+            observation: finalObservation,
           }));
         }
         else resolve(result!);
@@ -549,35 +646,75 @@ export class ChatCompletionsProvider {
           if (request.isItemCurrent) {
             safe = safe.filter(item => request.isItemCurrent!(item.id));
             if (!safe.length) throw new ProviderError('cancelled');
-            body = payload(request.settings, safe, request.mode, request.strategy, request.force);
+            body = payload(request.settings, safe, request.mode, request.strategy, request.force, request.responseProtocol);
           }
           const dispatched = safe.map(({ id, text }) => ({ id, text }));
           if (request.settings.backend === 'local') this.onLocalPayload?.(dispatched);
           if (finished || controller.signal.aborted) return;
           request.onDispatch?.(dispatched, request.settings.backend === 'local' ? 'local' : 'online');
-          const response = await this.fetcher(endpoint, {
+          const postBody = JSON.stringify(body);
+          if (hybridProtocol || request.onObservation) {
+            const now = this.clock.now();
+            observation = { dispatchedAt: now, observedAt: now,
+              inputChars: safe.reduce((sum, item) => sum + item.text.length, 0), items: safe.length,
+              streaming: body.stream === true, contentChunks: 0, outputChars: 0, validItems: 0 };
+          }
+          const pendingResponse = this.fetcher(endpoint, {
             method: 'POST', redirect: 'error', credentials: 'omit', cache: 'no-store', referrerPolicy: 'no-referrer',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${request.apiKey}` },
-            body: JSON.stringify(body), signal: controller.signal,
+            body: postBody, signal: controller.signal,
           });
+          observe();
+          const response = await pendingResponse;
           if (response.redirected || (response.url && new URL(response.url).origin !== origin)
               || (response.status >= 300 && response.status < 400)) throw new ProviderError('redirect-blocked');
           if (!response.ok) {
             const status = response.status;
             // Some gateways return billable usage with an error; retain it without exposing response text.
-            try { progress.usage = readUsage(object(await readJson(response, controller.signal))?.usage); } catch { /* Preserve HTTP status. */ }
+            let remoteError: unknown;
+            try {
+              remoteError = await readJson(response, controller.signal);
+              progress.usage = readUsage(object(remoteError)?.usage);
+            } catch { /* Preserve HTTP status. */ }
+            if (hybridProtocol && body.stream === true && explicitStreamUnsupported(remoteError))
+              throw new ProviderError('hybrid-stream-unsupported', false, status);
             throw new ProviderError(
               `http-${status}`, status === 408 || status === 429 || status >= 500,
               status, status === 429 ? retryAfterMs(response.headers.get('retry-after'), this.clock.wallNow()) : undefined,
             );
           }
-          const result = body.stream === true
-            ? await readCompactStream(response, controller.signal, safe, progress, (id, output) => {
+          const mediaType = response.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+          if (hybridProtocol && body.stream === true && mediaType !== 'text/event-stream' && mediaType !== 'application/json') {
+            void response.body?.cancel().catch(() => undefined);
+            throw new ProviderError('hybrid-stream-unsupported');
+          }
+          let result: ProviderResult;
+          if (body.stream === true && (!hybridProtocol || mediaType !== 'application/json')) {
+            result = await readCompactStream(response, controller.signal, safe, progress, (id, output) => {
               if (!finished && !controller.signal.aborted) request.onItem?.(id, output);
-            })
-            : request.settings.backend === 'local'
-              ? parseLocalResult(await readJson(response, controller.signal), safe, request.settings, request.mode === 'deadline')
-              : parseResult(await readJson(response, controller.signal), safe, request.mode === 'deadline');
+            }, observation ? content => {
+              if (!observation || finished) return;
+              const now = this.clock.now();
+              observation.firstContentAt ??= now;
+              observation.firstChunkChars ??= content.length;
+              observation.lastContentAt = now;
+              observation.contentChunks++;
+              observation.outputChars += content.length;
+              observe();
+            } : undefined, observation ? () => {
+              if (!observation || finished) return;
+              observation.validItems++;
+              observation.lastItemAt = this.clock.now();
+              observe();
+            } : undefined, hybridProtocol);
+          } else {
+            if (hybridProtocol && observation) { observation.streaming = false; observe(); }
+            const raw = await readJson(response, controller.signal);
+            result = request.settings.backend === 'local'
+              ? parseLocalResult(raw, safe, request.settings, request.mode === 'deadline')
+              : parseResult(raw, safe, request.mode === 'deadline' || hybridProtocol);
+            observeJson(raw, result);
+          }
           progress.usage = result.usage;
           for (const item of skipped) result.items.set(item.id, { reason: 'unsupported-emoticon' });
           finish(result);

@@ -181,13 +181,14 @@ test('pause and buffering hold the list and prepared text through repeated long 
       assert.equal(f.attachment.nativeSupply.report().ready, 1);
     }
   }
-  assert.equal(f.shadow().items[0].deadlineAtEpochMs, before.items[0].deadlineAtEpochMs + 90_000);
+  assert.equal(f.shadow().items[0].deadlineAtEpochMs, f.shadow().sampledAtEpochMs + 60_000);
   assert.equal(f.messages.findLast(row => row.type === 'snapshot').nativeSupply.ownedRelease.totals.selected, 1);
   f.video.paused = false; f.video.readyState = 4; f.danmaku.isRunning = true;
   // This gap is not a seek. Resume must not extrapolate wall time spent paused.
   f.advanceWall(2000); f.dispatch('playing');
   assert.equal(f.attachment.epoch, 0);
   assert.equal(f.shadow().predictionEpoch, before.predictionEpoch);
+  assert.equal(f.shadow().items[0].deadlineAtEpochMs, before.items[0].deadlineAtEpochMs + 92_000);
   f.setTime(4, 97_000);
   f.content({ type: 'control', generation: 0, enabled: true, displayMode: 'translated',
     bilibiliOwnedRelease: true, plannedSupply });
@@ -196,6 +197,166 @@ test('pause and buffering hold the list and prepared text through repeated long 
   assert.equal(f.models[0].text, '訳1');
   assert.equal(f.attachment.nativeSupply.report().counts.adopted, 1);
   assert.deepEqual(f.playbackWrites, { pauseCalls: 0, playCalls: 0, timeWrites: 0, rateWrites: 0 });
+});
+
+test('cold pause seals only the frozen five-second window with native filters and bounded preparation leases', t => {
+  const timeline = [item(1, .5), item(2, 4.5), item(3, 4.6), item(4, 4.7), item(5, 5.5)];
+  const f = fixture(timeline); const updates = [], owned = f.owned(updates);
+  t.after(() => owned.stop());
+  f.setRule(source => source.dmid === '4'
+    ? { state: 'exclude', reason: 'native-user-keyword' }
+    : { state: 'retain', reason: 'allowed' });
+  f.manager.containerSize.height = 28.125;
+  f.video.paused = true; f.danmaku.isRunning = false;
+  owned.tick(0);
+  const first = updates.at(-1);
+  assert.equal(first.known, true);
+  assert.equal(first.suspended, true);
+  assert.deepEqual(first.items.map(row => row.sourceId), ['1', '2']);
+  assert.deepEqual(first.items.map(row => row.deadlineAtEpochMs), [61_000, 61_000]);
+  assert.equal(owned.report().rejected['native-user-keyword'], 1);
+  assert.equal(owned.report().rejected['density-cap'], 1);
+  f.advanceWall(90_000); owned.tick(0);
+  assert.equal(updates.at(-1).predictionEpoch, first.predictionEpoch);
+  assert.deepEqual(updates.at(-1).items.map(row => row.sourceId), ['1', '2']);
+  assert.deepEqual(updates.at(-1).items.map(row => row.deadlineAtEpochMs), [151_000, 151_000]);
+  assert.equal(owned.report().totals.selected, 2);
+  assert.equal(owned.report().sealedBuckets, 5);
+  f.video.paused = false; f.danmaku.isRunning = true; owned.tick(0);
+  assert.deepEqual(updates.at(-1).items.map(row => [row.sourceId, row.deadlineAtEpochMs]), [['2', 94_500]],
+    'resuming restores the playback deadline and cancels near work whose opportunity already passed');
+  assert.deepEqual(f.playbackWrites, { pauseCalls: 0, playCalls: 0, timeWrites: 0, rateWrites: 0 });
+});
+
+test('pause lease never revives preexpired or terminal rows, and restores live playback deadlines', t => {
+  const timeline = [item(1, 1), item(2, 2), item(3, 4.5), item(4, 4.6), item(5, 4.7)];
+  const f = fixture(timeline); const updates = [], owned = f.owned(updates);
+  t.after(() => owned.stop());
+  owned.tick(0);
+  owned.markSupplied(timeline[3]); owned.markSuppressed(timeline[4]);
+  f.advanceWall(1500);
+  f.video.paused = true; f.danmaku.isRunning = false; owned.tick(0);
+  assert.deepEqual(updates.at(-1).items.map(row => row.sourceId), ['3']);
+  assert.equal(updates.at(-1).items[0].deadlineAtEpochMs, 62_500);
+  f.advanceWall(5000); owned.tick(0);
+  assert.deepEqual(updates.at(-1).items.map(row => row.sourceId), ['3']);
+  assert.equal(updates.at(-1).items[0].deadlineAtEpochMs, 67_500);
+  f.video.paused = false; f.danmaku.isRunning = true; owned.tick(0);
+  assert.deepEqual(updates.at(-1).items.map(row => [row.sourceId, row.deadlineAtEpochMs]), [['3', 9500]]);
+  assert.deepEqual(f.playbackWrites, { pauseCalls: 0, playCalls: 0, timeWrites: 0, rateWrites: 0 });
+});
+
+test('paused selections keep validating source text and pool identity', t => {
+  const timeline = [item(1, 4.5), item(2, 4.6)];
+  const pool = structuredClone(timeline);
+  const f = fixture(timeline, pool); const updates = [], misses = [];
+  const owned = f.owned(updates, (...args) => misses.push(args));
+  t.after(() => owned.stop());
+  f.video.readyState = 2; f.danmaku.isRunning = false;
+  owned.tick(0);
+  assert.deepEqual(updates.at(-1).items.map(row => row.sourceId), ['1', '2']);
+  timeline[0].text = 'changed source'; pool[1].uhash = 'changed author';
+  owned.tick(0);
+  assert.deepEqual(updates.at(-1).items, []);
+  assert.deepEqual(misses.map(([, , , , reason]) => reason),
+    ['source-metadata-changed', 'source-membership-changed']);
+  f.advanceWall(5000); owned.tick(0);
+  assert.deepEqual(updates.at(-1).items, []);
+  assert.equal(misses.length, 2);
+  assert.deepEqual(f.playbackWrites, { pauseCalls: 0, playCalls: 0, timeWrites: 0, rateWrites: 0 });
+});
+
+test('window-fullscreen-window resizing preserves sealed plans and both early and later prepared text', t => {
+  const timeline = [item(1, 4.5), item(2, 4.6)];
+  const f = fixture(timeline, structuredClone(timeline)); t.after(() => f.attachment.stop());
+  f.startPlanned(); f.readyPlanned(timeline[0]);
+  const before = f.shadow();
+  const selected = before.items.map(row => ({ id: row.id, deadlineAtEpochMs: row.deadlineAtEpochMs }));
+  f.resetPlaybackWrites();
+  for (const size of [{ width: 1920, height: 1080 }, { width: 500, height: 280 },
+    { width: 1280, height: 720 }, { width: 500, height: 280 }]) {
+    Object.assign(f.manager.containerSize, size);
+    f.attachment.tick();
+    assert.equal(f.shadow().known, true);
+    assert.equal(f.shadow().predictionEpoch, before.predictionEpoch);
+    assert.deepEqual(f.shadow().items.map(row => ({ id: row.id, deadlineAtEpochMs: row.deadlineAtEpochMs })), selected);
+    assert.equal(f.attachment.nativeSupply.report().ready, 1);
+    assert.equal(f.messages.findLast(row => row.type === 'snapshot').nativeSupply.ownedRelease.totals.selected, 2);
+  }
+  f.readyPlanned(timeline[1]);
+  assert.equal(f.attachment.nativeSupply.report().ready, 2, 'a prepared result arriving after resize remains qualified');
+  f.setNativeCandidates(timeline);
+  f.setTime(4, 2000); f.resetPlaybackWrites(); f.manager.fetchAndInitDm(4);
+  assert.deepEqual(f.models.map(model => model.text), ['訳1', '訳2']);
+  assert.equal(f.attachment.nativeSupply.report().counts.adopted, 2);
+  for (const model of f.models) model.textData.on = false;
+  Object.assign(f.manager.containerSize, { width: 1920, height: 1080 });
+  f.attachment.tick(); f.manager.fetchAndInitDm(4);
+  assert.equal(f.models.length, 2, 'resizing after native consumption cannot replay either event');
+  assert.equal(f.attachment.nativeSupply.report().counts.adopted, 2);
+  assert.deepEqual(f.playbackWrites, { pauseCalls: 0, playCalls: 0, timeWrites: 0, rateWrites: 0 });
+});
+
+test('a resized container limits newly opened buckets without reopening terminal selections', t => {
+  const timeline = [item(1, 4.5), item(2, 4.6), item(3, 5.2), item(4, 5.3)];
+  const f = fixture(timeline); t.after(() => f.attachment.stop());
+  const updates = [], owned = f.owned(updates);
+  owned.tick(0);
+  const before = updates.at(-1);
+  assert.deepEqual(before.items.map(row => row.sourceId), ['1', '2']);
+  f.manager.containerSize.height = 28.125;
+  f.setTime(1, 2000); owned.tick(0);
+  assert.equal(updates.at(-1).predictionEpoch, before.predictionEpoch);
+  assert.deepEqual(updates.at(-1).items.map(row => row.sourceId), ['1', '2', '3']);
+  assert.equal(updates.at(-1).items[0].deadlineAtEpochMs, before.items[0].deadlineAtEpochMs);
+  assert.equal(owned.report().rejected['density-cap'], 1, 'the new bucket uses the smaller height');
+  owned.markSupplied(timeline[0]); owned.markSuppressed(timeline[2]);
+  f.setTime(4.7, 5700); owned.tick(0);
+  assert.equal(owned.report().totals.missed, 1);
+  f.manager.containerSize.height = 280; owned.tick(0);
+  assert.equal(updates.at(-1).predictionEpoch, before.predictionEpoch);
+  assert.deepEqual(updates.at(-1).items, []);
+  assert.deepEqual(owned.report().totals, { selected: 3, supplied: 1, missed: 1, suppressed: 1 });
+  assert.equal(owned.matches(timeline[3]), false, 'a rejected row in a sealed bucket stays rejected');
+});
+
+test('invalid dimensions revoke the previous prepared generation and never revive it on recovery', async t => {
+  for (const [name, dimensions] of [['zero width', { width: 0 }], ['NaN width', { width: NaN }],
+    ['zero height', { height: 0 }], ['NaN height', { height: NaN }]])
+    await t.test(name, t => {
+      const f = fixture(); t.after(() => f.attachment.stop());
+      f.startPlanned(); f.readyPlanned();
+      const before = f.shadow();
+      Object.assign(f.manager.containerSize, dimensions); f.attachment.tick();
+      assert.equal(f.shadow().known, false);
+      assert.ok(f.shadow().predictionEpoch > before.predictionEpoch);
+      assert.equal(f.attachment.nativeSupply.report().ready, 0);
+      Object.assign(f.manager.containerSize, { width: 500, height: 280 }); f.attachment.tick();
+      assert.equal(f.attachment.nativeSupply.report().ready, 0);
+      f.setTime(4, 2000); f.manager.fetchAndInitDm(4);
+      assert.equal(f.models.length, 0, 'an old prepared result cannot survive a lost native contract');
+    });
+});
+
+test('real native rule changes and seek still revoke prepared text after a harmless resize', t => {
+  const f = fixture([item(1, 4.5)], undefined, { realRules: true });
+  t.after(() => f.attachment.stop());
+  f.startPlanned(); f.readyPlanned();
+  const before = f.shadow();
+  f.manager.containerSize.height = 1080; f.attachment.tick();
+  assert.equal(f.shadow().predictionEpoch, before.predictionEpoch);
+  assert.equal(f.attachment.nativeSupply.report().ready, 1);
+  f.blockStore.dmSettingStore.state.typeScroll = false; f.attachment.tick();
+  assert.ok(f.shadow().predictionEpoch > before.predictionEpoch);
+  assert.equal(f.attachment.nativeSupply.report().ready, 0);
+  f.blockStore.dmSettingStore.state.typeScroll = true; f.attachment.tick();
+  f.readyPlanned();
+  const restored = f.shadow();
+  f.seek(2); f.attachment.tick();
+  assert.ok(f.attachment.epoch > restored.epoch);
+  assert.equal(f.attachment.nativeSupply.report().ready, 0);
+  f.setTime(4, 2000); f.manager.fetchAndInitDm(4);
+  assert.equal(f.models.length, 0);
 });
 
 test('fresh parsed Worker rows without on are admitted once and acquire native lifecycle only during insert', t => {
@@ -243,9 +404,12 @@ test('pause keeps unknown and changed-rule invalidation distinct from a valid ho
   f.setRule(() => ({ state: 'retain', reason: 'new-rule' }), 6); f.attachment.tick();
   assert.notEqual(f.shadow().predictionEpoch, before.predictionEpoch);
   assert.equal(f.attachment.nativeSupply.report().ready, 0);
-  assert.deepEqual(f.shadow().items, [], 'pause does not expand or rebuild the changed list');
+  assert.deepEqual(f.shadow().items.map(row => row.sourceId), ['1'],
+    'the new rule generation may plan the same frozen window without reviving its old result');
+  assert.equal(f.shadow().items[0].deadlineAtEpochMs, f.shadow().sampledAtEpochMs + 60_000);
   f.setRuleKnown(false); f.attachment.tick();
   assert.equal(f.shadow().known, false);
+  assert.deepEqual(f.shadow().items, []);
 });
 
 test('real native rules admit mode-1 rows with irrelevant stack history, then adopt prepared text', t => {

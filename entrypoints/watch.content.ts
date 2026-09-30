@@ -345,8 +345,8 @@ export default defineContentScript({
           if (!items.length) return excluded;
           if (planning) {
             if (!plannedDisplay() || planning.configIdentity !== plannedConfigIdentity()) throw new Error('cancelled');
-            // session-open can span a user pause or list change. Do not submit
-            // a new batch once its currently dispatchable demand is gone.
+            // session-open can span a list change or resume. Paused preparation
+            // is allowed, but only while the authoritative demand remains valid.
             const demand = new Set(scheduler.currentNativeDemand().map(item => item.id));
             items = items.filter(item => demand.has(item.id));
             if (!items.length) return excluded;
@@ -463,8 +463,8 @@ export default defineContentScript({
         return { state: reason === 'playback-inactive' ? 'waiting' : 'unavailable', reason,
           text: reason === 'playback-inactive' ? '等待当前视频播放与页面恢复' : `名单尚未就绪：${reason}` };
       }
-      if (plannedListReport.reason === 'playback-suspended') return { state: 'waiting',
-        reason: 'playback-suspended', text: '等待播放，保留已准备译文' };
+      if (plannedListReport.reason === 'playback-suspended') return { state: 'paused',
+        reason: 'playback-suspended', text: '暂停中，仅准备当前五秒内译文' };
       if ((plannedListReport.totals?.selected ?? plannedListReport.selected ?? 0) === 0) {
         const labels: Record<string, string> = {
           'mode-stack-adjustment': '模式历史可能变化',

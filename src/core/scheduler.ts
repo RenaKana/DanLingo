@@ -194,7 +194,7 @@ export class VideoScheduler {
   currentNativeDemand(): NativeDemand[] {
     if (!this.strictBilibili || !this.settings.enabled ||
         this.settings.displayMode === 'original' || !this.clock?.contentActive || this.clock.seeking ||
-        this.settings.bilibiliOwnedRelease && (this.clock.paused || this.shadowSuspended)) return [];
+        this.display === 'hidden') return [];
     const c = this.currentClock();
     if (!c) return [];
     return [...this.eligible].flatMap(id => {
@@ -304,7 +304,8 @@ export class VideoScheduler {
   private currentClock(): PlaybackClock | null {
     if (!this.clock) return null;
     const c = this.clock;
-    return { ...c, mediaTimeMs: c.mediaTimeMs + (c.paused || c.seeking || !c.contentActive ? 0 : Math.max(0, this.now() - this.sampledAt) * c.playbackRate) };
+    const suspended = c.paused || this.settings.bilibiliOwnedRelease && this.shadowSuspended;
+    return { ...c, mediaTimeMs: c.mediaTimeMs + (suspended || c.seeking || !c.contentActive ? 0 : Math.max(0, this.now() - this.sampledAt) * c.playbackRate) };
   }
   private effectiveScope(): 'all' | 'window' {
     if (this.settings.bilibiliOwnedRelease) return 'window';
@@ -386,11 +387,9 @@ export class VideoScheduler {
       const source = this.sources.get(id);
       if (source) this.publishReady(source, value, c);
     }
-    // Pause freezes the list, not its qualified results. Existing requests keep
-    // their original finite deadlines; no new subscriptions start until resume.
-    if (this.settings.bilibiliOwnedRelease && (c.paused || this.shadowSuspended)) {
-      this.options.status?.(this.getStats()); return;
-    }
+    // A suspended owned plan authorizes only the frozen five-second window.
+    // Each request captures its finite preparation deadline once; refreshed
+    // plans never extend it or retry an already attempted display event.
     const rank = { near: 0, buffered: 1, background: 2 };
     const candidates = [...this.eligible].map(id => this.sources.get(id)!).filter(m => this.inScope(m, c) &&
       !this.ready.has(m.id) && !this.pending.has(m.id) && !this.failures.has(m.id) &&

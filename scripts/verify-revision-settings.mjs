@@ -186,7 +186,7 @@ try{
     await page.evaluate(()=>localStorage.removeItem('__danlingoFixtureFilePickerMode'));
     const modelRow=page.locator(`#local-model-entries [data-model-id="${model.id}"]`),settingsBeforeLoad=(await rpc({type:'settings'})).settings;assert.equal(await page.locator('#local-model-manager').evaluate(el=>el.open),true);await page.locator('#local-preload-entry').uncheck();await modelRow.locator('[data-model-action="load"]').click();await untilAsync(async()=>((await rpc({type:'settings'})).settings.localModelId??'')===model.id);await untilAsync(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='error','weightless header fixture rejected');await untilAsync(async()=>page.locator('#local-result').evaluate(el=>el.classList.contains('error')&&!!el.textContent?.trim()),'visible native load rejection');
     const afterLoad=(await rpc({type:'settings'})).settings;assert.equal(afterLoad.backend,settingsBeforeLoad.backend);assert.equal(afterLoad.model,settingsBeforeLoad.model);assert.equal(afterLoad.localPreloadOnEntry,true);assert.equal(await page.locator('#model').inputValue(),'FILE-UNSAVED-DRAFT');
-    await page.locator('#local-stop').click();await untilAsync(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='idle','unload after failed row load');
+    assert.equal(await page.locator('#local-stop').isVisible(),false,'failed load has no loaded model to unload');
     await page.locator('#save').click();await page.waitForFunction(()=>document.querySelector('#result').textContent==='已保存');assert.equal((await rpc({type:'settings'})).settings.localPreloadOnEntry,false);
     await page.reload();await page.waitForFunction(()=>document.querySelector('#result').textContent==='已保存');assert.equal(await page.locator('#local-preload-entry').isChecked(),false);assert.equal(await page.evaluate(()=>globalThis.__danlingoFixtureScanRequests),0);assert.equal((await rpc({type:'settings'})).settings.localModelId,model.id);
     await page.locator('#local-preload-entry').check();await page.locator('#save').click();await page.waitForFunction(()=>document.querySelector('#result').textContent==='已保存');assert.equal((await rpc({type:'settings'})).settings.localPreloadOnEntry,true);
@@ -201,7 +201,7 @@ try{
     const before=(await rpc({type:'settings'})).settings,models=(await rpc({type:'local-control',control:{action:'list'}})).models;assert.equal(models.length,1);const selected=models[0].id,row=page.locator(`#local-model-entries [data-model-id="${selected}"]`);await page.waitForFunction(()=>document.querySelector('#local-model-manager')?.open===true);
     await row.locator('[data-model-action="load"]').click();await untilAsync(async()=>((await rpc({type:'settings'})).settings.localModelId??'')===selected);await untilAsync(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='error','weightless legacy fixture rejected');
     const afterLoad=(await rpc({type:'settings'})).settings;assert.equal(afterLoad.backend,before.backend);assert.equal(afterLoad.model,before.model);assert.equal(await page.locator('#model').inputValue(),'DELETE-UNSAVED-DRAFT');
-    await page.locator('#local-stop').click();await untilAsync(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='idle','unload after failed row load');
+    assert.equal(await page.locator('#local-stop').isVisible(),false,'failed load has no loaded model to unload');
     await row.locator('[data-model-action="remove"]').click();await untilAsync(async()=>!(await rpc({type:'local-control',control:{action:'list'}})).models.some(model=>model.id===selected));assert.equal(await page.locator('#local-delete-confirm').count(),0);
     const removedPath=resolve(dir,'legacy-model-removed.png');await page.screenshot({path:removedPath,fullPage:true});report.screenshots.push(removedPath);assert.equal((await rpc({type:'settings'})).settings.localModelId??'','');assert.equal(await page.locator('#model').inputValue(),'DELETE-UNSAVED-DRAFT');assert.equal((await rpc({type:'settings'})).settings.backend,before.backend);assert.equal((await rpc({type:'local-control',control:{action:'list'}})).models.length,0);
   });
@@ -211,7 +211,7 @@ try{
     await page.reload();await page.waitForFunction(()=>document.querySelector('#result').textContent==='已保存');
     await page.locator('#backend').selectOption('online');assert.doesNotMatch(await page.locator('#key-state').textContent(),/本地推理/);
     assert.equal(await page.locator('#thinking-effort').inputValue(),'default');
-    const before=translations;await page.locator('#test-model').click();await page.waitForFunction(()=>document.querySelector('#test-result').textContent.includes('这是测试译文'));
+    const before=translations;await page.locator('#test-model').click();await page.waitForFunction(()=>document.querySelector('#test-result-output').textContent.includes('这是测试译文'));
     assert.equal(translations,before+1);assert.equal((await rpc({type:'local-control',control:{action:'state'}})).state.inferenceCalls,0);
     await page.locator('#save').click();await page.waitForFunction(()=>document.querySelector('#result').textContent==='已保存');
     const actual=await rpc({type:'settings'});assert.equal(actual.settings.backend,'online');assert.equal(actual.settings.thinkingEffort,'default');assert.equal(actual.hasOnlineKey,true);
@@ -271,7 +271,7 @@ try{
     const selected='legacy-delete-first',row=page.locator(`#local-model-entries [data-model-id="${selected}"]`);assert.deepEqual(await row.locator('[data-model-action]').evaluateAll(buttons=>buttons.map(button=>button.dataset.modelAction)),['load','remove']);
     await row.locator('[data-model-action="load"]').click();await untilAsync(async()=>((await rpc({type:'settings'})).settings.localModelId??'')===selected);await untilAsync(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='error','weightless legacy fixture rejected');
     const afterLoad=(await rpc({type:'settings'})).settings;assert.equal(afterLoad.backend,before.backend);assert.equal(afterLoad.model,before.model);assert.equal(await page.locator('#model').inputValue(),'DELETE-UNSAVED-DRAFT');
-    await page.locator('#local-stop').click();await untilAsync(async()=>(await rpc({type:'local-control',control:{action:'state'}})).state.phase==='idle','unload after failed row load');
+    assert.equal(await page.locator('#local-stop').isVisible(),false,'failed load has no loaded model to unload');
     await page.evaluate(()=>{globalThis.__danlingoFixtureFailNextDelete=true;});
     const callsBefore=await page.evaluate(()=>globalThis.__danlingoFixtureDeleteCalls.length);
     await row.locator('[data-model-action="remove"]').click();await untilAsync(async()=>page.locator('#local-result').evaluate(el=>el.classList.contains('error')&&!!el.textContent?.trim()),'visible delete failure');

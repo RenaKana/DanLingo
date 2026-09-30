@@ -46,7 +46,8 @@ test('every source message is included in all packaged catalogs, including new n
 
 test('new feature descriptions are translated rather than copied wholesale from English', () => {
   const keys = ['performance.historyNote', 'performance.windowNote', 'performance.draftNote',
-    'progress.supply.hybridScope', 'hybrid.note', 'userFilter.uncovered',
+    'progress.supply.hybridScope', 'progress.supply.performanceStatus',
+    'hybrid.note', 'hybrid.adaptive', 'hybrid.error.streamUnsupported', 'userFilter.uncovered',
     'performance.controls.onlineNote', 'settings.bilibiliOwnedReleaseHint'];
   for (const { code } of LOCALES.filter(item => item.code !== 'en')) {
     for (const key of keys) {

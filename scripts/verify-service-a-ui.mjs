@@ -382,7 +382,7 @@ try {
     assert.deepEqual(await page.evaluate(() => chrome.storage.local.get('settings.v1')), rawBefore);
     await page.locator('#test-model').click();
     await page.waitForFunction(() => !document.querySelector('#test-model').disabled &&
-      document.querySelector('#test-result').textContent.includes('fixture translated text'));
+      document.querySelector('#test-result-output').textContent.includes('fixture translated text'));
     const tested = await page.evaluate(() => globalThis.__serviceAFixture.calls.filter(call => call.type === 'test-model').at(-1));
     assert.equal(tested.settings.endpointInput, customEndpoint);
     assert.equal(tested.settings.endpoint, customEndpoint + '/chat/completions', 'auto recognizes a versioned gateway base');
@@ -580,7 +580,7 @@ try {
     await page.locator('#model-test-context').selectOption('video');
     const saveCount = await page.evaluate(() => globalThis.__serviceAFixture.calls.filter(call => call.type === 'save').length);
     await page.locator('#test-model').click();
-    await page.waitForFunction(() => !document.querySelector('#test-model').disabled && document.querySelector('#test-result').textContent.includes('fixture translated text'));
+    await page.waitForFunction(() => !document.querySelector('#test-model').disabled && document.querySelector('#test-result-output').textContent.includes('fixture translated text'));
     const tested = await page.evaluate(() => globalThis.__serviceAFixture.calls.filter(call => call.type === 'test-model').at(-1));
     assert.equal(tested.settings.endpointInput, draftEndpoint);
     // Auto path mode preserves an unrecognized explicit path (connection.ts).
@@ -703,7 +703,7 @@ try {
   });
 
   await check('pointer-focus-quiet-keyboard-focus-visible', async () => {
-    for (const selector of ['#api-key', '#thinking-effort', '#remember', '#model-test-options > summary']) {
+    for (const selector of ['#api-key', '#thinking-effort', '#remember', '#model-test-text']) {
       await page.locator(selector).click();
       await assertPointerHasNoOutline(selector, selector);
       await page.keyboard.press('Escape');
@@ -713,7 +713,7 @@ try {
     await assertPointerHasNoOutline('[data-confirm="clear-cache"]', 'confirmation button');
     await page.locator('[data-dismiss="clear-cache"]').click();
     await goTo('service');
-    for (const selector of ['#api-key', '#get-models', '#model-test-options > summary']) await tabTo(selector);
+    for (const selector of ['#api-key', '#get-models', '#model-test-text']) await tabTo(selector);
     await page.locator('nav a[href="#watching"]').click();
     await page.waitForFunction(() => document.activeElement?.id === 'page-title');
     assert.equal((await focusMetrics('#page-title')).outlineStyle, 'none');

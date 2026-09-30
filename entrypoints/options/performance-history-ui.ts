@@ -38,7 +38,7 @@ export function mountPerformanceHistoryUI(container: HTMLElement) {
     <summary class="history-heading"><span class="history-heading-content"><span class="history-heading-title" data-i18n="performance.history"></span><span id="performance-history-status" class="subtle" role="status" aria-live="polite"></span></span></summary>
     <div class="history-content">
     <div class="row"><button type="button" id="performance-export" data-i18n="performance.export" disabled></button></div>
-    <p class="subtle" data-i18n="performance.historyNote"></p>
+    <p class="subtle" data-help="performance.history" data-i18n="performance.historyNote"></p>
     <div id="performance-history-action-status" class="status" role="status" aria-live="polite"></div>
     <div id="performance-history-rows" class="history-list" role="list"></div>
     </div></details>`;

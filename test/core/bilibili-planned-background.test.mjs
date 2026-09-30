@@ -76,7 +76,7 @@ function background(options = {}) {
     translate(request) { h.calls.push(request); return h.translate ? h.translate(request) :
       Promise.resolve({ items: request.items.map(item => ({ id: item.id, status: 'translated', text: '译文' })) }); }
     cancelItems(signal, ids) { h.cancelled.push({ signal, ids }); }
-    stats() { return {}; }
+    stats() { return options.engineStats?.() ?? {}; }
     resetFailureState() {}
     setLiveSession() {}
     hasLiveWork() { return false; }
@@ -301,19 +301,25 @@ for (const backend of ['local', 'online']) test(`hybrid background preserves sav
     throw Error('unexpected-model-load');
   } });
   Object.assign(h.local[config.SETTINGS_KEY], { backend, localModelId: 'local-model', localPreloadOnEntry: false,
-    localConcurrency: 1, onlineConcurrency: 3, batchSize: 100, videoBatchSize: 20 });
+    localConcurrency: 1, onlineConcurrency: 3, batchSize: 100, videoBatchSize: 20, translationStream: false });
   const identity = await hybridCapacity.hybridCapacityIdentity(config.normalizeSettings(h.local[config.SETTINGS_KEY]));
-  h.local[config.SETTINGS_KEY].bilibiliHybrid = { enabled: true, profiles: [{ identity, maxItems: 8, maxChars: 400, manual: true }] };
+  h.local[config.SETTINGS_KEY].bilibiliHybrid = { enabled: true, adaptive: true, onlineStreaming: true,
+    profiles: [{ identity, maxItems: 8, maxChars: 400, manual: true }] };
+  assert.equal(await hybridCapacity.hybridCapacityIdentity(config.normalizeSettings(h.local[config.SETTINGS_KEY])), identity);
   await h.open();
   assert.equal((await h.send(planned())).ok, true);
   const route = h.calls[0].hybrid;
   assert.equal(route.localReady, false); assert.equal(route.onlineReady, true);
   assert.equal(route.local.concurrency, 1); assert.equal(route.online.concurrency, 3);
   assert.equal(route.local.batchSize, 1); assert.equal(route.online.backend, 'online');
+  assert.equal(route.adaptive, true); assert.equal(route.onlineStreaming, true);
+  assert.equal(route.local.translationStream, false); assert.equal(route.online.translationStream, true);
   assert.equal(route.online.batchSize, 20); assert.equal(route.capacityKey, identity);
   assert.equal(route.maxItems, 8); assert.equal(route.maxChars, 400);
   assert.equal(controls.every(control => ['state', 'list'].includes(control.action)), true);
   assert.equal(h.local[config.SETTINGS_KEY].backend, backend);
+  assert.equal(h.local[config.SETTINGS_KEY].translationStream, false);
+  assert.equal(h.calls[0].settings.translationStream, false);
   h.permissions = async () => false;
   await h.send(planned());
   assert.equal(h.calls[1].hybrid.onlineReady, false, 'revoked online permission does not reject local/cache admission');
@@ -328,6 +334,30 @@ for (const backend of ['local', 'online']) test(`hybrid background preserves sav
   h.translate = undefined;
   await h.send(planned());
   assert.equal(h.calls[5].hybrid.onlineReady, false, 'an online credential failure disables only its lane');
+});
+
+test('hybrid streaming leaves ordinary video translation on the global streaming setting', async () => {
+  const h = background();
+  Object.assign(h.local[config.SETTINGS_KEY], { backend: 'online', translationStream: false,
+    bilibiliHybrid: { enabled: true, adaptive: true, onlineStreaming: true, profiles: [] } });
+  await h.open();
+  const ordinary = planned();
+  delete ordinary.planning;
+  assert.equal((await h.send(ordinary)).ok, true);
+  assert.equal(h.calls[0].hybrid, undefined);
+  assert.equal(h.calls[0].settings.translationStream, false);
+  assert.equal(h.local[config.SETTINGS_KEY].translationStream, false);
+});
+
+test('hybrid stream unsupported notice is shown only while hybrid streaming is enabled', async () => {
+  const h = background({ engineStats: () => ({ lastError: { reason: 'hybrid-stream-unsupported' } }) });
+  h.local[config.SETTINGS_KEY].bilibiliHybrid = { enabled: true, adaptive: false, onlineStreaming: true, profiles: [] };
+  await h.open();
+  const status = () => h.send({ type: 'status', session,
+    status: { resourceId: session.resourceId, state: 'ready' } });
+  assert.equal((await status()).engineNotice, 'hybrid-stream-unsupported');
+  h.local[config.SETTINGS_KEY].bilibiliHybrid.onlineStreaming = false;
+  assert.equal((await status()).engineNotice, '');
 });
 
 test('hybrid capacity lookup is settings-only, zero-load, and stale capacities cannot be saved', async () => {

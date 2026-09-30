@@ -11,10 +11,13 @@ const report = { evidence:'BUILT_EXTENSION_OFFLINE_BILIBILI_FULLSCREEN_FIXTURE',
 // Reconstructed native controls from the supplied reference, not live-site evidence.
 const nativeTv = '<path d="m8 3 3 4m7-4-3 4M22.5 16v-4A4.5 4.5 0 0 0 18 7.5H7A4.5 4.5 0 0 0 2.5 12v8A4.5 4.5 0 0 0 7 24.5h7" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round"/><text x="12.5" y="20" fill="currentColor" text-anchor="middle" font-family="Arial,Microsoft YaHei,sans-serif" font-size="12" font-weight="600">弹</text>';
 const nativeCheck = '<path d="m17 22 3.2 3.2 6.3-7" fill="none" stroke="#00aeec" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>';
+const nativeOff = '<g fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="22" cy="22.5" r="4.4"/><path d="m19 19.5 6 6"/></g>';
 const nativeSettings = '<path d="m19.5 18 5 0 2.5 4.5-2.5 4.5h-5L17 22.5Z" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="22" cy="22.5" r="1.7" fill="currentColor"/>';
 const nativeSvg = mark => `<svg viewBox="0 0 28 28" width="30" height="30">${nativeTv}${mark}</svg>`;
+const nativeStateSvg = mark => `<svg viewBox="0 0 28 28" width="100%" height="100%">${nativeTv}${mark}</svg>`;
+const nativeToggleIcons = `<span class="native-danmaku-state native-danmaku-state-on">${nativeStateSvg(nativeCheck)}</span><span class="native-danmaku-state native-danmaku-state-off">${nativeStateSvg(nativeOff)}</span>`;
 const html = videoHtml.replace('</style>', `
-  body{background:#fff;color:#252a32}#playerWrap{background:#23262b;border-color:#ddd;border-radius:0}#playerWrap video{background:#32363d;border-radius:0}
+  body{--bpx-dmsend-switch-icon:#61666d;--bpx-primary-color:#00aeec;background:#fff;color:#252a32}#playerWrap{background:#23262b;border-color:#ddd;border-radius:0}#playerWrap video{background:#32363d;border-radius:0}
   #playerWrap:fullscreen{padding:0;width:100%;height:100%;border:0}#playerWrap:fullscreen video{height:100%}
   .bpx-player-dm-root{display:flex;align-items:center;gap:0;background:#fff;color:#61666d;min-height:48px;padding:6px 16px}
   .bpx-player-dm-root:before{content:'9人正在看';flex:none;font-size:14px;margin-right:24px}
@@ -23,12 +26,23 @@ const html = videoHtml.replace('</style>', `
   .bpx-player-dm-switch,.bpx-player-dm-setting{position:relative;box-sizing:border-box;display:flex;flex:none;width:30px;height:30px;line-height:30px;margin:0 12px 0 0;padding:0;border:0;background:none;color:#61666d;fill:#61666d;align-items:center;justify-content:center}
   #playerWrap:fullscreen .bpx-player-dm-switch,#playerWrap:fullscreen .bpx-player-dm-setting{color:rgba(255,255,255,.9);fill:rgba(255,255,255,.9)}
   #playerWrap:fullscreen .bpx-player-dm-setting{height:50px}
+  #playerWrap:not(:fullscreen) .bpx-player-dm-switch:hover{color:#00aeec;fill:#00aeec}
   .bpx-player-dm-switch svg,.bpx-player-dm-setting svg{display:block;width:30px;height:30px}
   .bpx-player-dm-switch input{position:absolute;inset:0;margin:0;opacity:0;width:100%;height:100%}
   .bpx-player-dm-root:after{content:'发个友善的弹幕见证当下';font-size:14px;color:#9499a0;background:#f1f2f3;border-radius:4px;padding:8px 20px;flex:1;min-width:0}
   #playerWrap:fullscreen .bpx-player-dm-root:after{color:#ddd;background:#ffffff18;flex:none;width:280px}
   @media(max-width:1000px){.bpx-player-dm-switch,.bpx-player-dm-setting{width:28px;height:28px;margin-right:16px}.bpx-player-dm-switch svg,.bpx-player-dm-setting svg{width:28px;height:28px}}
-  </style>`).replace('<div class="bui-area">', `<div class="bui-area">${nativeSvg(nativeCheck)}`).replace('</div></div></div>\n      <div id="danmaku-stage">', `</div></div><button class="bpx-player-dm-setting" aria-label="弹幕设置">${nativeSvg(nativeSettings)}</button></div>\n      <div id="danmaku-stage">`);
+  .bpx-player-dm-switch .bui-area{position:relative;display:flex;flex:none;align-items:center;justify-content:center;width:30px;height:30px}
+  .bpx-player-dm-switch .bui-danmaku-switch-input{position:absolute;inset:0;z-index:1;margin:0;opacity:0;width:100%;height:100%}
+  .native-danmaku-state{position:absolute;top:3px;left:3px;display:none;width:24px;height:24px;pointer-events:none}
+  .native-danmaku-state svg{display:block;width:100%;height:100%}
+  .bui-danmaku-switch-input:checked~.native-danmaku-state-on{display:block}
+  .bui-danmaku-switch-input:not(:checked)~.native-danmaku-state-off{display:block}
+  @media(max-width:1000px){.bpx-player-dm-switch .bui-area{width:28px;height:28px}.native-danmaku-state{top:2px;left:2px}}
+  </style>`).replace(
+    '<input class="bui-danmaku-switch-input" type="checkbox" checked="" aria-checked="true">',
+    input => input + nativeToggleIcons,
+  ).replace('</div></div></div>\n      <div id="danmaku-stage">', `</div></div><button class="bpx-player-dm-setting" aria-label="弹幕设置">${nativeSvg(nativeSettings)}</button></div>\n      <div id="danmaku-stage">`);
 const {chromium}=await loadPlaywright();
 const context=await chromium.launchPersistentContext(resolve(dir,'profile'),{
   ...browserLaunchOptions(),headless:true,viewport:{width:1200,height:760},deviceScaleFactor:2,
@@ -88,6 +102,7 @@ try {
     return selectors.map(selector=>{const el=document.querySelector(selector),r=el.getBoundingClientRect();return {x:r.x,y:r.y,width:r.width,height:r.height};});
   });
   const checkGeometry = async () => {
+    await page.mouse.move(1,1);
     await page.waitForFunction(()=>getComputedStyle(document.querySelector('#danlingo-fullscreen-toggle')).color===getComputedStyle(document.querySelector('.bpx-player-dm-switch')).fill);
     const [translation,native,settings]=await geometry();
     assert.equal(translation.width,native.width);
@@ -98,7 +113,73 @@ try {
     assert.equal(colors[0],colors[1]);
     return {translation,native,settings};
   };
+  const assertIconGeometry = async danmakuEnabled => {
+    const measured = await page.evaluate(() => {
+      const rect = element => {
+        const value = element.getBoundingClientRect();
+        return { x: value.x, y: value.y, width: value.width, height: value.height };
+      };
+      const anchor = document.querySelector('.bpx-player-dm-switch');
+      const input = anchor.querySelector('.bui-danmaku-switch-input');
+      const nativeOn = anchor.querySelector('.native-danmaku-state-on svg');
+      const nativeOff = anchor.querySelector('.native-danmaku-state-off svg');
+      const nativeVisible = input.checked ? nativeOn : nativeOff;
+      const nativeHidden = input.checked ? nativeOff : nativeOn;
+      const translationVisible = Array.from(document.querySelector('#danlingo-fullscreen-toggle').querySelectorAll('svg'))
+        .find(icon => { const value = icon.getBoundingClientRect(); return value.width > 0 && value.height > 0; });
+      const hiddenStyle = getComputedStyle(nativeHidden);
+      return {
+        checked: input.checked,
+        nativeVisible: rect(nativeVisible),
+        nativeHidden: rect(nativeHidden),
+        nativeHiddenStyle: { width: hiddenStyle.width, height: hiddenStyle.height },
+        translationVisible: translationVisible ? rect(translationVisible) : null,
+      };
+    });
+    assert.equal(measured.checked, danmakuEnabled);
+    assert.equal(measured.nativeHidden.width, 0);
+    assert.equal(measured.nativeHidden.height, 0);
+    assert.equal(measured.nativeHiddenStyle.width, '100%');
+    assert.equal(measured.nativeHiddenStyle.height, '100%');
+    assert.ok(measured.nativeVisible.width > 0 && measured.nativeVisible.height > 0);
+    assert.ok(measured.translationVisible, 'the visible translation SVG has a real rectangle');
+    assert.equal(measured.nativeVisible.width, 24);
+    assert.equal(measured.nativeVisible.height, 24);
+    assert.equal(measured.translationVisible.width, measured.nativeVisible.width);
+    assert.equal(measured.translationVisible.height, measured.nativeVisible.height);
+    return measured;
+  };
+  const nativeCheckbox = page.locator('.bui-danmaku-switch-input');
+  const checkIndependentHover = async mode => {
+    const colors = () => page.evaluate(() => ({
+      translation: getComputedStyle(document.querySelector('#danlingo-fullscreen-toggle')).color,
+      native: getComputedStyle(document.querySelector('.bpx-player-dm-switch')).fill,
+    }));
+    for (const enabled of [false, true]) {
+      await page.mouse.move(1,1);
+      const idle = await colors();
+      assert.notEqual(idle.translation, 'rgb(0, 174, 236)');
+      await nativeCheckbox.hover();
+      // Cover periodic state publishing that used to copy native hover colors.
+      await page.waitForTimeout(1100);
+      assert.deepEqual(await colors(), { translation: idle.translation, native: mode === 'fullscreen' ? idle.native : 'rgb(0, 174, 236)' });
+      await shot(`${mode}-${enabled}-native-hover`);
+      await toggle.hover();
+      await page.waitForTimeout(1100);
+      assert.deepEqual(await colors(), { translation: mode === 'fullscreen' ? idle.translation : 'rgb(0, 174, 236)', native: idle.native });
+      assert.equal(await toggle.getAttribute('aria-pressed'), String(enabled));
+      await shot(`${mode}-${enabled}-translation-hover`);
+      await toggle.click();
+      await page.waitForFunction(expected => document.querySelector('#danlingo-fullscreen-toggle')?.getAttribute('aria-pressed') === expected, String(!enabled));
+      assert.equal((await options.evaluate(()=>chrome.runtime.sendMessage({type:'settings'}))).settings.enabled, !enabled);
+      assert.equal(await nativeCheckbox.isChecked(), originalNative);
+      await page.mouse.move(1,1);
+      assert.deepEqual(await colors(), idle);
+    }
+    report.checks.push(`${mode}: independent native/translation hover in both translation states; click on/off persists and preserves native state`);
+  };
   report.normalGeometry=await checkGeometry();
+  await checkIndependentHover('normal');
   assert.equal(await toggle.getAttribute('title'),null);
   await tooltipShot('normal-tooltip-off');
   assert.equal(await tooltip.textContent(),hint('开启翻译'));
@@ -114,9 +195,20 @@ try {
   await page.mouse.move(1,1);await toggle.blur();await tooltip.waitFor({state:'hidden'});
   await save({enabled:false});
   await page.waitForFunction(()=>document.querySelector('#danlingo-fullscreen-toggle')?.getAttribute('aria-pressed')==='false');
+  await nativeCheckbox.uncheck();
+  report.normalNativeOffIconGeometry=await assertIconGeometry(false);
+  await shot('normal-native-off');
+  await nativeCheckbox.check();
+  await assertIconGeometry(true);
   report.checks.push('normal player has an equally spaced gray toggle, saves translation and shows the native-style action tooltip');
   await page.locator('#fixture-fullscreen').click();
   report.geometry=await checkGeometry();
+  await checkIndependentHover('fullscreen');
+  await nativeCheckbox.uncheck();
+  report.fullscreenNativeOffIconGeometry=await assertIconGeometry(false);
+  await shot('fullscreen-native-off');
+  await nativeCheckbox.check();
+  await assertIconGeometry(true);
   await shot('fullscreen-off');
   await tooltipShot('fullscreen-tooltip-off');
   assert.equal(await tooltip.evaluate(el=>document.fullscreenElement.contains(el)),true);
