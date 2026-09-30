@@ -4,13 +4,14 @@ import { MemoryTranslationCache, translationCacheKey } from './cache.ts';
 import type { TranslationCache } from './cache.ts';
 import { createClock } from './clock.ts';
 import type { TranslationClock } from './clock.ts';
-import { addUsage, ChatCompletionsProvider, ProviderError } from './provider.ts';
-import type { ProviderRequest, ProviderResult } from './provider.ts';
+import { addUsage, ChatCompletionsProvider, ProviderError, HYBRID_JSONL_PROMPT_VERSION } from './provider.ts';
+import type { ProviderRequest, ProviderResult, ProviderObservation } from './provider.ts';
 import { placeholdersIntact, protectText } from './text.ts';
 import { localPromptMode, localQualityIssue, localSingleItem } from './local-policy.ts';
 import type { LocalInferenceMetrics } from '../local/types.ts';
 import { liveTokenEstimate, type TranslationTrace, type LiveTimingEstimate, type LiveDispatchDecision } from './telemetry.ts';
 import { HybridInputWindow } from './hybrid.ts';
+import { HybridPerformanceModel, type HybridPerformanceEstimate, type HybridPerformanceSample } from './hybrid-performance.ts';
 
 export interface TranslationEngineOptions {
   provider?: { complete(request: ProviderRequest): Promise<ProviderResult> };
@@ -66,6 +67,8 @@ interface HybridBackendStats { cacheHits: number; actualRequests: number; inputI
 export interface HybridStats {
   subscriptions: number; uniqueTasks: number; mergedInputs: number; expired: number;
   local: HybridBackendStats; online: HybridBackendStats;
+  performance?: Partial<Record<'local' | 'online', { status: 'learning' | 'stable' | 'slowing'; samples: number;
+    expectedMs?: number; firstContentMs?: number; charsPerSecond?: number; lastBatchItems?: number }>>;
 }
 interface ResponseContext {
   vod: boolean;
@@ -122,10 +125,12 @@ interface Task {
     onlineIdentity: string;
     localGroup: string; onlineGroup: string;
     localReady: boolean; onlineReady: boolean; maxItems: number; maxChars: number; p95Ms?: number;
-    capacityKey: string; onLocalNeeded?: () => void; reserved: boolean };
+    capacityKey: string; onLocalNeeded?: () => void; reserved: boolean; adaptive: boolean; onlineStreaming: boolean };
 }
 interface Batch { tasks: Task[]; controller: AbortController; concurrency: number; urgent: boolean; live: boolean;
-  id: number; startedAt: number; load: number; bucket: string; contexts: Set<ResponseContext> }
+  id: number; startedAt: number; load: number; bucket: string; contexts: Set<ResponseContext>;
+  performanceKey?: string; predictedMs?: number; observation?: ProviderObservation; dispatchedAt?: number;
+  dispatchedItems?: number; dispatchedChars?: number; deadlineExpired?: boolean; userCancelled?: boolean }
 interface QuotaEntry { at: number; chars: number }
 const encoder = new TextEncoder();
 const DAY = 86_400_000;
@@ -213,6 +218,8 @@ export class TranslationEngine {
   private readonly timings = new Map<string, { elapsed: number; items: number; complete: boolean }[]>();
   private readonly controls = new Map<string, { limit: number; changedAt: number; blockedUntil: number }>();
   private readonly hybridWindow = new HybridInputWindow();
+  private readonly hybridPerformance = new HybridPerformanceModel();
+  private readonly hybridPerformanceView = new Map<'local' | 'online', { key: string; inputChars: number; items: number; lastBatchItems?: number }>();
   private readonly hybridCooldown = { local: 0, online: 0 };
   private readonly hybridCounts: HybridStats = {
     subscriptions: 0, uniqueTasks: 0, mergedInputs: 0, expired: 0,
@@ -298,6 +305,8 @@ export class TranslationEngine {
           localGroup: '', onlineGroup: '', localReady: request.hybrid.localReady === true,
           onlineReady: request.hybrid.onlineReady === true, maxItems: request.hybrid.maxItems,
           maxChars: request.hybrid.maxChars, p95Ms: request.hybrid.p95Ms,
+          adaptive: request.mode === undefined && request.hybrid.adaptive === true,
+          onlineStreaming: request.mode === undefined && request.hybrid.onlineStreaming === true,
           capacityKey: request.hybrid.capacityKey, onLocalNeeded: request.hybrid.onLocalNeeded };
       }
     }
@@ -353,7 +362,8 @@ export class TranslationEngine {
         if (protectedText.text.length > maxChars) { direct('original', 'protected-input-size'); return; }
         const localKey = hybrid && translationCacheKey(request.resourceId, input.text, hybrid.local, context.live ? LIVE_PROMPT_VERSION : undefined);
         const onlineKey = hybrid && (hybrid.onlineIdentity ? ''
-          : translationCacheKey(request.resourceId, input.text, hybrid.online, context.live ? LIVE_PROMPT_VERSION : undefined));
+          : translationCacheKey(request.resourceId, input.text, hybrid.online,
+            hybrid.onlineStreaming ? HYBRID_JSONL_PROMPT_VERSION : context.live ? LIVE_PROMPT_VERSION : undefined));
         const persistentKey = hybrid ? JSON.stringify(['hybrid', localKey, onlineKey,
           hybrid.onlineIdentity, hybrid.capacityKey, request.namespace ?? ''])
           : translationCacheKey(request.resourceId, input.text, settings, context.live ? LIVE_PROMPT_VERSION : undefined);
@@ -380,7 +390,8 @@ export class TranslationEngine {
             bypassCache: request.bypassCache === true, forced: request.force === true,
             cacheGeneration: this.cacheGenerations.get(key) ?? 0, serviceClass: input.strategy ?? 'normal',
             ...(hybrid ? { hybrid: { ...hybrid, localKey: localKey!, onlineKey: onlineKey!,
-              localGroup: `${groupFor(hybrid.local)}:hybrid`, onlineGroup: hybrid.onlineIdentity || `${groupFor(hybrid.online)}:hybrid`,
+              localGroup: `${groupFor(hybrid.local)}:hybrid:${hybrid.adaptive}`,
+              onlineGroup: hybrid.onlineIdentity || `${groupFor(hybrid.online)}:hybrid:${hybrid.adaptive}:${hybrid.onlineStreaming}`,
               reserved: false } } : {}),
           };
           this.tasks.add(task); this.pendingBytes += bytes;
@@ -441,6 +452,10 @@ export class TranslationEngine {
     const { task, context, input, index } = subscription;
     task.subscribers.delete(subscription); context.subscribers.delete(subscription); this.subscribers--;
     if (!context.vod && status !== 'original' && this.clock.now() >= input.deadlineAt) { status = 'expired'; reason = 'deadline'; }
+    if (task.batch && (task.stage === 'running' || task.stage === 'saving')) {
+      if (status === 'expired' || reason === 'response-deadline') task.batch.deadlineExpired = true;
+      if (reason === 'cancelled' || reason === 'engine-disposed') task.batch.userCancelled = true;
+    }
     if (status === 'expired' && task.settings.backend === 'local') {
       if (task.stage === 'running') this.localDiagnostics.runningDeadline++;
       else this.localDiagnostics.queuedDeadline++;
@@ -631,8 +646,9 @@ export class TranslationEngine {
     const localQueued = [...this.tasks].filter(item => item !== task && item.settings.backend === 'local'
       && (!item.hybrid || item.hybrid.reserved) && (item.stage === 'queued' || item.stage === 'lookup')).length;
     const remaining = this.deadline(task) - now;
-    const timely = hybrid.p95Ms === undefined ? localActive + localQueued < localLimit
-      : Math.ceil((localInFlight + localQueued + 1) / localLimit) * hybrid.p95Ms < remaining;
+    const localMs = this.hybridLocalMs(task, localActive + 1);
+    const timely = localMs === undefined ? localActive + localQueued < localLimit
+      : Math.ceil((localInFlight + localQueued + 1) / localLimit) * localMs < remaining;
     const localFits = task.chars <= hybrid.local.maxBatchChars && localQueued < localLimit && timely
       && this.sideRoom(task, 'local')
       && now >= this.hybridCooldown.local && !this.rejectedGroups.has(hybrid.localGroup);
@@ -650,6 +666,59 @@ export class TranslationEngine {
     }
     task.stage = 'queued';
     this.trace({ type: 'queued', at: now, taskId: task.id });
+  }
+  private hybridObserved(task: Task): boolean {
+    return !!task.hybrid && (task.hybrid.adaptive || task.hybrid.onlineStreaming);
+  }
+  private hybridLoad(backend: 'local' | 'online'): number {
+    return [...this.active].filter(batch => batch.tasks[0]?.settings.backend === backend).length + 1;
+  }
+  private hybridPerformanceKey(task: Task, backend: 'local' | 'online', load: number): string {
+    const settings = task.hybrid![backend];
+    // Private in-memory identity only; it is never included in traces or UI statistics.
+    return JSON.stringify([batchGroup(settings), backend, task.serviceClass,
+      backend === 'local' ? task.hybrid!.capacityKey : task.hybrid!.onlineStreaming ? HYBRID_JSONL_PROMPT_VERSION : 'ordinary',
+      load <= 2 ? 0 : load <= 8 ? 1 : 2,
+      backend === 'local' ? task.chars <= 64 ? 0 : task.chars <= 256 ? 1 : 2 : null]);
+  }
+  private hybridEstimate(task: Task, inputChars: number, items: number,
+    backend: 'local' | 'online' = task.settings.backend === 'local' ? 'local' : 'online',
+    load = this.hybridLoad(backend)): HybridPerformanceEstimate {
+    const key = this.hybridPerformanceKey(task, backend, load), now = this.clock.now();
+    return this.hybridPerformance.estimate(key, { inputChars, items }, now, this.hybridLowerBound(key, inputChars, items, now));
+  }
+  private hybridLowerBound(key: string, inputChars: number, items: number, now: number): number {
+    let lowerBound = 0;
+    for (const batch of this.active) {
+      if (batch.performanceKey !== key || batch.dispatchedAt === undefined || batch.controller.signal.aborted) continue;
+      const chars = batch.dispatchedChars ?? 0, count = batch.dispatchedItems ?? 0;
+      // A large running request is not evidence that an unrelated tiny request is slow.
+      if (chars < inputChars / 2 || chars > inputChars * 2 || count < items / 2 || count > items * 2) continue;
+      const observation = batch.observation;
+      if (observation?.firstContentAt === undefined || now - (observation.lastContentAt ?? now) >= 500)
+        lowerBound = Math.max(lowerBound, now - batch.dispatchedAt);
+    }
+    return lowerBound;
+  }
+  private hybridLocalMs(task: Task, load: number): number | undefined {
+    if (!task.hybrid!.adaptive) return task.hybrid!.p95Ms;
+    const estimate = this.hybridEstimate(task, task.chars, 1, 'local', load);
+    const previous = this.hybridPerformanceView.get('local');
+    this.hybridPerformanceView.set('local', { key: this.hybridPerformanceKey(task, 'local', load), inputChars: task.chars,
+      items: 1, lastBatchItems: previous?.lastBatchItems });
+    return estimate.ready ? estimate.expectedMs : task.hybrid!.p95Ms;
+  }
+  private hybridExpansionFits(first: Task, retained: Task[], candidate: Task, chars: number): boolean {
+    if (!first.hybrid?.adaptive || first.settings.backend !== 'online') return true;
+    const current = this.hybridEstimate(first, chars, retained.length);
+    const expanded = this.hybridEstimate(first, chars + candidate.chars, retained.length + 1);
+    if (!current.ready || !expanded.ready || current.expectedMs === undefined || expanded.expectedMs === undefined) return true;
+    const now = this.clock.now();
+    // Retain best-effort batching when no current member has a predicted timely beneficiary.
+    if (!retained.some(task => now + current.expectedMs! < this.deadline(task, true))) return true;
+    if (expanded.outputCeiling !== undefined && expanded.outputChars > expanded.outputCeiling) return false;
+    return retained.every(task => [...task.subscribers].every(subscription =>
+      now + current.expectedMs! >= subscription.input.deadlineAt || now + expanded.expectedMs! < subscription.input.deadlineAt));
   }
   private schedulePump(): void {
     if (this.pumpScheduled || this.disposed) return;
@@ -787,6 +856,7 @@ export class TranslationEngine {
         if (!subscription.context.vod && subscription.input.deadlineAt <= now) this.finish(subscription, 'expired', 'deadline');
       }
     }
+    let hybridWake = Infinity;
     {
       const waiting = new Set<string>();
       for (;;) {
@@ -794,8 +864,20 @@ export class TranslationEngine {
           && (task.hybrid ? now >= this.hybridCooldown[task.settings.backend === 'local' ? 'local' : 'online']
             : now >= this.rateLimitedUntil))
           .sort((a, b) => this.priority(a) - this.priority(b) || this.deadline(a) - this.deadline(b));
-        const first = ready.find((task) => !waiting.has(task.group) && this.canRun(task));
+        let first = ready.find((task) => !waiting.has(task.group) && this.canRun(task));
         if (!first) break;
+        if (first.hybrid?.adaptive && first.settings.backend === 'online') {
+          const estimate = this.hybridEstimate(first, first.chars, 1);
+          if (estimate.ready && estimate.expectedMs! >= this.deadline(first, true) - now) {
+            const anchor = first;
+            // Keep the difficult task subscribed, but do not let it block a feasible queued peer.
+            first = ready.find(task => task.group === anchor.group && task.apiKey === anchor.apiKey
+              && this.priority(task) === this.priority(anchor) && (() => {
+                const next = this.hybridEstimate(task, task.chars, 1);
+                return next.ready && next.expectedMs! < this.deadline(task, true) - now;
+              })()) ?? first;
+          }
+        }
         const urgent = this.urgent(first);
         const tasks = [first];
         let chars = first.chars;
@@ -824,6 +906,9 @@ export class TranslationEngine {
             declined.outputTokens += Number(outputTokens + estimate.output > localOutputLimit);
             sizeLimited = true; continue;
           }
+          if (!this.hybridExpansionFits(first, tasks, task, chars)) {
+            declined.deadlineRegression++; sizeLimited = true; continue;
+          }
           if (live) {
             const inputLimited = inputTokens + estimate.input > (first.settings.liveMaxInputTokens ?? 4096);
             const outputLimited = outputTokens + estimate.output > (first.settings.liveMaxOutputTokens ?? 4096);
@@ -847,6 +932,13 @@ export class TranslationEngine {
         }
         if (live && first.attempts === 0 && tasks.length < first.settings.batchSize && !sizeLimited
             && now < this.sendAt(first, chars)) { waiting.add(first.group); continue; }
+        if (first.hybrid?.adaptive && !local && first.attempts === 0 && tasks.length < maxBatchItems && !sizeLimited) {
+          const estimate = this.hybridEstimate(first, chars, tasks.length);
+          if (estimate.ready) {
+            const sendAt = Math.min(first.enqueuedAt + 50, Math.min(...tasks.map(task => this.deadline(task))) - estimate.expectedMs!);
+            if (sendAt > now) { waiting.add(first.group); hybridWake = Math.min(hybridWake, sendAt); continue; }
+          }
+        }
         // Under overload, adjacent EDF tasks can all expire before a measured full
         // response. Keep the EDF anchor, but backfill its other slots with the earliest
         // queued deadlines that may still benefit. Nothing is dropped or expired early.
@@ -899,6 +991,7 @@ export class TranslationEngine {
               || chars + task.chars > first.settings.maxBatchChars) continue;
           const estimate = task.tokenEstimate;
           if (local && (inputTokens + estimate.input > localInputLimit || outputTokens + estimate.output > localOutputLimit)) continue;
+          if (!this.hybridExpansionFits(first, tasks, task, chars)) continue;
           if (live) {
             if (inputTokens + estimate.input > (first.settings.liveMaxInputTokens ?? 4096)
                 || outputTokens + estimate.output > (first.settings.liveMaxOutputTokens ?? 4096)) continue;
@@ -944,7 +1037,7 @@ export class TranslationEngine {
         void this.run(batch);
       }
     }
-    let next = Infinity;
+    let next = hybridWake;
     for (const until of this.liveSessions.values()) if (until > now) next = Math.min(next, until);
     for (const task of this.tasks) {
       if (task.stage !== 'queued') continue;
@@ -978,8 +1071,9 @@ export class TranslationEngine {
           sum + Math.max(1, batch.tasks.filter(item => item.stage === 'running').length), 0);
         const queued = [...this.tasks].filter(item => item !== task && item.settings.backend === 'local'
           && (!item.hybrid || item.hybrid.reserved) && (item.stage === 'queued' || item.stage === 'lookup')).length;
-        const timely = task.hybrid.p95Ms === undefined ? otherBatches.length + queued < localLimit
-          : Math.ceil((otherInFlight + queued + 1) / localLimit) * task.hybrid.p95Ms < this.deadline(task, true) - readyAt;
+        const localMs = this.hybridLocalMs(task, otherBatches.length + 1);
+        const timely = localMs === undefined ? otherBatches.length + queued < localLimit
+          : Math.ceil((otherInFlight + queued + 1) / localLimit) * localMs < this.deadline(task, true) - readyAt;
         if (queued >= localLimit || !timely || !this.hybridWindow.reserve(task.hybrid.capacityKey,
           task, task.text.length, task.hybrid.maxItems, task.hybrid.maxChars, this.clock.now())) {
           this.finishTask(task, 'failed', 'hybrid-local-limit'); return;
@@ -1017,6 +1111,7 @@ export class TranslationEngine {
     let first = batch.tasks[0]!;
     let usage: Usage | undefined, status = 'failed', duplicates = 0;
     let sent = false;
+    const qualified = new Map<string, string>();
     const pendingSaves: Task[] = [];
     const accept = (task: Task, text: string, saveNow = true): void => {
       if (task.completedText !== undefined || this.disposed || batch.controller.signal.aborted || task.stage === 'done' || !text.trim()) return;
@@ -1032,6 +1127,7 @@ export class TranslationEngine {
         this.hybridCounts[task.settings.backend === 'local' ? 'local' : 'online'].timelyQualified++;
       }
       task.stage = 'saving'; task.completedText = text;
+      qualified.set(task.id, text);
       for (const subscription of [...task.subscribers]) this.finish(subscription, 'translated', undefined, text);
       // Stream delivery and cache writes never stop the provider from draining final usage.
       if (saveNow) void this.save([task]); else pendingSaves.push(task);
@@ -1051,6 +1147,12 @@ export class TranslationEngine {
         return;
       }
       first = batch.tasks[0]!;
+      if (this.hybridObserved(first)) {
+        const backend = first.settings.backend === 'local' ? 'local' : 'online';
+        const load = Math.max(1, this.hybridLoad(backend) - 1);
+        batch.performanceKey = this.hybridPerformanceKey(first, backend, load);
+        batch.predictedMs = this.hybridEstimate(first, batch.tasks.reduce((sum, task) => sum + task.chars, 0), batch.tasks.length, backend, load).expectedMs;
+      }
       if (first.settings.backend === 'local' && batch.tasks.some(task => task.forced)) this.localDiagnostics.forcedCalls++;
       sent = true;
       const result = await this.provider.complete({
@@ -1058,6 +1160,7 @@ export class TranslationEngine {
         strategy: first.serviceClass,
         force: batch.tasks.some(task => task.forced),
         mode: batch.live ? 'deadline' : this.vod(first) ? 'vod' : undefined,
+        ...(first.hybrid?.onlineStreaming && first.settings.backend === 'online' ? { responseProtocol: 'hybrid-jsonl-v1' as const } : {}),
         items: batch.tasks.map(({ id, text }) => ({ id, text })), signal: batch.controller.signal,
         isItemCurrent: id => batch.tasks.some(task => task.id === id && task.subscribers.size > 0 && task.stage === 'running'),
         onDispatch: (items, backend) => {
@@ -1066,6 +1169,15 @@ export class TranslationEngine {
           counts.actualRequests++;
           counts.inputItems += items.length;
           counts.inputChars += items.reduce((sum, item) => sum + item.text.length, 0);
+          if (batch.performanceKey) {
+            batch.dispatchedAt = this.clock.now(); batch.dispatchedItems = items.length;
+            batch.dispatchedChars = items.reduce((sum, item) => sum + item.text.length, 0);
+            const load = Math.max(1, this.hybridLoad(backend) - 1);
+            batch.performanceKey = this.hybridPerformanceKey(first, backend, load);
+            batch.predictedMs = this.hybridEstimate(first, batch.dispatchedChars, items.length, backend, load).expectedMs;
+            this.hybridPerformanceView.set(backend, { key: batch.performanceKey, inputChars: batch.dispatchedChars,
+              items: items.length, lastBatchItems: items.length });
+          }
           if (backend === 'local') for (const item of items) {
             const task = batch.tasks.find(task => task.id === item.id);
             if (task?.hybrid?.reserved) {
@@ -1074,6 +1186,10 @@ export class TranslationEngine {
             }
           }
         },
+        ...(batch.performanceKey ? { onObservation: (observation: ProviderObservation) => {
+          batch.observation = { ...observation };
+          this.schedulePump();
+        } } : {}),
         onItem: (id, output) => {
           const task = batch.tasks.find(task => task.id === id);
           if (task && output.text !== undefined) accept(task, output.text);
@@ -1124,6 +1240,13 @@ export class TranslationEngine {
     } catch (error: unknown) {
       const failure = error instanceof ProviderError ? error : new ProviderError('provider-error');
       usage = failure.usage ?? usage; status = failure.message;
+      if (failure.observation) batch.observation = { ...failure.observation };
+      if (first.hybrid?.onlineStreaming && failure.message === 'hybrid-stream-unsupported') {
+        this.rejectedGroups.set(first.group, { apiKey: first.apiKey, reason: failure.message });
+        // An explicit capability rejection is not a reason to probe again with queued work.
+        for (const task of [...this.tasks]) if (task.group === first.group && task.stage === 'queued')
+          this.finishTask(task, 'failed', failure.message);
+      }
       for (const context of batch.contexts) context.usage = addUsage(context.usage, usage);
       for (const task of batch.tasks) {
         const output = failure.partialItems?.get(task.id);
@@ -1164,6 +1287,24 @@ export class TranslationEngine {
         else this.finishTask(task, failure.message === 'cancelled' ? 'original' : 'failed', failure.message);
       }
     } finally {
+      if (batch.performanceKey && batch.dispatchedAt !== undefined && batch.dispatchedItems) {
+        const observation = batch.observation;
+        const complete = status === 'completed' && duplicates === 0 && qualified.size === batch.dispatchedItems;
+        const timeout = batch.deadlineExpired || /timeout|deadline/.test(status);
+        const outcome: HybridPerformanceSample['outcome'] = batch.userCancelled ? 'cancelled'
+          : complete ? 'complete' : timeout ? 'timeout' : status === 'cancelled' ? 'cancelled'
+            : qualified.size || status === 'partial' ? 'partial' : 'error';
+        this.hybridPerformance.record(batch.performanceKey, {
+          startedAt: batch.dispatchedAt, endedAt: this.clock.now(), inputChars: batch.dispatchedChars ?? 0,
+          outputChars: observation?.outputChars ?? [...qualified.values()].reduce((sum, text, index) => sum + JSON.stringify([index, text]).length + 1, 0),
+          items: batch.dispatchedItems, complete, timely: complete && !batch.userCancelled && !batch.deadlineExpired, outcome,
+          streaming: observation?.streaming === true, contentChunks: observation?.contentChunks,
+          firstChunkChars: observation?.firstChunkChars,
+          ...(observation?.firstContentAt === undefined ? {} : { firstContentMs: observation.firstContentAt - batch.dispatchedAt,
+            contentSpanMs: (observation.lastContentAt ?? observation.firstContentAt) - observation.firstContentAt }),
+          predictedMs: batch.predictedMs,
+        });
+      }
       if (usage) { this.counts.usageReports++; this.usage = addUsage(this.usage, usage); }
       if (sent && (usage?.promptTokens === undefined || usage?.completionTokens === undefined)) this.counts.usageUnavailableCalls++;
       this.trace({ type: 'settled', at: this.clock.now(), batchId: batch.id, durationMs: this.clock.now() - batch.startedAt,
@@ -1182,6 +1323,17 @@ export class TranslationEngine {
       localDiagnostics: structuredClone(this.localDiagnostics),
       hybrid: structuredClone(this.hybridCounts),
     };
+    if (this.hybridPerformanceView.size) {
+      snapshot.hybrid.performance = {};
+      for (const [backend, view] of this.hybridPerformanceView) {
+        const now = this.clock.now();
+        const estimate = this.hybridPerformance.estimate(view.key, view, now,
+          this.hybridLowerBound(view.key, view.inputChars, view.items, now));
+        snapshot.hybrid.performance[backend] = { status: estimate.status, samples: estimate.samples,
+          expectedMs: estimate.ready ? estimate.expectedMs : undefined,
+          firstContentMs: estimate.firstContentMs, charsPerSecond: estimate.charsPerSecond, lastBatchItems: view.lastBatchItems };
+      }
+    }
     if (this.usage) snapshot.usage = { ...this.usage };
     if (this.lastError) snapshot.lastError = { ...this.lastError };
     if (this.rateLimitedUntil > this.clock.now()) snapshot.rateLimitedUntil = this.rateLimitedUntil;
@@ -1191,6 +1343,7 @@ export class TranslationEngine {
   resetFailureState(): void {
     this.rejectedGroups.clear(); this.lastError = undefined; this.rateLimitedUntil = 0;
     this.hybridCooldown.local = 0; this.hybridCooldown.online = 0;
+    this.hybridPerformanceView.clear();
     // Background calls this before clear/settings changes. A pending write must no longer supply joins.
     for (const task of [...this.tasks]) if (task.stage === 'saving') this.remove(task);
     this.schedulePump();
@@ -1200,6 +1353,7 @@ export class TranslationEngine {
     this.rejectedGroups.clear();
     this.quotas.clear();
     this.hybridWindow.clear();
+    this.hybridPerformance.clear(); this.hybridPerformanceView.clear();
     this.liveSessions.clear();
     this.clock.clearTimeout(this.wakeTimer);
     for (const task of [...this.tasks]) this.finishTask(task, 'original', 'engine-disposed');

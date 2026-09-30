@@ -1,4 +1,5 @@
-import { USER_FILTER_NATIVE_FUNCTIONS, USER_FILTER_NATIVE_CALLBACK, USER_FILTER_NATIVE_CALLBACK_CURRENT, USER_FILTER_NATIVE_REGISTRY } from './user-filter-contract.ts';
+import { matchNativeRuleContract, matchesNativeRuleCallback, matchesNativeRuleMethods,
+  matchesNativeRuleRegistry, type NativeRuleContract } from './native-rule-compatibility.ts';
 import { compileBilibiliUserRules, type CompiledUserRules, type RawUserRule } from './user-filters.ts';
 
 type RecordLike = Record<string, any>;
@@ -14,12 +15,13 @@ function method(object: unknown, name: string): unknown {
 }
 
 export function verifyUserRuleContract(blockStore: unknown): boolean {
-  return Object.entries(USER_FILTER_NATIVE_FUNCTIONS).every(([name, expected]) => {
-    let fn = method(blockStore, name);
-    const observed = data(blockStore) ? observedMethods.get(blockStore) : undefined;
-    if (name === 'judgeWord' && observed && fn === observed.wrapper) fn = observed.original;
-    return typeof fn === 'function' && Function.prototype.toString.call(fn) === expected;
-  });
+  return matchesNativeRuleMethods(name => nativeRuleMethod(blockStore, name));
+}
+
+function nativeRuleMethod(blockStore: unknown, name: string): unknown {
+  const fn = method(blockStore, name);
+  const observed = data(blockStore) ? observedMethods.get(blockStore) : undefined;
+  return name === 'judgeWord' && observed && fn === observed.wrapper ? observed.original : fn;
 }
 
 /** Delegate one natural call exactly once; never invoke filtering proactively. */
@@ -39,9 +41,16 @@ export function observeUserRuleCalls(blockStore: unknown, receive: (source: unkn
   } catch { return () => true; }
   observedMethods.set(blockStore, { original, wrapper });
   return () => {
-    const owned = blockStore.judgeWord === wrapper;
-    if (owned) { if (descriptor) Object.defineProperty(blockStore, 'judgeWord', descriptor); else delete blockStore.judgeWord; }
-    observedMethods.delete(blockStore); return owned;
+    try {
+      const current = Object.getOwnPropertyDescriptor(blockStore, 'judgeWord');
+      if (!current || !('value' in current) || current.value !== wrapper) return false;
+      if (descriptor) Object.defineProperty(blockStore, 'judgeWord', descriptor);
+      else if (!Reflect.deleteProperty(blockStore, 'judgeWord')) return false;
+      return true;
+    } catch { return false; }
+    finally {
+      if (observedMethods.get(blockStore)?.wrapper === wrapper) observedMethods.delete(blockStore);
+    }
   };
 }
 
@@ -60,9 +69,9 @@ export function findUserRuleStore(roots: unknown[], danmaku: unknown): RecordLik
 
 /** The public player API deliberately omits its RootPlayer. The current nano
  * registry exposes connected roots; inspect only the one owning this API and DM. */
-export function findRegisteredUserRuleStore(api: unknown, danmaku: unknown, registry: unknown): RecordLike | null {
-  const getRoots = method(registry, 'valueOf');
-  if (typeof getRoots !== 'function' || Function.prototype.toString.call(getRoots) !== USER_FILTER_NATIVE_REGISTRY) return null;
+export function findRegisteredUserRuleStore(api: unknown, danmaku: unknown, registry: unknown,
+  getRoots: unknown = method(registry, 'valueOf')): RecordLike | null {
+  if (typeof getRoots !== 'function' || !matchesNativeRuleRegistry(getRoots)) return null;
   try {
     const roots = getRoots.call(registry);
     if (!Array.isArray(roots) || roots.length > 32) return null;
@@ -81,10 +90,12 @@ export function findRegisteredUserRuleStore(api: unknown, danmaku: unknown, regi
 export interface UserFilterReader {
   read(force?: boolean): { compiled: CompiledUserRules; changed: boolean; detectedAt: number };
   store(): RecordLike | null;
+  contract(): NativeRuleContract | null;
 }
 
 export function createUserFilterReader(options: { roots: () => unknown[]; registry?: () => unknown; danmaku: unknown; documentScope: string; now: () => number }): UserFilterReader {
   let currentStore: RecordLike | null = null, revision = 0, nextRead = -Infinity, detectedAt = 0;
+  let currentContract: NativeRuleContract | null = null;
   let fingerprint = '', compiled = compileBilibiliUserRules({ scope: options.documentScope, revision,
     verified: false, enabled: null, complete: false, rules: [] });
   let storeSequence = 0;
@@ -92,16 +103,22 @@ export function createUserFilterReader(options: { roots: () => unknown[]; regist
   const storeIds = new WeakMap<object, number>();
   return {
     store: () => currentStore,
+    contract: () => currentContract,
     read(force = false) {
       const now = options.now();
       if (!force && now < nextRead) return { compiled, changed: false, detectedAt };
       nextRead = now + 2000;
       let candidate: RecordLike | null = null;
+      let registryMethod: unknown;
       try {
         const roots = options.roots();
         candidate = findUserRuleStore(roots, options.danmaku);
-        if (!candidate && roots.length === 1 && options.registry)
-          candidate = findRegisteredUserRuleStore(roots[0], options.danmaku, options.registry());
+        if (!candidate && roots.length === 1 && options.registry) {
+          const registry = options.registry();
+          const getRoots = method(registry, 'valueOf');
+          if (typeof getRoots === 'function') candidate = findRegisteredUserRuleStore(roots[0], options.danmaku, registry, getRoots);
+          if (candidate) registryMethod = getRoots;
+        }
       } catch { /* Invalidate the old snapshot below. */ }
       currentStore = candidate;
       if (candidate && !storeIds.has(candidate)) storeIds.set(candidate, ++storeSequence);
@@ -120,9 +137,9 @@ export function createUserFilterReader(options: { roots: () => unknown[]; regist
         const callback = read(read(read(options.danmaku, 'manager'), 'config'), 'fn');
         const filter = method(callback, 'filter');
         methodsMatch = verifyUserRuleContract(block);
-        callbackMatches = typeof filter === 'function' && [USER_FILTER_NATIVE_CALLBACK, USER_FILTER_NATIVE_CALLBACK_CURRENT]
-          .includes(Function.prototype.toString.call(filter));
-        verified = methodsMatch && callbackMatches;
+        callbackMatches = matchesNativeRuleCallback(filter);
+        currentContract = matchNativeRuleContract(name => nativeRuleMethod(block, name), filter, registryMethod);
+        verified = !!currentContract;
         const status = read(setting, 'status');
         if (typeof status === 'boolean' || status === 0 || status === 1) enabled = !!status;
         const list = read(block, 'blockList');
@@ -137,9 +154,10 @@ export function createUserFilterReader(options: { roots: () => unknown[]; regist
             rules.push({ type: type as number, filter, opened: !!opened });
           }
         }
-      } catch { verified = false; complete = false; enabled = null; rules = []; }
+      } catch { currentContract = null; verified = false; complete = false; enabled = null; rules = []; }
       // Private fingerprint, never emitted: values are used solely for revision changes.
-      const identity = JSON.stringify({ scope, verified, methodsMatch, callbackMatches, enabled, complete, rules });
+      const identity = JSON.stringify({ scope, contract: currentContract?.id ?? null,
+        verified, methodsMatch, callbackMatches, enabled, complete, rules });
       if (identity === fingerprint) return { compiled, changed: false, detectedAt };
       fingerprint = identity; detectedAt = now;
       compiled = compileBilibiliUserRules({ scope, revision: ++revision, verified, enabled, complete, rules });

@@ -1,6 +1,7 @@
 import type { UiMessage } from '../i18n/wire.ts';
 import type { LocalPerformanceConfig } from '../local/types.ts';
 import type { LocalTranslationProfile } from '../local/translation-profile.ts';
+import type { ModelEffortMetadata } from './model-capabilities.ts';
 
 export type ProviderProtocol = 'chat-completions';
 export type ProviderProtocolSetting = 'auto' | ProviderProtocol;
@@ -9,7 +10,15 @@ export type ReasoningProfile = 'auto' | 'minimax' | 'deepseek' | 'gemini' | 'cha
 export type ProviderBackend = 'online' | 'local';
 export type ConnectionEndpointMode = 'auto' | 'base' | 'completion';
 export type TranslationStrategy = 'normal' | 'superchat' | 'manual';
-export type ThinkingEffort = 'default' | 'off' | 'on' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh';
+export type ThinkingEffort = 'default' | 'off' | 'on' | 'minimal' | 'low' | 'medium' | 'high' | 'max' | 'xhigh' | (string & {});
+
+/** Attached from the credential-scoped catalog, never accepted from saved/user settings. */
+export interface ModelReasoning {
+  model: string;
+  endpoint: string;
+  fetchedAt: number;
+  effort: ModelEffortMetadata;
+}
 
 export interface HybridCapacityProfile {
   /** SHA-256 identity of the local live translation configuration. */
@@ -47,6 +56,7 @@ export interface ProviderSettings {
   /** Best-effort brand hint for display; it never selects a protocol or model. */
   providerBrand?: ProviderBrand;
   thinkingEffort: ThinkingEffort;
+  modelReasoning?: ModelReasoning;
   /** Keep the provider dispatcher independent from the online connection. */
   backend?: ProviderBackend;
   /** Local model identity used by a local dispatcher and cache namespace. */
@@ -99,8 +109,8 @@ export interface Settings extends ProviderSettings {
   bilibiliNativeTranslationOnly?: boolean;
   /** Opt-in stable five-second supply list; native filtering, layout and animation remain authoritative. */
   bilibiliOwnedRelease?: boolean;
-  /** Disabled until explicitly enabled for Bilibili ordinary live translation. */
-  bilibiliHybrid?: { enabled: boolean; profiles: HybridCapacityProfile[] };
+  /** Opt-in controls for Bilibili ordinary-video planned hybrid translation only. */
+  bilibiliHybrid?: { enabled: boolean; profiles: HybridCapacityProfile[]; adaptive?: boolean; onlineStreaming?: boolean };
   /** Online video request size, independent from live/local batching. */
   videoBatchSize: number;
   prefetchSeconds: number;
@@ -214,7 +224,8 @@ export interface TranslationRequest {
   settings: Settings;
   /** Trusted per-request routing context; never saved with settings. */
   hybrid?: { local: Settings; online: Settings; localReady: boolean; onlineReady: boolean;
-    maxItems: number; maxChars: number; p95Ms?: number; capacityKey: string; onLocalNeeded?: () => void };
+    maxItems: number; maxChars: number; p95Ms?: number; capacityKey: string; onLocalNeeded?: () => void;
+    adaptive?: boolean; onlineStreaming?: boolean };
   apiKey: string;
   signal?: AbortSignal;
   /** VOD queue time is independent of the actual provider request timeout. */

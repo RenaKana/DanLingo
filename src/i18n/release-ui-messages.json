@@ -47,6 +47,10 @@
   "performance.history.unsent": "未发送任务",
   "performance.history.actionFailed": "操作失败，请重试。",
   "hybrid.label": "B站本地限量 + 在线分流",
+  "hybrid.adaptive": "自适应调度",
+  "hybrid.adaptiveHelp": "用于B站混合模式。根据近期实际耗时，判断本地任务能否及时完成，并调整在线任务的合并时机；预计本地赶不上时，新任务交给在线服务。不会修改或突破你设置的本地每5秒条数、字符数和并发上限；关闭后仍按固定上限分流。",
+  "hybrid.onlineStreaming": "在线流式返回",
+  "hybrid.onlineStreamingHelp": "用于B站混合模式的在线分流。每收到一条完整、有效的译文就提前交给弹幕调度，无需等整批结束；弹幕仍按播放时间显示，不会逐字刷出。需要在线服务支持流式返回；若提示不支持，请关闭此项。",
   "hybrid.maxItems": "每5秒本地新输入条数",
   "hybrid.maxChars": "每5秒本地新输入字符（UTF-16）",
   "hybrid.apply": "应用建议",
@@ -65,5 +69,6 @@
   "hybrid.error.HYBRID_KEY_REQUIRED": "请配置在线服务 API Key。",
   "hybrid.error.HYBRID_CAPACITY_REQUIRED": "请先填写本地上限，或应用当前配置的测试建议。",
   "hybrid.error.HYBRID_CAPACITY_INVALID": "请填写有效的本地上限。",
+  "hybrid.error.streamUnsupported": "该服务不支持流式，请关闭混合模式中的在线流式返回。",
   "progress.supply.label": "提前供给状态"
 }

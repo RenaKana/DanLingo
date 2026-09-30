@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { discoverModels } from '../../src/translation/provider.ts';
+import { discoverModels, discoverModelCatalog } from '../../src/translation/provider.ts';
 
 const request={endpoint:'http://192.168.31.93:8080/prefix/v1',allowLocalHttp:true,apiKey:'test-model-key',timeoutMs:1000};
 test('model discovery is a bounded GET with exact base, no cookies, redirects, or message text', async () => {
@@ -17,6 +17,38 @@ test('model discovery is a bounded GET with exact base, no cookies, redirects, o
   });
   assert.equal(calls,1);
   assert.deepEqual(models,['model-b','model-a']);
+});
+
+test('discovery extracts only declared effort fields and leaves the names-only API intact', async () => {
+  let calls=0;
+  const fetcher=async()=>{calls++;return Response.json({data:[
+    {id:'next-model',effort:{supported_levels:['minimal','ultra'],default_level:'ultra',private_field:'secret'},pricing:'secret'},
+    {id:'__proto__',effort:{supported_levels:['xhigh'],default_level:'xhigh'}},
+    {id:'no-effort'},
+  ]});};
+  const catalog=await discoverModelCatalog(request,fetcher);
+  assert.deepEqual(catalog.models,['next-model','__proto__','no-effort']);
+  assert.deepEqual(catalog.capabilities['next-model'],{supportedLevels:['minimal','ultra'],defaultLevel:'ultra'});
+  assert.deepEqual(catalog.capabilities['__proto__'],{supportedLevels:['xhigh'],defaultLevel:'xhigh'});
+  assert.equal(Object.hasOwn(catalog.capabilities,'no-effort'),false);
+  assert.ok(!JSON.stringify(catalog).includes('secret'));
+  assert.deepEqual(await discoverModels(request,fetcher),catalog.models);
+  assert.equal(calls,2);
+});
+
+test('conflicting or malformed duplicate rows do not grant any effort metadata', async () => {
+  const result=await discoverModelCatalog(request,async()=>Response.json({data:[
+    {id:'conflict',effort:{supported_levels:['low'],default_level:'low'}},
+    {id:'conflict',effort:{supported_levels:['high'],default_level:'high'}},
+    {id:'unknown',effort:{supported_levels:['high']}}, {id:'unknown',effort:{supported_levels:['high\n']}},
+    {id:'same',effort:{supported_levels:['low','ultra'],default_level:'low'}},
+    {id:'same',effort:{supported_levels:['ultra','low'],default_level:'low'}},
+    {id:'conflict',effort:{supported_levels:['low'],default_level:'low'}},
+  ]}));
+  assert.deepEqual(result.models,['conflict','unknown','same']);
+  assert.equal(Object.hasOwn(result.capabilities,'conflict'),false);
+  assert.equal(Object.hasOwn(result.capabilities,'unknown'),false);
+  assert.deepEqual(result.capabilities.same,{supportedLevels:['low','ultra'],defaultLevel:'low'});
 });
 test('discovery reports fixed failures without leaking remote bodies or transport errors', async () => {
   for(const status of [401,403,404,429,500]) await assert.rejects(

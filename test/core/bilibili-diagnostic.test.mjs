@@ -21,7 +21,7 @@ test('diagnostic uses URL candidate only, strips extra fields and renders bounde
 });
 
 test('reviewed versions require exact build pairs; unknown and hybrid builds remain closed', () => {
-  assert.deepEqual(REVIEWED_DANMAKU_BUILDS.map(build => build.version).sort(), ['1.1.22', '1.1.24']);
+  assert.deepEqual(REVIEWED_DANMAKU_BUILDS.map(build => build.version).sort(), ['1.1.21', '1.1.22', '1.1.24']);
   for (const build of REVIEWED_DANMAKU_BUILDS) {
     assert.equal(isReviewedDanmakuBuild(build), true);
     assert.equal(isReviewedDanmakuBuild({ ...build, lastCompiled: '2026-07-14T14:26:04+08:00' }), false);

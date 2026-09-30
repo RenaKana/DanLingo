@@ -1,20 +1,8 @@
 import { compileUserRegexp, USER_REGEXP_WORK_LIMIT } from './user-regexp.ts';
 import { createUserFilterReader } from './user-filter-reader.ts';
 import type { CompiledUserRules } from './user-filters.ts';
-
-const NATIVE_AI_JUDGE = 'function(n,r){return this.totalFiltleredDm+=1,Math.abs(n.weight)<r&&(this.aiCloudBlockCount+=1,!0)}';
-const NATIVE_REPORT_FILTER = 'function(n){var r;return null!=(r=this.reportFilter)&&!!r.length&&this.reportFilter.some(function(r){if(new RegExp(r).test(n.text))return!0})}';
-const NATIVE_MOBX_STATE_GETTER = 'function(){return this[ed].getObservablePropValue_(n)}';
-const ORDINARY_MODES = new Set([1, 4, 5, 6]);
-const MOBX_STATE_FIELDS = new Set(['status', 'dmarea', 'dmdensity', 'typeScroll', 'typeTopBottom',
-  'typeColor', 'typeSpecial', 'seniorMode', 'preventshade']);
-const BLOCK_MAP = {
-  blockScroll: [1],
-  blockTopBottom: [5, 4],
-  blockColor: [2012, 2015, 2007, 2008, 2009, 2013, 2002, 2003, 2000, 2001, 2004, 5, 4, 1, 6],
-  blockSpecial: [2005, 2012, 2015, 2002, 2003, 2000, 2001, 2004, 2006, 2013, 2008, 2009, 2011, 2007, 2014, 2010, 3000, 2016, 2017, 2018, 2020],
-  preventShade: [4],
-} as const;
+import { matchesNativeRuleFunction, matchesNativeRuleModeMap, NATIVE_RULE_CONTRACTS,
+  type NativeRuleContract } from './native-rule-compatibility.ts';
 
 type MatchState = 'retain' | 'exclude' | 'unknown';
 export type BilibiliOwnedProjection = { mode: number; rawMode: number | undefined;
@@ -46,6 +34,8 @@ interface RuleSnapshot {
   blockStore: Record<string, any> | null;
   blockMapValid: boolean;
   reason: string | null;
+  contract: NativeRuleContract;
+  crossProfileMismatch: boolean;
 }
 
 export interface BilibiliShadowRulesSnapshot {
@@ -75,15 +65,15 @@ function readData(object: unknown, key: string): ReadValue {
 
 /** Read only the audited MobX observable properties on dmSettingStore.state.
  * Generic accessors remain unknown and are never invoked. */
-function readNativeStateValue(state: unknown, key: string): ReadValue {
+function readNativeStateValue(state: unknown, key: string, contract: NativeRuleContract): ReadValue {
   const value = readData(state, key);
-  if (value.known || !MOBX_STATE_FIELDS.has(key) || !objectLike(state)) return value;
+  if (value.known || !contract.mobxStateFields.has(key) || !objectLike(state)) return value;
   try {
     for (let current: any = state; current; current = Object.getPrototypeOf(current)) {
       const descriptor = Object.getOwnPropertyDescriptor(current, key);
       if (!descriptor) continue;
       const getter = descriptor.get;
-      if (typeof getter !== 'function' || Function.prototype.toString.call(getter) !== NATIVE_MOBX_STATE_GETTER)
+      if (typeof getter !== 'function' || !matchesNativeRuleFunction(contract, 'mobxStateGetter', getter))
         return { known: false };
       return { known: true, value: Reflect.apply(getter, state, []) };
     }
@@ -91,25 +81,15 @@ function readNativeStateValue(state: unknown, key: string): ReadValue {
   } catch { return { known: false }; }
 }
 
-function sameNumberArray(value: unknown, expected: readonly number[]): boolean {
-  if (!Array.isArray(value) || value.length !== expected.length) return false;
-  for (let index = 0; index < expected.length; index++) if (value[index] !== expected[index]) return false;
-  return true;
-}
-
-function verifyBlockMap(blockStore: unknown): boolean {
+function verifyBlockMap(blockStore: unknown, contract: NativeRuleContract): boolean {
   const value = readData(blockStore, 'DmBlockMap');
   if (!value.known || !objectLike(value.value)) return false;
-  for (const [key, expected] of Object.entries(BLOCK_MAP)) {
-    const actual = readData(value.value, key);
-    if (!actual.known || !sameNumberArray(actual.value, expected)) return false;
-  }
-  return true;
+  return matchesNativeRuleModeMap(contract, value.value, readData);
 }
 
-function compileReportRules(blockStore: unknown): { rules: ReportRule[] | null; reason: string | null } {
+function compileReportRules(blockStore: unknown, contract: NativeRuleContract): { rules: ReportRule[] | null; reason: string | null } {
   const method = readData(blockStore, 'reportFilterReg');
-  if (!method.known || typeof method.value !== 'function' || Function.prototype.toString.call(method.value) !== NATIVE_REPORT_FILTER)
+  if (!method.known || !matchesNativeRuleFunction(contract, 'reportFilterReg', method.value))
     return { rules: null, reason: 'report-filter-contract-unverified' };
 
   const list = readData(blockStore, 'reportFilter');
@@ -150,15 +130,15 @@ function flagValue(value: unknown): { known: boolean; value?: boolean } {
 
 /** The audited aiLevel accessor is derived from state. Reproduce it without
  * invoking the native getter, which can change or expose player state. */
-function readNativeAiLevel(state: unknown): ReadValue {
-  const area = readNativeStateValue(state, 'dmarea');
+function readNativeAiLevel(state: unknown, contract: NativeRuleContract): ReadValue {
+  const area = readNativeStateValue(state, 'dmarea', contract);
   if (!area.known || (area.value !== undefined && area.value !== null &&
       typeof area.value !== 'boolean' && typeof area.value !== 'number' && typeof area.value !== 'string'))
     return { known: false };
   const areaNumber = Number(area.value);
   if (areaNumber > 0 && areaNumber < 100) return { known: true, value: 3 };
 
-  const density = readNativeStateValue(state, 'dmdensity');
+  const density = readNativeStateValue(state, 'dmdensity', contract);
   if (!density.known) return { known: false };
   if (density.value === 2 || density.value === 3) return { known: true, value: 2 };
   if (density.value === 1) return { known: true, value: 3 };
@@ -196,7 +176,8 @@ function normalizedNativeSettings(snapshot: RuleSnapshot['settings']): BilibiliS
   };
 }
 
-function modeStackState(blockStore: unknown, state: unknown, item: unknown): { known: boolean; present?: boolean } {
+function modeStackState(blockStore: unknown, state: unknown, item: unknown,
+  contract: NativeRuleContract): { known: boolean; present?: boolean } {
   const id = readData(item, 'dmid');
   const fallback = id.known && id.value === undefined ? readData(item, 'id_str') : id;
   if (!fallback.known || typeof fallback.value !== 'string' || !/^\d+$/.test(fallback.value)) return { known: false };
@@ -235,7 +216,7 @@ function modeStackState(blockStore: unknown, state: unknown, item: unknown): { k
   const last = readData(stack.value, String(length.value - 1));
   const lastMode = last.known ? readData(last.value, 'mode') : { known: false as const };
   if (!lastMode.known || typeof lastMode.value !== 'number' || !Number.isSafeInteger(lastMode.value) ||
-      !verifyBlockMap(blockStore)) return { known: false };
+      !verifyBlockMap(blockStore, contract)) return { known: false };
 
   const flags = [
     ['blockColor', 'typeColor', true],
@@ -244,8 +225,8 @@ function modeStackState(blockStore: unknown, state: unknown, item: unknown): { k
     ['preventShade', 'preventshade', false],
   ] as const;
   for (const [historyKey, settingKey, inverse] of flags) {
-    if (historyKey !== 'blockColor' && !(BLOCK_MAP[historyKey] as readonly number[]).includes(lastMode.value)) continue;
-    const history = readData(entry, historyKey), setting = readNativeStateValue(state, settingKey);
+    if (historyKey !== 'blockColor' && !(contract.blockMap[historyKey] as readonly number[]).includes(lastMode.value)) continue;
+    const history = readData(entry, historyKey), setting = readNativeStateValue(state, settingKey, contract);
     if (!history.known || !setting.known || typeof history.value !== 'boolean' ||
         typeof setting.value !== 'boolean') return { known: false };
     if (history.value !== (inverse ? !setting.value : setting.value))
@@ -254,7 +235,8 @@ function modeStackState(blockStore: unknown, state: unknown, item: unknown): { k
   return { known: true, present: false };
 }
 
-function projectOwnedBeforeRender(blockStore: unknown, state: unknown, item: unknown):
+function projectOwnedBeforeRender(blockStore: unknown, state: unknown, item: unknown,
+  contract: NativeRuleContract):
   { known: true; item: Record<string, unknown>; projection: BilibiliOwnedProjection } |
   { known: false; reason: string } {
   const unavailable = (reason = 'mode-stack-state-unavailable') => ({ known: false as const, reason });
@@ -264,7 +246,7 @@ function projectOwnedBeforeRender(blockStore: unknown, state: unknown, item: unk
   if (!mode.known || !Number.isSafeInteger(mode.value) || !rawMode.known ||
       rawMode.value !== undefined && !Number.isSafeInteger(rawMode.value) ||
       !color.known || !colorfulImg.known) return unavailable();
-  if (!ORDINARY_MODES.has(mode.value)) return unavailable('non-ordinary-mode');
+  if (!contract.ordinaryModes.has(mode.value)) return unavailable('non-ordinary-mode');
   const projection: BilibiliOwnedProjection = { mode: mode.value, rawMode: rawMode.value,
     color: color.value, colorfulImg: colorfulImg.value };
   const assigned = new Set<keyof BilibiliOwnedProjection>();
@@ -282,7 +264,7 @@ function projectOwnedBeforeRender(blockStore: unknown, state: unknown, item: unk
       if (length.value > 0) {
         const last = readData(stack.value, String(length.value - 1));
         const lastMode = last.known ? readData(last.value, 'mode') : { known: false as const };
-        if (!lastMode.known || !Number.isSafeInteger(lastMode.value) || !verifyBlockMap(blockStore))
+        if (!lastMode.known || !Number.isSafeInteger(lastMode.value) || !verifyBlockMap(blockStore, contract))
           return unavailable();
         let index: number | null = null;
         const move = (direction: -1 | 1, bounded: boolean): boolean => {
@@ -306,8 +288,8 @@ function projectOwnedBeforeRender(blockStore: unknown, state: unknown, item: unk
         };
         const branch = (key: 'blockSpecial' | 'blockTopBottom' | 'preventShade',
           settingKey: 'typeSpecial' | 'typeTopBottom' | 'preventshade', inverse: boolean) => {
-          if (!(BLOCK_MAP[key] as readonly number[]).includes(lastMode.value)) return { known: true as const, change: false, desired: false };
-          const history = readData(entry, key), setting = readNativeStateValue(state, settingKey);
+          if (!(contract.blockMap[key] as readonly number[]).includes(lastMode.value)) return { known: true as const, change: false, desired: false };
+          const history = readData(entry, key), setting = readNativeStateValue(state, settingKey, contract);
           if (!history.known || !setting.known || typeof setting.value !== 'boolean' ||
               history.value !== undefined && typeof history.value !== 'boolean') return { known: false as const };
           const desired = inverse ? !setting.value : setting.value;
@@ -322,7 +304,7 @@ function projectOwnedBeforeRender(blockStore: unknown, state: unknown, item: unk
         const topBottom = branch('blockTopBottom', 'typeTopBottom', true);
         if (!topBottom.known) return unavailable();
         if (topBottom.change && !move(topBottom.desired ? -1 : 1, true)) return unavailable();
-        const blockColor = readData(entry, 'blockColor'), typeColor = readNativeStateValue(state, 'typeColor');
+        const blockColor = readData(entry, 'blockColor'), typeColor = readNativeStateValue(state, 'typeColor', contract);
         if (!blockColor.known || !typeColor.known || typeof typeColor.value !== 'boolean' ||
             blockColor.value !== undefined && typeof blockColor.value !== 'boolean') return unavailable();
         const blocked = !typeColor.value;
@@ -340,8 +322,8 @@ function projectOwnedBeforeRender(blockStore: unknown, state: unknown, item: unk
       }
     }
   }
-  if (!ORDINARY_MODES.has(projection.mode) ||
-      projection.rawMode !== undefined && !ORDINARY_MODES.has(projection.rawMode))
+  if (!contract.ordinaryModes.has(projection.mode) ||
+      projection.rawMode !== undefined && !contract.ordinaryModes.has(projection.rawMode))
     return unavailable('mode-stack-nonordinary');
   if (projection.colorfulImg) return unavailable('mode-stack-nonordinary');
   try {
@@ -360,18 +342,19 @@ function projectOwnedBeforeRender(blockStore: unknown, state: unknown, item: unk
   } catch { return unavailable(); }
 }
 
-/** Pure candidate matcher for the reviewed 1.1.24 native rule order. */
+/** Pure candidate matcher for the reviewed 1.1.21/1.1.24 native rule order. */
 export function matchBilibiliShadowRules(item: unknown, snapshot: RuleSnapshot, afterOwnedProjection = false): MatchResult {
   const unknown = (reason: string): MatchResult => ({ state: 'unknown', reason });
   const exclude = (reason: string): MatchResult => ({ state: 'exclude', reason });
   const retain = (reason: string): MatchResult => ({ state: 'retain', reason });
   if (!objectLike(item)) return unknown('candidate-unavailable');
+  if (snapshot.crossProfileMismatch) return unknown('user-filter-snapshot-unverified');
 
   const mode = readData(item, 'mode');
   if (!mode.known || typeof mode.value !== 'number' || !Number.isFinite(mode.value)) return unknown('mode-unavailable');
-  if (!ORDINARY_MODES.has(mode.value)) return unknown('non-ordinary-mode');
+  if (!snapshot.contract.ordinaryModes.has(mode.value)) return unknown('non-ordinary-mode');
   if (!afterOwnedProjection) {
-    const stack = modeStackState(snapshot.blockStore, snapshot.settings.state, item);
+    const stack = modeStackState(snapshot.blockStore, snapshot.settings.state, item, snapshot.contract);
     if (!stack.known) return unknown('mode-stack-state-unavailable');
     if (stack.present) return unknown('mode-stack-adjustment');
   }
@@ -394,7 +377,7 @@ export function matchBilibiliShadowRules(item: unknown, snapshot: RuleSnapshot, 
   let unresolved: string | null = user.state === 'unknown' ? `user-${user.reason}` : null;
 
   const aiMethod = readData(snapshot.blockStore, 'aiJudge');
-  if (!aiMethod.known || typeof aiMethod.value !== 'function' || Function.prototype.toString.call(aiMethod.value) !== NATIVE_AI_JUDGE)
+  if (!aiMethod.known || !matchesNativeRuleFunction(snapshot.contract, 'aiJudge', aiMethod.value))
     return unknown('ai-rule-contract-unverified');
   const aiWeight = readData(item, 'weight'), aiLevel = numberValue(snapshot.settings.aiLevel);
   const weightNumber = aiWeight.known ? numberValue(aiWeight.value) : { known: false as const };
@@ -411,13 +394,13 @@ export function matchBilibiliShadowRules(item: unknown, snapshot: RuleSnapshot, 
     if (rule.regex.test(text.value)) return exclude('native-report-rule');
   }
 
-  const seniorMode = readNativeStateValue(snapshot.settings.state, 'seniorMode');
+  const seniorMode = readNativeStateValue(snapshot.settings.state, 'seniorMode', snapshot.contract);
   const senior: { known: boolean; value?: boolean } = seniorMode.known ? flagValue(seniorMode.value) : { known: false };
   const seniorWeight: { known: boolean; value?: number } = aiWeight.known ? numberValue(aiWeight.value) : { known: false };
   if (!senior.known || !seniorWeight.known) unresolved ??= 'senior-weight-unavailable';
   else if (senior.value && seniorWeight.value! <= 10) return exclude('native-senior-weight');
 
-  const typeColor = readNativeStateValue(snapshot.settings.state, 'typeColor');
+  const typeColor = readNativeStateValue(snapshot.settings.state, 'typeColor', snapshot.contract);
   const colorful = readData(item, 'colorful');
   const colorEnabled: { known: boolean; value?: boolean } = typeColor.known ? flagValue(typeColor.value) : { known: false };
   const colorfulFlag: { known: boolean; value?: boolean } = colorful.known ? flagValue(colorful.value) : { known: false };
@@ -425,7 +408,7 @@ export function matchBilibiliShadowRules(item: unknown, snapshot: RuleSnapshot, 
   else if (!colorEnabled.value && colorfulFlag.value) return exclude('native-colorful-filter');
 
   const dmBlockMap = readData(snapshot.blockStore, 'DmBlockMap');
-  if (!dmBlockMap.known || !verifyBlockMap(snapshot.blockStore)) return unknown('native-mode-map-unverified');
+  if (!dmBlockMap.known || !verifyBlockMap(snapshot.blockStore, snapshot.contract)) return unknown('native-mode-map-unverified');
   const pool = readData(item, 'pool');
   if (!pool.known) unresolved ??= 'pool-unavailable';
   const checks: [string, string, boolean][] = [
@@ -434,7 +417,7 @@ export function matchBilibiliShadowRules(item: unknown, snapshot: RuleSnapshot, 
     ['typeSpecial', 'blockSpecial', pool.known && pool.value === 2],
   ];
   for (const [settingName, listName, poolBlocked] of checks) {
-    const setting = readNativeStateValue(snapshot.settings.state, settingName);
+    const setting = readNativeStateValue(snapshot.settings.state, settingName, snapshot.contract);
     const flag: { known: boolean; value?: boolean } = setting.known ? flagValue(setting.value) : { known: false };
     const list = readData(dmBlockMap.value, listName);
     if (!flag.known || !list.known || !Array.isArray(list.value)) { unresolved ??= `${settingName}-unavailable`; continue; }
@@ -457,7 +440,7 @@ export function matchBilibiliShadowRules(item: unknown, snapshot: RuleSnapshot, 
     }
   }
 
-  const preventShade = readNativeStateValue(snapshot.settings.state, 'preventshade');
+  const preventShade = readNativeStateValue(snapshot.settings.state, 'preventshade', snapshot.contract);
   const preventFlag = preventShade.known ? flagValue(preventShade.value) : { known: false };
   const preventModes = readData(dmBlockMap.value, 'preventShade');
   if (!preventFlag.known || !preventModes.known || !Array.isArray(preventModes.value)) unresolved ??= 'prevent-shade-unavailable';
@@ -488,6 +471,12 @@ export function createBilibiliShadowRules(options: {
     read() {
       const userSnapshot = reader.read();
       const compiled = userSnapshot.compiled;
+      const evidence = compiled.summary.readEvidence;
+      const matchedContract = reader.contract();
+      const crossProfileMismatch = !!evidence?.methodsMatch && !!evidence?.callbackMatches && !matchedContract;
+      // Unverified reads retain the original diagnostic path, but the snapshot
+      // remains unknown; only a complete reader match selects a rule profile.
+      const contract = matchedContract ?? NATIVE_RULE_CONTRACTS[0];
       const store = reader.store();
       const blockRead = readData(store, 'blockStore'), dmSettingRead = readData(store, 'dmSettingStore');
       const blockStore = blockRead.known && objectLike(blockRead.value) ? blockRead.value : null;
@@ -496,12 +485,12 @@ export function createBilibiliShadowRules(options: {
       const sourceState = stateRead.known && objectLike(stateRead.value) ? stateRead.value : null;
       const state = sourceState ? Object.create(null) as Record<string, unknown> : null;
       let stateFieldsKnown = !!sourceState;
-      if (sourceState && state) for (const key of MOBX_STATE_FIELDS) {
-        const value = readNativeStateValue(sourceState, key);
+      if (sourceState && state) for (const key of contract.mobxStateFields) {
+        const value = readNativeStateValue(sourceState, key, contract);
         if (!value.known) stateFieldsKnown = false;
         else state[key] = value.value;
       }
-      const aiLevel = readNativeAiLevel(state);
+      const aiLevel = readNativeAiLevel(state, contract);
       const aiLevelKnown = stateFieldsKnown && aiLevel.known;
       const manager = readData(options.danmaku, 'manager');
       const config: ReadValue = manager.known ? readData(manager.value, 'config') : { known: false };
@@ -511,11 +500,10 @@ export function createBilibiliShadowRules(options: {
       const noDanmakuXTypes: ReadValue = setting.known ? readData(setting.value, 'noDanmakuXTypes') : { known: false };
       const limit: ReadValue = setting.known ? readData(setting.value, 'limit') : { known: false };
       const sceneIsMini: ReadValue = scene.known ? readData(scene.value, 'isMini') : { known: false };
-      const report = compileReportRules(blockStore);
-      const blockMapValid = verifyBlockMap(blockStore);
-      const evidence = compiled.summary.readEvidence;
+      const report = compileReportRules(blockStore, contract);
+      const blockMapValid = verifyBlockMap(blockStore, contract);
       const reasons: string[] = [];
-      if (!evidence?.storeFound || !evidence.methodsMatch || !evidence.callbackMatches || !evidence.listComplete || !evidence.switchKnown)
+      if (!evidence?.storeFound || !evidence.methodsMatch || !evidence.callbackMatches || !evidence.listComplete || !evidence.switchKnown || crossProfileMismatch)
         reasons.push('user-filter-snapshot-unverified');
       if (!options.allowPartialUserRules?.() &&
           ['keyword', 'regexp', 'sender'].some(category => !['ready', 'disabled'].includes(compiled.summary.categories[category as keyof typeof compiled.summary.categories].status)))
@@ -545,7 +533,7 @@ export function createBilibiliShadowRules(options: {
         store: idOf(store), blockStore: idOf(blockStore), dmSetting: idOf(dmSetting), manager: idOf(manager.known ? manager.value : undefined),
         userRevision: compiled.summary.revision, userStatus: compiled.summary.enabled,
         state: state && ['status', 'dmarea', 'dmdensity', 'typeScroll', 'typeTopBottom', 'typeColor', 'typeSpecial', 'seniorMode', 'preventshade']
-          .map(key => { const value = readNativeStateValue(state, key); return value.known ? value.value : 'unknown'; }),
+          .map(key => { const value = readNativeStateValue(state, key, contract); return value.known ? value.value : 'unknown'; }),
         aiLevel: aiLevel.known ? aiLevel.value : 'unknown',
         report: report.rules?.map(rule => rule.regex?.source ?? rule.reason) ?? report.reason,
         visible: settingVisible.known ? settingVisible.value : 'unknown',
@@ -555,11 +543,12 @@ export function createBilibiliShadowRules(options: {
       if (nextFingerprint !== fingerprint) { fingerprint = nextFingerprint; revision++; }
 
       const ruleSnapshot: RuleSnapshot = { compiled, settings, reportRules: report.rules, reportReason: report.reason,
-        blockStore, blockMapValid, reason: reasons[0] ?? null };
+        blockStore, blockMapValid, reason: reasons[0] ?? null, contract, crossProfileMismatch };
       return { revision, fingerprint, known: reasons.length === 0, reason: reasons[0] ?? null,
         nativeSettings, match: item => matchBilibiliShadowRules(item, ruleSnapshot),
         matchOwned: item => {
-          const projected = projectOwnedBeforeRender(blockStore, state, item);
+          if (crossProfileMismatch) return { state: 'unknown', reason: 'user-filter-snapshot-unverified' };
+          const projected = projectOwnedBeforeRender(blockStore, state, item, contract);
           if (!projected.known) return { state: 'unknown', reason: projected.reason };
           return { ...matchBilibiliShadowRules(projected.item, ruleSnapshot, true), projection: projected.projection };
         } };

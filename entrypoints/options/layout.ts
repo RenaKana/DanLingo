@@ -1,7 +1,7 @@
 
 import { t, tCount } from '../../src/i18n';
 import { bindLocalizedAttribute, bindLocalizedText } from '../../src/ui/localized-text';
-import { mountCompactService } from './service-layout';
+import { mountCompactService, mountLocalService } from './service-layout';
 
 const sections = {
   service: ['m_83095a6428e8', 'm_ade6d377b28b'],
@@ -10,6 +10,7 @@ const sections = {
   performance: ['m_7c185a12004e', 'm_a39397a3b8dc'],
   advanced: ['m_a42c8d6a892a', 'm_78aba5a7a00b'],
   data: ['m_afcc9b5e1596', 'm_4595422d43bc'],
+  help: ['settings.help', 'settings.help'],
 } as const;
 type Section = keyof typeof sections;
 const get = (id: string) => document.getElementById(id)!;
@@ -43,11 +44,12 @@ export function mountSettingsLayout() {
   }
   const serviceGrid = service!.querySelector('.grid')!; serviceGrid.prepend(online); online.classList.add('span');
   const local = get('local-settings'); local.classList.remove('span'); local.classList.add('card'); local.dataset.backend = 'local';
-  const localTitle = create('h2'); bindLocalizedText(localTitle, () => t('m_44ac539067ed')); local.prepend(localTitle); service!.before(local);
-  const runtime = document.createElement('details'), summary = create('summary'); bindLocalizedText(summary, () => t('m_dc461ba5dd9c'));
+  bindLocalizedAttribute(local, 'aria-label', () => t('m_44ac539067ed')); service!.before(local);
+  const runtime = document.createElement('details'), summary = create('summary'); bindLocalizedText(summary, () => t('m_538e74207183'));
   const localSummary = create('div', 'status span'); localSummary.id = 'local-state-summary'; localSummary.setAttribute('role', 'status'); localSummary.setAttribute('aria-live', 'polite');
   get('local-state').before(localSummary); runtime.className = 'span'; runtime.append(summary, get('local-state'), get('local-support')); local.querySelector('.local-grid')!.append(runtime);
   get('local-state').removeAttribute('aria-live'); get('local-state').removeAttribute('role');
+  mountLocalService(local);
   const connectionDetails = service!.querySelector('details')!;
   bindLocalizedText(connectionDetails.querySelector('summary')!, () => t('m_3019152503a2'));
   const sc = titleCard('Super Chat'), scGrid = create('div', 'grid');
@@ -56,8 +58,8 @@ export function mountSettingsLayout() {
   const connectionCard = titleCard(() => t('m_1566c66f0727')); connectionCard.hidden = true;
   connectionCard.append(connectionDetails); panels.advanced.prepend(connectionCard);
   bindLocalizedText(connectionDetails.querySelector('p')!, () => t('m_e4cc63839845'));
-  const info = document.createElement('details'), infoSummary = create('summary'); bindLocalizedText(infoSummary, () => t('m_3dc98cf48188'));
-  info.className = 'span'; info.append(infoSummary, get('connection-status'));
+  const info = document.createElement('details'), infoSummary = create('summary'); bindLocalizedText(infoSummary, () => t('m_3019152503a2'));
+  info.className = 'span'; info.append(infoSummary, get('connection-status'), get('profile').closest('label')!);
   const serviceNote = service!.querySelector(':scope > p'); if (serviceNote) info.append(serviceNote); serviceGrid.append(info);
   bindLocalizedText(service!.querySelector('h2')!, () => t('m_da6c05c52a15'));
   mountCompactService(service!, info);
@@ -103,6 +105,7 @@ export function mountSettingsLayout() {
     performance: '<path d="M4 19V5M4 19h16M8 15v-4M13 15V7M18 15V9"/>',
     advanced: '<path d="M4 7h6M14 7h6M4 17h10M18 17h2"/><circle cx="12" cy="7" r="2"/><circle cx="16" cy="17" r="2"/>',
     data: '<ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 4 16 4 16 0V5M4 12v7c0 4 16 4 16 0v-7"/>',
+    help: '<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 0 1 5 0c0 2-2.5 2-2.5 4M12 17h.01"/>',
   };
   for (const [id,[titleKey]] of Object.entries(sections)) {
     const a = document.createElement('a'); a.href = '#' + id;
@@ -117,6 +120,7 @@ export function mountSettingsLayout() {
     for (const [id,panel] of Object.entries(panels)) panel.hidden = id !== section;
     nav.querySelectorAll('a').forEach(a => { if (a.hash === '#' + section) a.setAttribute('aria-current','page'); else a.removeAttribute('aria-current'); });
     category.value = section;
+    actions.hidden = section === 'help';
     header.querySelector<HTMLElement>('.page-breadcrumb')!.hidden = section !== 'service';
     bindLocalizedText(get('page-title'), () => t(section === 'service' ? (get('backend') as HTMLSelectElement).value === 'online' ? 'm_1760b98532ec' : 'm_8b47c15ab818' : sections[section][0]));
     if (focus) { get('page-title').focus({preventScroll:true}); window.scrollTo(0,0); }

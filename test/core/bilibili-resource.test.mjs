@@ -4,6 +4,58 @@ import { resourceFromUrl, matchesResourceUrl, sameSession, validSession, cacheRe
 import { parseSources, sourceEventId } from '../../src/core/messages.ts';
 const url='https://www.bilibili.com/video/BV1xx411c7mD/?p=2';
 const resource={platform:'bilibili',scenario:'video',resourceId:'av2:cid62132',urlResourceId:'BV1xx411c7mD:p2',sessionId:'document-a',generation:1};
+test('festival uses the video candidate and preserves the actual CID cache identity', () => {
+  const festival = 'https://www.bilibili.com/festival/jzj2023?bvid=BV1xx411c7mD&p=2';
+  assert.deepEqual(resourceFromUrl(festival), resourceFromUrl(url));
+  assert.ok(matchesResourceUrl(resource, festival));
+  assert.ok(validSession(resource));
+  assert.equal(cacheResource(resource), cacheResource({ ...resource, urlResourceId: 'av2:p2' }));
+  for (const path of ['/festival/jzj2023', '/festival/jzj2023?bvid=oops',
+    '/festival/jzj2023?bvid=BV1xx411c7mD&bvid=BV1xx411c7mD',
+    '/festival/jzj2023?bvid=BV1xx411c7mD&p=1&p=2',
+    '/festival/jzj2023/extra?bvid=BV1xx411c7mD', '/other?bvid=BV1xx411c7mD'])
+    assert.equal(resourceFromUrl('https://www.bilibili.com' + path), null, path);
+  assert.equal(resourceFromUrl('https://user@www.bilibili.com/festival/jzj2023?bvid=BV1xx411c7mD'), null);
+});
+test('list and watchlater use explicit current video IDs, never playlist IDs', () => {
+  for (const path of ['/list/1958703906', '/list/ml547718', '/list/watchlater',
+    '/medialist/play/1958703906', '/medialist/play/ml547718', '/medialist/play/watchlater']) {
+    const base = 'https://www.bilibili.com' + path;
+    assert.equal(resourceFromUrl(base + '?sid=547718&business_id=547718'), null);
+    assert.deepEqual(resourceFromUrl(base + '?bvid=BV1xx411c7mD&oid=2&p=2'), resourceFromUrl(url));
+    assert.ok(matchesResourceUrl(resource, base + '?bvid=BV1xx411c7mD&oid=2&p=2'));
+    assert.equal(matchesResourceUrl(resource, base + '?bvid=BV1xx411c7mD&oid=3&p=2'), false);
+    const avResource = { ...resource, urlResourceId: 'av2:p2' };
+    assert.ok(matchesResourceUrl(avResource, base + '?oid=2&p=2'));
+    assert.equal(cacheResource(avResource), cacheResource(resource));
+  }
+  for (const query of ['bvid=', 'oid=0', 'oid=-2', 'aid=abc', 'oid=2&aid=3',
+    'bvid=BV1xx411c7mD&oid=2&oid=2', 'bvid=BV1xx411c7mD&bvid=BV1xx411c7mD',
+    'oid=2&p=1&p=2', 'oid=2&p=0', 'oid=2&p=100000'])
+    assert.equal(resourceFromUrl('https://www.bilibili.com/list/watchlater?' + query), null, query);
+  for (const path of ['/list/0', '/list/ml0', '/list/abc', '/list/watchlater/extra',
+    '/medialist/play/', '/watchlater', '/bangumi/play/ep1', '/cheese/play/ep1'])
+    assert.equal(resourceFromUrl('https://www.bilibili.com' + path + '?bvid=BV1xx411c7mD'), null, path);
+});
+
+test('festival entry URL stays stable while native CID and video sessions remain separate', () => {
+  const festival = 'https://www.bilibili.com/festival/jzj2023?bvid=BV1xx411c7mD&aid=2';
+  const initial = { ...resource, resourceId: 'av2:cid62131', urlResourceId: 'BV1xx411c7mD:p1' };
+  const nextPart = { ...initial, resourceId: 'av2:cid62132', generation: 2 };
+  const nextVideo = { ...initial, resourceId: 'av3:cid99999', generation: 3 };
+  for (const current of [initial, nextPart, nextVideo]) {
+    assert.equal(matchesResourceUrl(current, festival), true);
+    assert.equal(validSession(current), true);
+  }
+  assert.equal(sameSession(initial, nextPart), false);
+  assert.equal(sameSession(initial, nextVideo), false);
+  assert.notEqual(cacheResource(initial), cacheResource(nextPart));
+  assert.notEqual(cacheResource(initial), cacheResource(nextVideo));
+  assert.equal(matchesResourceUrl(nextVideo, festival.replace('BV1xx411c7mD', 'BV1ph4y1g75E')), false,
+    'changing the entry URL still retires the old route scope');
+  assert.equal(matchesResourceUrl(nextVideo, 'https://www.bilibili.com/list/watchlater?bvid=BV1xx411c7mD&oid=2'), false);
+  assert.equal(matchesResourceUrl(nextVideo, 'https://www.bilibili.com/video/av2'), false);
+});
 test('URL candidate cannot impersonate native CID; part/CID/session transitions stay separate',()=>{
   assert.equal(resourceFromUrl(url).resourceId,'BV1xx411c7mD:p2'); assert.ok(matchesResourceUrl(resource,url));
   assert.equal(matchesResourceUrl(resource,url.replace('p=2','p=1')),false); assert.equal(validSession({...resource,resourceId:'BV1xx411c7mD:p2'}),false);

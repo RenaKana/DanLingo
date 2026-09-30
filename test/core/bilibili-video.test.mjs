@@ -9,6 +9,7 @@ import {
   resolveBilibiliBinding,
   sourceMessageFromDanmaku,
   REVIEWED_DANMAKU_BUILDS,
+  startBilibiliNativeBridge,
 } from '../../src/platforms/bilibili/video.ts';
 import { attachPretranslationAudit } from '../../src/diagnostics/bilibili-pretranslation.mjs';
 import { VideoEligibilityPublisher } from '../../src/platforms/video-eligibility.ts';
@@ -106,6 +107,135 @@ test('Bilibili URL identity and exact version fail closed', () => {
   assert.equal(parseBilibiliVideoUrl('https://bilibili.com/video/BV1xx411c7mD'), null);
   const player = { danmaku: { getDanmakuX: () => ({ getMetadata: () => ({ version: '1.1.22', lastCompiled: 'old' }) }) }, config: identityConfig };
   assert.equal(resolveBilibiliBinding(player, href), null);
+});
+
+test('festival binds actual manifest identity independently of its entry BV and part', t => {
+  const h = harness(); t.after(() => h.attachment.stop());
+  const festival = 'https://www.bilibili.com/festival/jzj2023?bvid=BV1xx411c7mD';
+  assert.deepEqual(resolveBilibiliBinding(h.player, festival).identity, h.binding.identity);
+  assert.equal(resolveBilibiliBinding(h.player, festival + '&p=2').identity.page, 1);
+  h.player.manifest = { ...identityConfig, cid: '62132', p: 2 };
+  assert.deepEqual(resolveBilibiliBinding(h.player, festival).identity,
+    { ...h.binding.identity, cid: '62132', page: 2, resourceId: 'av2:cid62132' });
+  h.player.manifest = { aid: '3', bvid: 'BV1ph4y1g75E', cid: '99999', p: 1 };
+  assert.deepEqual(resolveBilibiliBinding(h.player, festival).identity,
+    { aid: '3', bvid: 'BV1ph4y1g75E', cid: '99999', page: 1, resourceId: 'av3:cid99999', urlResourceId: 'BV1xx411c7mD:p1' });
+  assert.equal(resolveBilibiliBinding(h.player, href), null, 'ordinary video identity remains strict');
+  h.player.manifest.cid = 0;
+  assert.equal(resolveBilibiliBinding(h.player, festival), null, 'URL metadata cannot replace a verified CID');
+  h.player.manifest = { ...identityConfig, bvid: undefined };
+  assert.equal(resolveBilibiliBinding(h.player, festival), null, 'festival requires a complete actual manifest');
+  h.player.manifest = { ...identityConfig, cid: '62132' };
+  assert.equal(resolveBilibiliBinding(h.player, festival).identity.resourceId, 'av2:cid62132');
+  h.instance.getMetadata = () => ({ version: 'future', lastCompiled: 'unknown' });
+  assert.equal(resolveBilibiliBinding(h.player, festival), null);
+});
+
+test('festival unchanged URL rotates native sessions and rejects prior-CID prepared results', t => {
+  const h = harness(); h.attachment.stop();
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  const posted = [], handlers = new Map();
+  let discover;
+  const location = { origin: 'https://www.bilibili.com', href: 'https://www.bilibili.com/festival/jzj2023?bvid=BV1xx411c7mD&aid=2' };
+  const win = { player: h.player, location, postMessage: message => posted.push(message),
+    setInterval: callback => { discover = callback; return 1; }, clearInterval() {},
+    addEventListener: (kind, callback) => handlers.set(kind, callback), removeEventListener: kind => handlers.delete(kind) };
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: win });
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: location });
+  let stop;
+  t.after(() => {
+    stop?.();
+    for (const [name, descriptor] of [['window', previousWindow], ['location', previousLocation]]) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+    }
+  });
+  stop = startBilibiliNativeBridge();
+  const first = posted.findLast(row => row.type === 'snapshot');
+  const content = (scope, payload) => handlers.get('message')({ data: {
+    bridge: 'danlingo.native.v1', from: 'content', resourceId: scope.resourceId,
+    urlResourceId: scope.urlResourceId, session: scope.session, ...payload,
+  } });
+  content(first, { type: 'control', generation: 0, enabled: true, displayMode: 'translated' });
+  content(first, { type: 'prepared', generation: 0, items: [{
+    id: JSON.stringify(['bilibili', first.resourceId, h.source.dmid]), originalText: '原文', text: '上一集译文',
+  }] });
+  h.player.manifest = { ...identityConfig, cid: '62132', p: 2 };
+  // A switch can happen between discovery ticks. No old text may be adopted.
+  assert.equal(h.manager.insert([h.source]).measured[0], '原文');
+  h.destroy(); discover();
+  const second = posted.findLast(row => row.type === 'snapshot');
+  assert.equal(second.resourceId, 'av2:cid62132');
+  assert.equal(second.clock.contentActive, true);
+  assert.notEqual(second.session, first.session);
+  assert.equal(second.urlResourceId, first.urlResourceId);
+  content(second, { type: 'control', generation: 0, enabled: true, displayMode: 'translated' });
+  content(first, { type: 'prepared', generation: 0, items: [{
+    id: JSON.stringify(['bilibili', second.resourceId, h.source.dmid]), originalText: '原文', text: '迟到旧译文',
+  }] });
+  assert.equal(h.manager.insert([h.source]).measured[0], '原文');
+  h.destroy();
+  content(second, { type: 'prepared', generation: 0, items: [{
+    id: JSON.stringify(['bilibili', second.resourceId, h.source.dmid]), originalText: '原文', text: '第二P译文',
+  }] });
+  assert.equal(h.manager.insert([h.source]).measured[0], '第二P译文');
+  h.destroy();
+  h.player.manifest = { aid: '3', bvid: 'BV1ph4y1g75E', cid: '99999', p: 1 }; discover();
+  const third = posted.findLast(row => row.type === 'snapshot');
+  assert.equal(third.resourceId, 'av3:cid99999');
+  assert.equal(third.clock.contentActive, true);
+  assert.notEqual(third.session, second.session);
+  assert.equal(third.urlResourceId, first.urlResourceId);
+  assert.equal(location.href, 'https://www.bilibili.com/festival/jzj2023?bvid=BV1xx411c7mD&aid=2');
+  assert.equal(h.source.text, '原文');
+});
+
+test('playlist selection waits for explicit current video identity and rejects stale video/part', t => {
+  const h = harness(); t.after(() => h.attachment.stop());
+  for (const path of ['/list/1958703906', '/list/watchlater', '/medialist/play/watchlater']) {
+    const base = 'https://www.bilibili.com' + path;
+    assert.equal(resolveBilibiliBinding(h.player, base), null);
+    assert.equal(resolveBilibiliBinding(h.player, base + '?sid=547718'), null);
+    assert.equal(resolveBilibiliBinding(h.player, base + '?oid=2').identity.resourceId, 'av2:cid62131');
+    const selected = base + '?bvid=BV1xx411c7mD&oid=2';
+    assert.deepEqual(resolveBilibiliBinding(h.player, selected).identity, h.binding.identity);
+    assert.equal(resolveBilibiliBinding(h.player, selected + '&p=2'), null);
+    assert.equal(resolveBilibiliBinding(h.player, selected.replace('oid=2', 'oid=3')), null);
+    assert.equal(resolveBilibiliBinding(h.player, selected.replace('BV1xx411c7mD', 'BV1ph4y1g75E')), null);
+  }
+});
+
+test('playlist metadata arrival and same-URL CID changes rebind and retire the old session', t => {
+  const h = harness(); h.attachment.stop();
+  const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  const previousLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+  const posted = [];
+  let discover;
+  const location = { origin: 'https://www.bilibili.com', href: 'https://www.bilibili.com/list/watchlater' };
+  const win = { player: h.player, location, postMessage: message => posted.push(message),
+    setInterval: callback => { discover = callback; return 1; }, clearInterval() {},
+    addEventListener() {}, removeEventListener() {} };
+  Object.defineProperty(globalThis, 'window', { configurable: true, value: win });
+  Object.defineProperty(globalThis, 'location', { configurable: true, value: location });
+  let stop;
+  t.after(() => {
+    stop?.();
+    for (const [name, descriptor] of [['window', previousWindow], ['location', previousLocation]]) {
+      if (descriptor) Object.defineProperty(globalThis, name, descriptor); else delete globalThis[name];
+    }
+  });
+  stop = startBilibiliNativeBridge(win);
+  assert.equal(posted.some(row => row.type === 'snapshot'), false);
+  location.href += '?bvid=BV1xx411c7mD&oid=2'; discover();
+  const first = posted.findLast(row => row.type === 'snapshot');
+  assert.equal(first.resourceId, 'av2:cid62131');
+  h.player.manifest.cid = '62132'; discover();
+  const second = posted.findLast(row => row.type === 'snapshot');
+  assert.equal(second.resourceId, 'av2:cid62132');
+  assert.notEqual(second.session, first.session);
+  location.href = location.href.replace('oid=2', 'oid=3'); discover();
+  assert.equal(posted.at(-1).diagnostic?.code, 'identity-mismatch');
+  assert.equal(h.manager.insert, h.originalInsert, 'old native wrapper is removed while route and player disagree');
 });
 
 test('source identity preserves decimal dmid precision and native timing', () => {

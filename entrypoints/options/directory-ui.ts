@@ -19,6 +19,8 @@ export function mountDirectoryUI(action: (action: DirectoryAction, id?: string) 
   const cancel = document.getElementById('local-scan-cancel') as HTMLButtonElement;
   const manager = document.getElementById('local-model-manager')!;
   const modelRows = document.getElementById('local-model-entries')!;
+  const stopSlot = document.getElementById('local-stop-slot')!;
+  const stop = document.getElementById('local-stop') as HTMLButtonElement;
   let signature = '', issueSignature = '', modelSignature = '';
   document.getElementById('local-folder-add')!.addEventListener('click', () => { void action('authorize'); });
   document.getElementById('local-file-add')!.addEventListener('click', () => { void action('authorize-file'); });
@@ -30,7 +32,6 @@ export function mountDirectoryUI(action: (action: DirectoryAction, id?: string) 
       const next = JSON.stringify(directories);
       if (signature !== next) {
         signature = next; rows.replaceChildren();
-        if (!directories.length) { const empty = document.createElement('p'); empty.className = 'subtle'; bindLocalizedText(empty, () => t('m_ba62d1786dcd')); rows.append(empty); }
         for (const directory of directories) {
           const row = document.createElement('div'); row.className = 'local-directory'; row.dataset.directoryId = directory.id;
           const description = document.createElement('div'); description.className = 'local-directory-description';
@@ -53,6 +54,7 @@ export function mountDirectoryUI(action: (action: DirectoryAction, id?: string) 
       const nextModels = JSON.stringify(references);
       manager.hidden = false;
       if (modelSignature !== nextModels) {
+        stopSlot.append(stop);
         modelSignature = nextModels; modelRows.replaceChildren();
         bindLocalizedText(document.getElementById('local-model-manager-summary')!, () => t('m_0d12cbfd2899', { p0: references.length }));
         if (!references.length) { const empty = document.createElement('p'); empty.className = 'subtle'; bindLocalizedText(empty, () => t('modelManager.empty')); modelRows.append(empty); }
@@ -79,13 +81,22 @@ export function mountDirectoryUI(action: (action: DirectoryAction, id?: string) 
       }
       refresh.disabled = busy || !!state.busy || !directories.length && !references.some(model => model.source); cancel.hidden = !busy;
       for (const button of rows.querySelectorAll('button')) button.disabled = busy || !!state.busy;
+      const activeId = state.loadingId ?? state.loadedId;
+      let activeRowFound = false;
       for (const row of modelRows.querySelectorAll<HTMLElement>('[data-model-id]')) {
         const model = models.find(item => item.id === row.dataset.modelId)!;
-        for (const button of row.querySelectorAll('button')) button.disabled = busy || !!state.busy || button.dataset.modelAction === 'load' && !!model.availability && model.availability !== 'ready';
+        const load = row.querySelector<HTMLButtonElement>('[data-model-action="load"]')!;
+        const active = model.id === activeId;
+        load.hidden = active;
+        if (active) { load.parentElement!.insertBefore(stop, load); activeRowFound = true; }
+        for (const button of row.querySelectorAll('button')) {
+          if (button !== stop) button.disabled = busy || !!state.busy || button.dataset.modelAction === 'load' && !!model.availability && model.availability !== 'ready';
+        }
         const badge = row.querySelector<HTMLElement>('.local-model-state')!;
         bindLocalizedText(badge, () => [state.selectedId === model.id ? t('modelManager.selected') : '', state.loadingId === model.id ? t('m_d04fcbda737f') : state.loadedId === model.id ? t('modelManager.loaded') : ''].filter(Boolean).join(' · '));
         badge.hidden = !badge.textContent;
       }
+      if (!activeRowFound) stopSlot.append(stop);
       const relevantScan = scan?.directoryId ? directories.some(directory => directory.id === scan.directoryId) : true;
       bindLocalizedText(status, () => scan && (busy || scan.phase !== 'idle')
         ? [scan.phase === 'cancelled' ? t('m_0e4401553264') : scan.phase === 'error' ? localizeMessage(directoryErrorMessage(scan.error)) : '', sourceProgressText(scan)].filter(Boolean).join('\n') : '');

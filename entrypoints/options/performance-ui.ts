@@ -23,7 +23,11 @@ export function mountPerformanceUI(options: { container: HTMLElement; activity(a
     <details><summary data-i18n="m_527ceb75665e">完整测试结果</summary><div id="performance-result" class="status" style="white-space:pre-line" role="status"></div></details>
     <div id="performance-copy-status" class="status" role="status" aria-live="polite"></div>
     <label id="performance-copy-fallback" hidden><span data-i18n="m_c63350797f3f">手动复制测试结果</span><textarea id="performance-copy-text" readonly rows="6" spellcheck="false" style="width:100%;box-sizing:border-box"></textarea></label>
-    <p class="subtle" data-i18n="settings.performanceNote">测试会暂停翻译，并可能产生费用。</p>`;
+    <p class="subtle" data-help="m_7c185a12004e" data-i18n="settings.performanceNote">测试会暂停翻译，并可能产生费用。</p>
+<p data-help="m_7c185a12004e" data-i18n="performance.windowNote"></p>
+<p data-help="m_7c185a12004e" data-i18n="m_bfbe8e2e0113"></p>
+<p data-help="m_7c185a12004e" data-i18n="m_f40de1e91de6"></p>
+`;
   options.container.append(panel);
   localize(panel);
   const controls = mountPerformanceControls(panel, options.configureOnline);
@@ -77,12 +81,9 @@ export function mountPerformanceUI(options: { container: HTMLElement; activity(a
         `${t('performance.firstValid')}: ${ms(next.timing.firstValidMs)}`,
         t('performance.firstWindow', { one: next.timing.readyWithin1s, two: next.timing.readyWithin2s, five: next.timing.readyWithin5s, total: next.timing.plannedItems }),
         t('performance.itemSpeed', { count: next.timing.validItems, speed: fixed(next.timing.itemsPerSecond, 2), mean: ms(next.timing.meanItemReadyMs), p95: ms(next.timing.p95ItemReadyMs) }),
-        t('performance.windowNote'),
       ] : []),
       next.usage ? t('m_c8137ad1ad80', { p0: JSON.stringify(next.usage), p1: next.usageReports, p2: next.actualRequests }) : t('m_7b55c94a4eba'),
       ...(next.config.count <= 10 ? [t('m_c953904e3580')] : []),
-      t('m_bfbe8e2e0113'),
-      t('m_f40de1e91de6'),
     ];
     return lines.join('\n');
   }

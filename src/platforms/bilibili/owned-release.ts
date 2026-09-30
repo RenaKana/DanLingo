@@ -7,7 +7,7 @@ type Native = Record<string, any>;
 type Rules = Pick<ReturnType<typeof createBilibiliShadowRules>, 'read'>;
 type Selection = { item: Native; id: string; sourceId: string; originalText: string;
   stimeMs: number; deadlineAtEpochMs: number; reasons: string[]; metadata: readonly unknown[];
-  admissionMetadata: readonly unknown[] };
+  admissionMetadata: readonly unknown[]; pauseEligible: boolean };
 export type OwnedReleaseUpdate = BilibiliShadowUpdate & { policy: 'owned' };
 
 interface Options {
@@ -123,8 +123,10 @@ export class BilibiliOwnedRelease {
     const rate = video.playbackRate, currentTime = video.currentTime, preTime = setting?.preTime;
     const height = manager.containerSize?.height, width = manager.containerSize?.width;
     const doc = manager.container?.ownerDocument ?? (globalThis as any).document;
+    // A resize changes capacity for new buckets, not the already sealed work.
+    // Invalid dimensions still revoke the native contract below.
     const signature = JSON.stringify([epoch, snapshot.fingerprint, rate, setting?.visible,
-      setting?.area, setting?.fontSize, setting?.limit, preTime, height, width, doc?.hidden === true]);
+      setting?.area, setting?.fontSize, setting?.limit, preTime, doc?.hidden === true]);
     if (this.signature && (signature !== this.signature || list !== this.timeline)) this.reset('configuration-or-epoch-changed');
     this.signature = signature; this.timeline = Array.isArray(list) ? list : null;
     this.epoch = epoch; this.ruleRevision = snapshot.revision;
@@ -145,6 +147,11 @@ export class BilibiliOwnedRelease {
     this.reason = !contract ? 'native-contract-unavailable' : !snapshot.known ? snapshot.reason ?? 'rules-unknown'
       : !available ? 'playback-inactive' : suspended ? 'playback-suspended' : 'running';
     if (previousKnown && !this.known) this.reset(this.reason);
+    if (this.known && suspended && this.suspendedAt === null) {
+      for (const row of this.selected.values()) if (row.deadlineAtEpochMs > sampledAtEpochMs &&
+        !this.supplied.has(row.id) && !this.missed.has(row.id) && !this.suppressed.has(row.id))
+        row.pauseEligible = true;
+    }
     if (this.known && this.suspendedAt !== null) {
       // Only observed pause/buffering time shifts the forecast. Never revive an
       // already expired row, nor extend the original timeout of an issued request.
@@ -154,7 +161,9 @@ export class BilibiliOwnedRelease {
         row.deadlineAtEpochMs += delay;
     }
     this.suspendedAt = this.known && suspended ? sampledAtEpochMs : null;
-    if (this.known && !suspended) {
+    if (this.known && !suspended)
+      for (const row of this.selected.values()) row.pauseEligible = false;
+    if (this.known) {
       const width = preTime * rate, horizon = currentTime + 5 * rate;
       const first = Math.floor(currentTime / width);
       const timelineSources = uniqueSources(list), poolSources = uniqueSources(pool);
@@ -196,12 +205,13 @@ export class BilibiliOwnedRelease {
           const stimeMs = item.stime * 1000;
           // A row's first native preparation opportunity is stime - preTime * rate.
           // Capture the deadline once; a later tick must never move it forward.
-          const deadlineAtEpochMs = epochNow() + Math.max(0, (item.stime - width - currentTime) / rate * 1000);
+          const deadlineAtEpochMs = sampledAtEpochMs + Math.max(0, (item.stime - width - currentTime) / rate * 1000);
           const metadata = metadataOf(item);
           const admissionMetadata = identityFields.map((key, index) => projection && nativePresentationFields.has(key)
             ? (projection as Native)[key] : metadata[index]);
           this.selected.set(id, { item, id, sourceId, originalText: item.text,
-            stimeMs, deadlineAtEpochMs, reasons, metadata, admissionMetadata });
+            stimeMs, deadlineAtEpochMs, reasons, metadata, admissionMetadata,
+            pauseEligible: suspended });
           this.seenIds.add(id); this.totalSelected++;
           count++; if (displayMode === 1 && !item.likes) scroll++;
         }
@@ -228,11 +238,14 @@ export class BilibiliOwnedRelease {
         this.selected.delete(row.id); this.supplied.delete(row.id); this.missed.delete(row.id); this.suppressed.delete(row.id);
       }
     }
+    // The emitted lease renews while suspended; selected rows keep their playback deadlines.
     const items = this.known ? [...this.selected.values()].filter(row => !this.supplied.has(row.id) &&
       !this.suppressed.has(row.id) &&
-      !this.missed.has(row.id) && row.deadlineAtEpochMs > sampledAtEpochMs).map(row => ({
+       !this.missed.has(row.id) && (suspended ? row.pauseEligible : row.deadlineAtEpochMs > sampledAtEpochMs)).map(row => ({
         id: row.id, sourceId: row.sourceId, originalText: row.originalText,
-        stimeMs: row.stimeMs, deadlineAtEpochMs: row.deadlineAtEpochMs, reasons: row.reasons,
+         stimeMs: row.stimeMs,
+         deadlineAtEpochMs: suspended && row.pauseEligible ? sampledAtEpochMs + 60_000 : row.deadlineAtEpochMs,
+         reasons: row.reasons,
       })) : [];
     if (new TextEncoder().encode(JSON.stringify(items)).length > 240 * 1024) {
       this.known = false; this.reason = 'bridge-capacity-exceeded';

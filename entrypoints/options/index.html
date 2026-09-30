@@ -7,60 +7,70 @@
       <label><span data-i18n="m_9b826346239e">后端</span><select id="backend"><option value="online" data-i18n="m_1760b98532ec">在线服务</option><option value="local" data-i18n="m_8b47c15ab818">本地模型（GGUF）</option></select></label>
       <label class="span"><span data-i18n="m_02739d1bae8b">服务地址</span><input id="endpoint" type="text" inputmode="url" required autocomplete="off" spellcheck="false" placeholder="https://api.example.com" dir="ltr"></label>
       <div id="connection-status" class="subtle span" role="status" aria-live="polite" data-i18n="m_007bad84520c">服务地址与协议：正在读取…</div>
-      <div class="model-control"><label for="model" data-i18n="m_17d470c82f66">在线模型</label><input id="model" required autocomplete="off" spellcheck="false" placeholder="选择或输入模型名称" data-i18n-placeholder="m_f2882117e642" dir="ltr"></div>
+      <div class="model-control"><label for="model" data-i18n="performance.model">模型</label><input id="model" required autocomplete="off" spellcheck="false" placeholder="选择或输入模型名称" data-i18n-placeholder="m_f2882117e642" dir="ltr"></div>
       <label><span data-i18n="m_9c41b3a9e12a">思考强度</span><select id="thinking-effort"><option value="default" data-i18n="m_a636bd2d57ff">服务默认</option><option value="off" selected data-i18n="m_92618f81aee5">关闭思考</option></select></label>
       <label class="span">API Key<input id="api-key" type="password" autocomplete="new-password" spellcheck="false" placeholder="输入 Key；同域名可留空" data-i18n-placeholder="m_a5e2c5329abd" dir="ltr"></label>
       <label class="check"><input id="remember" type="checkbox"><span data-i18n="m_f2a346398cdf">在此浏览器记住 Key</span></label><span id="key-state" class="subtle"></span>
       <label class="check span"><input id="local-http" type="checkbox"><span data-i18n="m_d2460c4c616f">允许本机或私有 IPv4 局域网 HTTP 服务</span></label>
       <div id="local-settings" class="span" hidden>
         <div class="grid local-grid">
-          <div class="span local-folder-section"><div class="row local-folder-heading"><strong data-i18n="m_4e799afc8f82">模型来源</strong><button id="local-folder-add" type="button" data-i18n="m_45da2d9c85d1">添加文件夹</button><button id="local-file-add" type="button" data-i18n="m_ad9daebe00dc">添加文件</button><button id="local-folder-refresh" type="button" data-i18n="m_0c68bb38074a">手动刷新</button><button id="local-scan-cancel" type="button" hidden data-i18n="m_323d825eab5d">取消扫描</button></div><p class="subtle" data-i18n="m_b9874d48c872">更换模型文件后，点击“手动刷新”。</p><div id="local-directories"></div></div>
+          <div class="span local-folder-section"><div class="row local-folder-heading"><strong data-i18n="m_4e799afc8f82">模型来源</strong><button id="local-folder-add" type="button" data-i18n="m_45da2d9c85d1">添加文件夹</button><button id="local-file-add" type="button" data-i18n="m_ad9daebe00dc">添加文件</button><button id="local-folder-refresh" type="button" data-i18n="m_0c68bb38074a">手动刷新</button><button id="local-scan-cancel" type="button" hidden data-i18n="m_323d825eab5d">取消扫描</button></div><p class="subtle" data-help="m_4e799afc8f82" data-i18n="m_b9874d48c872">更换模型文件后，点击“手动刷新”。</p><div id="local-directories"></div></div>
           <div id="local-scan-status" class="status span" role="status" aria-live="polite"></div>
           <details id="local-scan-issues" class="span" hidden></details>
-          <details id="local-model-manager" class="span" open><summary id="local-model-manager-summary" data-i18n="m_df31805bd8f6">管理模型</summary><p class="subtle" data-i18n="m_908f6d4956eb">移除不会删除原文件。需要重新添加时，请使用“添加文件”。</p><div id="local-model-entries"></div></details>
-          <div id="local-model-meta" class="subtle span"></div>
+          <details id="local-model-manager" class="span" open><summary id="local-model-manager-summary" data-i18n="m_df31805bd8f6">管理模型</summary><p class="subtle" data-help="m_df31805bd8f6" data-i18n="m_908f6d4956eb">移除不会删除原文件。</p><div id="local-model-entries"></div></details>
+          <div id="local-model-meta" data-help="m_44ac539067ed" class="subtle span"></div>
           <div id="local-vram" class="subtle span" role="status"></div>
-          <div class="row span"><button id="local-stop" type="button" data-i18n="m_6d54df246d5e">卸载模型</button></div>
+          <div id="local-stop-slot" hidden><button id="local-stop" type="button" data-i18n="m_6d54df246d5e">卸载模型</button></div>
+          <div class="row span service-action"><button id="test-local-model" type="button" data-i18n="m_d4bee4a21713" data-i18n-aria-label="settings.testLocalModel">测试模型</button></div>
+          <div id="local-test-result" class="status span" role="status" aria-live="polite"></div>
+          <div id="local-model-test-options" class="span"><div class="grid">
+            <label class="span"><span class="sr-only" data-i18n="m_ad79e2b37ae2">测试原文</span><textarea id="local-model-test-text" maxlength="1000" rows="2" placeholder="测试原文" data-i18n-placeholder="m_ad79e2b37ae2"></textarea></label>
+            <label><span data-i18n="modelTest.scenario">场景</span><select id="model-test-context"><option value="live" data-i18n="m_e472b37cf9ad">直播</option><option value="video" data-i18n="m_38a2692a621c">普通视频</option></select></label>
+          </div><p class="subtle" data-help="m_d4bee4a21713" data-i18n="settings.testDraftNote">测试当前配置，不保存。</p></div>
           <label class="check span"><input id="local-preload-entry" type="checkbox"><span data-i18n="m_81d38712f34b">进入直播间或视频时预加载本地模型</span></label>
           <label class="check span"><input id="local-idle-unload-enabled" type="checkbox" checked><span data-i18n="settings.localIdleUnloadEnabled">空闲后自动卸载本地模型</span></label>
           <label><span data-i18n="settings.localIdleUnloadMinutes">空闲时间（分钟）</span><input id="local-idle-unload-minutes" type="number" min="1" max="35791" step="1" value="5" required></label>
-          <p class="subtle span" data-i18n="settings.localPreloadNote">关闭预加载时，首次翻译才会加载；手动卸载会暂停自动加载。</p>
+          <p class="subtle span" data-help="m_44ac539067ed" data-i18n="settings.localPreloadNote">关闭预加载时，首次翻译才会加载；手动卸载会暂停自动加载。</p>
           <div id="local-state" class="status span" role="status" aria-live="polite"></div>
           <div id="local-result" class="status span" role="status" aria-live="polite"></div>
-          <p id="local-support" class="subtle span"></p>
+          <p id="local-support" data-help="m_dc461ba5dd9c" class="subtle span"></p>
         </div>
       </div>
       <details class="span" open><summary data-i18n="m_6ccf9d200a31">高级连接与 Super Chat</summary><div class="grid">
-        <label hidden><span data-i18n="m_35121f4fb525">思考配置</span><select id="profile"><option value="auto" data-i18n="m_1b43fb7df76a">自动识别</option><option value="minimax">MiniMax</option><option value="deepseek">DeepSeek</option><option value="gemini" data-i18n="m_731dd06f70ca">Gemini（OpenAI 兼容接口）</option><option value="chat-completions">Chat Completions</option></select></label>
+        <label><span data-i18n="m_35121f4fb525">思考配置</span><select id="profile"><option value="auto" data-i18n="m_1b43fb7df76a">自动识别</option><option value="minimax">MiniMax</option><option value="deepseek">DeepSeek</option><option value="gemini" data-i18n="m_731dd06f70ca">Gemini（OpenAI 兼容接口）</option><option value="chat-completions">Chat Completions</option></select></label>
         <label hidden><span data-i18n="m_0eea0e6d7da4">路径解释</span><select id="endpoint-mode"><option value="auto" data-i18n="m_1b43fb7df76a">自动识别</option><option value="base" data-i18n="m_fe6e8430fd20">把地址当作 API 基础路径</option><option value="completion" data-i18n="m_7fc79e4eced8">把地址当作完整接口</option></select></label>
         <label hidden><span data-i18n="m_15730c19fd7e">请求协议</span><select id="protocol-override"><option value="auto" data-i18n="m_c1bce8a6e24a">自动（Chat Completions）</option><option value="chat-completions" data-i18n="m_93658b748132">手动：Chat Completions</option></select></label>
         <label><span data-i18n="m_800392eac5fb">Super Chat 思考</span><select id="superchat-thinking"><option value="inherit" data-i18n="m_99a19a8ee7f3">跟随普通弹幕</option></select></label>
         <label><span data-i18n="m_cf06fd13dd52">Super Chat 超时（毫秒）</span><input id="superchat-timeout" type="number" min="1000" max="120000" value="15000" required></label>
-      </div><p class="subtle" data-i18n="m_bff8ea90e8bd">Super Chat 使用独立的思考与超时设置。</p></details>
+      </div><p class="subtle" data-help="m_1566c66f0727" data-i18n="m_bff8ea90e8bd">Super Chat 使用独立的思考与超时设置。</p></details>
       <div id="model-catalog-row" data-backend="online" class="row span service-action"><button id="get-models" type="button" data-i18n="m_83fcfb4c1f2c">获取模型</button><span id="models-cache" class="subtle"></span><span id="models-result" class="status" role="status" aria-live="polite"></span></div>
-      <div class="row span service-action"><button id="test-model" type="button" data-i18n="m_d4bee4a21713">测试模型</button><span id="test-result" class="status" role="status" aria-live="polite"></span></div>
-      <details id="model-test-options" class="span"><summary data-i18n="settings.testOptions">测试选项</summary><div class="grid">
-        <label class="span"><span data-i18n="m_ad79e2b37ae2">测试原文（可选）</span><textarea id="model-test-text" maxlength="1000" rows="2" placeholder="留空使用跨语言样句；也可粘贴实际出错的弹幕" data-i18n-placeholder="m_b306c29ee2b0"></textarea></label>
-        <label><span data-i18n="m_71a9aa9cc550">本地测试场景</span><select id="model-test-context"><option value="live" data-i18n="m_e472b37cf9ad">直播</option><option value="video" data-i18n="m_38a2692a621c">普通视频</option></select></label>
-      </div><p class="subtle" data-i18n="settings.testDraftNote">测试当前配置，不保存。</p></details>
+      <div class="row span service-action"><button id="test-model" type="button" data-i18n="m_d4bee4a21713" data-i18n-aria-label="settings.testOnlineModel">测试模型</button><span id="test-result" class="status" role="status" aria-live="polite"></span></div>
+      <div id="model-test-options" class="span"><div class="grid">
+        <label class="span"><span class="sr-only" data-i18n="m_ad79e2b37ae2">测试原文</span><textarea id="model-test-text" maxlength="1000" rows="2" placeholder="测试原文" data-i18n-placeholder="m_ad79e2b37ae2"></textarea></label>
+      </div><p class="subtle" data-help="m_d4bee4a21713" data-i18n="settings.testDraftNote">测试当前配置，不保存。</p>
+      <p data-help="m_d4bee4a21713" data-i18n="m_b306c29ee2b0"></p>
+      <p data-help="m_d4bee4a21713" data-i18n="modelTest.timingHelp"></p>
+      <p data-help="m_44ac539067ed" data-i18n="settings.memoryNote"></p>
+      <p data-help="m_44ac539067ed" data-i18n="m_4ba53934bfc1"></p>
+      </div>
       <label class="span"><span data-i18n="settings.onlineRequestLimitPerDay">在线每日请求上限</span><input id="online-request-limit" type="number" min="0" max="9007199254740991" step="1" required></label>
       <p id="online-budget-status" class="subtle span" role="status" aria-live="polite" data-i18n="m_00c1d49d7e67">正在读取在线请求计数…</p>
-      <p class="subtle span" data-i18n="settings.requestLimitNote">0 表示不限；费用上限请在服务方设置。</p>
-    </div><p class="subtle" data-i18n="m_28eebffbf1b3">在线翻译会将文字发送至所选服务，并可能产生费用。</p></section>
+      <p class="subtle span" data-help="settings.requestQuotaTitle" data-i18n="settings.requestLimitNote">0 表示不限；费用上限请在服务方设置。</p>
+    </div><p class="subtle" data-help="settings.serviceConnectionTitle" data-i18n="m_28eebffbf1b3">在线翻译会将文字发送至所选服务，并可能产生费用。</p></section>
     <section class="card"><h2 data-i18n="m_8bd9c61f81c2">观看</h2><div class="grid">
       <label><span data-i18n="m_966a23e84aed">目标语言</span><select id="target-language" required></select></label>
       <label><span data-i18n="m_4968bbcf1aff">源语言</span><select id="source-language"><option value="auto" data-i18n="m_c69b6f431ab4">自动判断</option><option value="zh" data-i18n="m_72726d8818f6">中文</option><option value="ja" data-i18n="m_3a944ddb3868">日语</option><option value="en" data-i18n="m_d1648bacbc16">英语</option><option value="ko" data-i18n="m_259cdcf75199">韩语</option></select></label>
       <label class="check"><input id="enabled" type="checkbox"><span data-i18n="m_a62128615126">启用翻译</span></label>
       <label class="check"><input id="bilibili-user-filters" type="checkbox"><span data-i18n="settings.bilibiliUserFilters">Bilibili 用户屏蔽规则前置过滤</span></label>
       <label class="check span"><input id="bilibili-owned-release" type="checkbox"><span data-i18n="settings.bilibiliOwnedRelease">B站5秒弹幕规划</span></label>
-      <p class="hint span" data-i18n="settings.bilibiliOwnedReleaseHint">提前5秒规划普通弹幕，减少翻译量；缺译跳过。沿用当前翻译服务、原生屏蔽、轨道与速度设置，不控制视频播放。</p>
+      <p class="hint span" data-help="settings.bilibiliOwnedRelease" data-i18n="settings.bilibiliOwnedReleaseHint">提前5秒规划普通弹幕，减少翻译量；缺译跳过。沿用当前翻译服务、原生屏蔽、轨道与速度设置，不控制视频播放。</p>
       <div id="hybrid-host" class="span hybrid-host"></div>
       <div class="span user-filter-status-host"><label id="bilibili-user-filter-source-row" hidden><span id="bilibili-user-filter-source-label"></span><select id="bilibili-user-filter-source"></select></label><div id="bilibili-user-filter-status"></div></div>
       <div class="span row"><span><span data-i18n="m_35df2a404c05">翻译快捷键：</span><span id="translation-shortcut" data-i18n="m_86b6d0d63062">正在读取…</span></span><button id="customize-shortcut" type="button" data-i18n="m_264d80d3ee85">自定义快捷键</button><span id="shortcut-result" class="subtle" role="status"></span></div>
       <label><span data-i18n="m_4e1449e7d5e5">显示</span><select id="display-mode"><option value="translated" data-i18n="m_413d0de8b6d6">译文优先</option><option value="original" data-i18n="m_354b28c85333">原文</option></select></label>
       <label><span data-i18n="m_7df84c5210d6">翻译范围</span><select id="translation-scope"><option value="auto" data-i18n="settings.videoScopeAuto">自动选择</option><option value="all" data-i18n="m_b8b26430c7ab">全量后台翻译</option><option value="window" data-i18n="m_083c230c7d97">仅未来 N 秒</option></select></label>
       <label id="prefetch-field" hidden style="display:none"><span data-i18n="m_b93ea401473e">未来 N 秒（视频时间）</span><input id="prefetch" type="number" min="5" max="3600" required disabled></label>
-      <p class="subtle span" data-i18n="settings.videoScopeNote">自动模式会根据评论池情况选择范围；无法判断时只预译时间窗口，隐藏播放器时暂停预译。全量模式可能产生更多请求和费用。</p>
+      <p class="subtle span" data-help="m_7df84c5210d6" data-i18n="settings.videoScopeNote">自动模式会根据评论池情况选择范围；无法判断时只预译时间窗口，隐藏播放器时暂停预译。全量模式可能产生更多请求和费用。</p>
     </div></section>
     <section class="card"><h2 data-i18n="m_37bddb29477a">直播聊天翻译</h2><div class="grid live-settings">
       <label><span data-i18n="settings.liveWaitLimit">等待上限（毫秒）</span><input id="live-buffer" type="number" min="1" max="2147483647" step="1" value="3000" list="live-buffer-presets"><datalist id="live-buffer-presets"><option value="500"><option value="1000"><option value="2000"><option value="3000"><option value="5000"><option value="10000"></datalist></label>
@@ -102,6 +112,6 @@
     <div class="actions"><button class="primary" id="save" type="submit" data-i18n="m_da84b511f856">保存并授权服务</button><span id="result" class="status" role="status" aria-live="polite"></span></div>
   </form>
   <section class="card" style="margin-top:26px"><h2 data-i18n="m_cb6c4f771fa9">本地数据</h2><div class="row"><button id="clear-cache" type="button" data-i18n="m_9313a6a246c3">清空译文缓存</button><button id="delete-key" type="button" data-i18n="m_fc150034cbe6">删除 API Key</button><span id="cache-state" class="subtle"></span></div></section>
-  <p class="notice" data-i18n="m_76d835ed2f12">支持文字弹幕；复杂装饰保留原样。真实效果取决于配置的服务。</p>
+  <p class="notice" data-help="m_41ed2767d1c6" data-i18n="m_76d835ed2f12">支持文字弹幕；复杂装饰保留原样。真实效果取决于配置的服务。</p>
   <details><summary data-i18n="m_538e74207183">运行诊断</summary><div class="row"><button id="export-diagnostics" type="button" data-i18n="m_f2ca94bedf30">导出安全诊断 JSON</button><span id="diagnostics-result" class="status" role="status" aria-live="polite"></span></div><p id="local-engine-diagnostics" class="subtle"></p><pre id="diagnostics"></pre></details>
 </main><script type="module" src="./main.ts"></script></body></html>

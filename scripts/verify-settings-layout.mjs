@@ -38,10 +38,10 @@ try{
   await page.reload(); await page.waitForFunction(()=>document.querySelector('#result').textContent==='已保存');
   const goto=async id=>{if(await page.locator('#category').isVisible())await page.locator('#category').selectOption(id);else await page.locator(`nav a[href="#${id}"]`).click();await page.waitForFunction(id=>!document.querySelector(`[data-section="${id}"]`).hidden,id);};
   const screen=async name=>{const path=resolve(dir,name+'.png');await page.screenshot({path,fullPage:true});report.screenshots.push(path);};
-  await check('all-original-controls-retained-once-and-six-sections',async()=>{
+  await check('all-original-controls-retained-once-and-seven-sections',async()=>{
     const html=await readFile(resolve('entrypoints/options/index.html'),'utf8');const ids=[...html.matchAll(/id="([^"]+)"/g)].map(m=>m[1]);
     for(const id of ids)assert.equal(await page.locator('#'+id).count(),1,id);
-    assert.equal(await page.locator('[data-section]').count(),6);
+    assert.equal(await page.locator('[data-section]').count(),7);
     assert.equal(await page.locator('#lp-superChatReasoning').evaluate(el=>el.closest('[data-section]').dataset.section),'live');
     assert.equal(await page.locator('#lp-parallel').evaluate(el=>el.closest('[data-section]').dataset.section),'advanced');
     assert.equal(await page.locator('#lb-start').evaluate(el=>el.closest('[data-section]').dataset.section),'performance');
@@ -53,19 +53,17 @@ try{
   await page.setViewportSize({width:1360,height:900});
   if(!process.argv.includes('--preview-only')){
     await check('navigation-history-draft-and-no-hidden-focus',async()=>{
-      assert.equal(await page.locator('#model-test-text').isVisible(),false);
-      await page.locator('#model-test-options > summary').click();
+      assert.equal(await page.locator('#model-test-text').isVisible(),true);
       await page.locator('#model-test-text').fill('A retained test sample');
+      await page.locator('#backend').selectOption('local');
       await page.locator('#model-test-context').selectOption('video');
-      await page.locator('#model-test-options > summary').click();
+      await page.locator('#backend').selectOption('online');
       await page.locator('#model').fill('draft-model');await goto('watching');await page.locator('#target-language').selectOption('fr');
       await goto('advanced');await page.goBack();await page.waitForFunction(()=>location.hash==='#watching');
       assert.equal(await page.locator('#target-language').inputValue(),'fr');await page.goForward();await page.waitForFunction(()=>location.hash==='#advanced');
       await goto('service');assert.equal(await page.locator('#model').inputValue(),'draft-model');
-      await page.locator('#model-test-options > summary').click();
       assert.equal(await page.locator('#model-test-text').inputValue(),'A retained test sample');
       assert.equal(await page.locator('#model-test-context').inputValue(),'video');
-      await page.locator('#model-test-options > summary').click();
       assert.match(await page.locator('#result').textContent(),/未保存/);
       assert.equal(await page.evaluate(()=>[...document.querySelectorAll('[data-section][hidden] input,[data-section][hidden] button')].some(el=>el.getClientRects().length>0)),false);
       await page.locator('#model').focus();await page.keyboard.press('Tab');assert.equal(await page.evaluate(()=>document.activeElement.closest('[data-section]')?.dataset.section),'service');

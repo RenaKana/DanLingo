@@ -156,10 +156,17 @@ test('Bilibili hybrid defaults off and retains only bounded, validated capacity 
   const identity = 'a'.repeat(64);
   const profile = { identity, maxItems: 1000, maxChars: 60000, p95Ms: 5000,
     sourceRecordId: 'run-123', manual: false };
-  assert.deepEqual(normalizeSettings({}).bilibiliHybrid, { enabled: false, profiles: [] });
+  assert.deepEqual(normalizeSettings({}).bilibiliHybrid, { enabled: false, profiles: [], adaptive: false, onlineStreaming: false });
   const saved = normalizeSettings({ ...DEFAULT_SETTINGS, bilibiliHybrid: { enabled: true, profiles: [profile] } });
-  assert.deepEqual(saved.bilibiliHybrid, { enabled: true, profiles: [profile] });
+  assert.deepEqual(saved.bilibiliHybrid, { enabled: true, profiles: [profile], adaptive: false, onlineStreaming: false });
   assert.deepEqual(normalizeSettings(saved).bilibiliHybrid, saved.bilibiliHybrid);
+  const adaptive = normalizeSettings({ ...saved, bilibiliHybrid: { ...saved.bilibiliHybrid, adaptive: true, onlineStreaming: true } });
+  assert.equal(adaptive.bilibiliHybrid.adaptive, true);
+  assert.equal(adaptive.bilibiliHybrid.onlineStreaming, true);
+  assert.deepEqual(adaptive.bilibiliHybrid.profiles, saved.bilibiliHybrid.profiles);
+  for (const key of ['adaptive', 'onlineStreaming']) assert.throws(() => normalizeSettings({
+    ...saved, bilibiliHybrid: { ...saved.bilibiliHybrid, [key]: 'true' },
+  }), /invalid-hybrid-settings/);
   for (const invalid of [
     { ...profile, identity: 'not-a-hash' }, { ...profile, maxItems: 0 }, { ...profile, maxItems: 1001 },
     { ...profile, maxItems: 1.5 }, { ...profile, maxChars: 0 }, { ...profile, maxChars: 60001 },

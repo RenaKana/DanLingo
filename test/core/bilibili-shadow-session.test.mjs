@@ -88,10 +88,11 @@ test('effective subscriptions carry an epoch-clock deadline and do not retain hi
   f.session.stop();
 });
 
-test('Shadow admits exactly the adapter-reviewed 1.1.22 and 1.1.24 signatures and exports actual metadata', () => {
+test('Shadow admits exactly the adapter-reviewed 1.1.21, 1.1.22 and 1.1.24 signatures and exports actual metadata', () => {
   assert.deepEqual(REVIEWED_DANMAKU_BUILDS.map(row => [row.version, row.lastCompiled]), [
     ['1.1.24', '2026-09-10T15:18:49+08:00'],
     ['1.1.22', '2026-07-14T14:26:03+08:00'],
+    ['1.1.21', '2026-04-09T15:46:43+08:00'],
   ]);
   for (const metadata of REVIEWED_DANMAKU_BUILDS) {
     const f = fixture({ metadata }); f.session.tick();

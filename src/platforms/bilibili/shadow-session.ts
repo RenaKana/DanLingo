@@ -1,3 +1,4 @@
+import { isReviewedDanmakuBuild } from './native-builds.ts';
 import { bilibiliSourceEventId } from '../../core/messages.ts';
 import { forecastBilibiliShadow, type BilibiliShadowSelection, type BilibiliShadowUpdate, type ShadowItem } from '../../core/bilibili-shadow.ts';
 import { BilibiliShadowLedger } from '../../core/bilibili-shadow-ledger.ts';
@@ -72,12 +73,7 @@ export class BilibiliShadowSession {
         lastCompiled: typeof metadata?.lastCompiled === 'string' && metadata.lastCompiled.length <= 100
           ? metadata.lastCompiled : null,
       };
-      // Both exact native engine signatures are admitted by the adapter in video.ts.
-      // The 1.1.22 fetch, range, quota, filter and model paths were compared
-      // against 1.1.24's official source; do not admit a version alone.
-      this.reviewed = this.metadata.version === '1.1.24' &&
-        this.metadata.lastCompiled === '2026-09-10T15:18:49+08:00' ||
-        this.metadata.version === '1.1.22' && this.metadata.lastCompiled === '2026-07-14T14:26:03+08:00';
+      this.reviewed = isReviewedDanmakuBuild(this.metadata);
     } catch { /* A changed native engine keeps original rendering and no shadow demand. */ }
     this.rules = options.rules ?? createBilibiliShadowRules({ player: binding.player, danmaku: binding.danmaku,
       documentScope: options.session, now: this.now, allowPartialUserRules: options.allowPartialUserRules });

@@ -68,6 +68,10 @@ export function createProgress(onChange: (scope: Settings['translationScope'], s
             <div><dt data-i18n="progress.supply.inputChars">输入字符</dt><dd id="hybrid-local-chars">—</dd></div>
             <div><dt data-i18n="progress.supply.cacheHits">缓存命中</dt><dd id="hybrid-local-cache">—</dd></div>
             <div><dt data-i18n="progress.supply.timelyQualified">及时合格</dt><dd id="hybrid-local-timely">—</dd></div>
+            <div><dt data-i18n="progress.supply.performanceStatus">调度状态</dt><dd id="hybrid-local-status">—</dd></div>
+            <div><dt data-i18n="progress.supply.performanceSamples">有效样本</dt><dd id="hybrid-local-samples">—</dd></div>
+            <div><dt data-i18n="progress.supply.expectedMs">预计耗时 (ms)</dt><dd id="hybrid-local-expected">—</dd></div>
+            <div><dt data-i18n="progress.supply.lastBatchItems">最近实际批量</dt><dd id="hybrid-local-batch">—</dd></div>
           </dl></section>
           <section><h4 data-i18n="progress.supply.online">在线</h4><dl class="hybrid-grid">
             <div><dt data-i18n="progress.supply.actualRequests">实际请求</dt><dd id="hybrid-online-requests">—</dd></div>
@@ -75,6 +79,12 @@ export function createProgress(onChange: (scope: Settings['translationScope'], s
             <div><dt data-i18n="progress.supply.inputChars">输入字符</dt><dd id="hybrid-online-chars">—</dd></div>
             <div><dt data-i18n="progress.supply.cacheHits">缓存命中</dt><dd id="hybrid-online-cache">—</dd></div>
             <div><dt data-i18n="progress.supply.timelyQualified">及时合格</dt><dd id="hybrid-online-timely">—</dd></div>
+            <div><dt data-i18n="progress.supply.performanceStatus">调度状态</dt><dd id="hybrid-online-status">—</dd></div>
+            <div><dt data-i18n="progress.supply.performanceSamples">有效样本</dt><dd id="hybrid-online-samples">—</dd></div>
+            <div><dt data-i18n="progress.supply.expectedMs">预计耗时 (ms)</dt><dd id="hybrid-online-expected">—</dd></div>
+            <div><dt data-i18n="progress.supply.lastBatchItems">最近实际批量</dt><dd id="hybrid-online-batch">—</dd></div>
+            <div><dt data-i18n="progress.supply.firstContentMs">首段等待 (ms)</dt><dd id="hybrid-online-first-content">—</dd></div>
+            <div><dt data-i18n="progress.supply.charsPerSecond">UTF-16 正文字符/秒</dt><dd id="hybrid-online-rate">—</dd></div>
           </dl></section>
         </div>
         <dl class="hybrid-shared">
@@ -151,12 +161,28 @@ export function createProgress(onChange: (scope: Settings['translationScope'], s
       hybridDetails.hidden = !view.planned || !hybrid;
       const lane = (name: string) => hybrid?.[name] ?? {};
       const metric = (id: string, value: unknown) => bindLocalizedText($(id), () => formatCount(value));
+      const duration = (id: string, value: unknown, allowZero = false) => bindLocalizedText($(id), () =>
+        typeof value === 'number' && Number.isFinite(value) && (value > 0 || allowZero && value === 0)
+          ? formatNumber(Math.round(value * 10) / 10) : '—');
+      const performance = hybrid?.performance ?? {};
       for (const [name, prefix] of [['local', 'hybrid-local'], ['online', 'hybrid-online']] as const) {
         const row = lane(name);
         metric(`${prefix}-requests`, row.actualRequests); metric(`${prefix}-items`, row.inputItems);
         metric(`${prefix}-chars`, row.inputChars); metric(`${prefix}-cache`, row.cacheHits);
         metric(`${prefix}-timely`, row.timelyQualified);
+        const sample = performance[name];
+        const hasSamples = Number.isSafeInteger(sample?.samples) && sample.samples > 0;
+        const state = hasSamples && ['learning', 'stable', 'slowing'].includes(sample?.status)
+          ? sample.status : undefined;
+        bindLocalizedText($(`${prefix}-status`), () => state ? t(`progress.supply.performance.${state}`) : '—');
+        metric(`${prefix}-samples`, hasSamples ? sample.samples : undefined);
+        duration(`${prefix}-expected`, hasSamples ? sample.expectedMs : undefined);
+        metric(`${prefix}-batch`, hasSamples && sample.lastBatchItems > 0 ? sample.lastBatchItems : undefined);
       }
+      const online = performance.online;
+      const hasOnlineSamples = Number.isSafeInteger(online?.samples) && online.samples > 0;
+      duration('hybrid-online-first-content', hasOnlineSamples ? online.firstContentMs : undefined, true);
+      duration('hybrid-online-rate', hasOnlineSamples ? online.charsPerSecond : undefined);
       metric('hybrid-subscriptions', hybrid?.subscriptions); metric('hybrid-unique-tasks', hybrid?.uniqueTasks);
       metric('hybrid-merged-inputs', hybrid?.mergedInputs); metric('hybrid-expired', hybrid?.expired);
       visibility();
@@ -168,9 +194,13 @@ export function createProgress(onChange: (scope: Settings['translationScope'], s
       }
       bilibili = platform === 'bilibili';
       const surface = [...document.querySelectorAll<HTMLElement>('[data-danlingo-player]')].find(el => el.dataset.danlingoPlayer === session);
+      // Festival's inner player has a fixed-height outer box. Mount after that
+      // box so expanding details also pushes the following banner and content.
+      const festivalBox = platform === 'bilibili'
+        ? surface?.closest('.festival-video-player')?.closest<HTMLElement>('.video-player-box') : null;
       // PlayerPresenter contains the image and native action bar. Its parent is the page's player column.
       // A standalone in-flow native stage is also supported by the synthetic player contract.
-      const candidate = surface?.closest<HTMLElement>(platform === 'bilibili' ? '#playerWrap, .player-wrap' : '.PlayerPresenter') ?? (surface?.querySelector('video') ? surface : null);
+      const candidate = festivalBox ?? surface?.closest<HTMLElement>(platform === 'bilibili' ? '#playerWrap, .player-wrap' : '.PlayerPresenter') ?? (surface?.querySelector('video') ? surface : null);
       const parent = candidate?.parentElement;
       const style = candidate && getComputedStyle(candidate), parentStyle = parent && getComputedStyle(parent);
       const flow = parentStyle && (['block', 'flow-root'].includes(parentStyle.display) || (parentStyle.display === 'flex' && parentStyle.flexDirection === 'column'));
@@ -204,7 +234,10 @@ export function createProgress(onChange: (scope: Settings['translationScope'], s
       if (!saving) { scope.value = settings.translationScope; if (!dirty) seconds.value = String(settings.prefetchSeconds); }
       scope.parentElement!.hidden = nativeSupplyActive;
       $('window-row').hidden = nativeSupplyActive || scope.value === 'all';
-      bindLocalizedText(note, () => localizeMessage(localError || message) || (stats.failed ? t('m_a0fb964ae018', { p0: stats.failed }) : '')); note.hidden = !note.textContent;
+      bindLocalizedText(note, () => message === 'hybrid-stream-unsupported' && !localError
+        ? t('hybrid.error.streamUnsupported')
+        : localizeMessage(localError || message) || (stats.failed ? t('m_a0fb964ae018', { p0: stats.failed }) : ''));
+      note.hidden = !note.textContent;
       $('retry').hidden = nativeSupplyActive || !stats.failed;
       setActive(visible);
     },
