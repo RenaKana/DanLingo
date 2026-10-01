@@ -4,5 +4,8 @@
   "settings.modelTestTitle": "模型与测试",
   "settings.modelTestHint": "选定模型并测试配置。",
   "settings.requestQuotaTitle": "请求额度",
-  "settings.requestQuotaHint": "每日在线请求数量。"
+  "settings.requestQuotaHint": "每日在线请求数量。",
+  "settings.help": "帮助",
+  "settings.memoryUsage": "预计显存占用：{p0}\n{p1}{p2}",
+  "settings.memoryNote": "估算不含浏览器与驱动开销，不代表可用显存。"
 }

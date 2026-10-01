@@ -981,6 +981,8 @@
   "modelTest.elapsed": "경과 시간: {seconds}초",
   "modelTest.scenario": "시나리오",
   "modelTest.timingHelp": "단일 항목 테스트 시간은 실시간 번역의 적시성을 나타내지 않습니다.",
+  "modelTest.output": "모델 출력",
+  "modelTest.noOutput": "모델 출력을 받지 못했습니다",
   "settings.requestQuotaTitle": "요청 한도",
   "settings.requestQuotaHint": "일일 요청 수.",
   "watch.enableTranslation": "번역 켜기",

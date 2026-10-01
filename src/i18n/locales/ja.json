@@ -981,6 +981,8 @@
   "modelTest.elapsed": "経過時間: {seconds} 秒",
   "modelTest.scenario": "シナリオ",
   "modelTest.timingHelp": "1件のテスト時間は、ライブ翻訳のリアルタイム性を示すものではありません。",
+  "modelTest.output": "モデル出力",
+  "modelTest.noOutput": "モデル出力を受信できませんでした",
   "settings.requestQuotaTitle": "リクエスト上限",
   "settings.requestQuotaHint": "1日のリクエスト数。",
   "watch.enableTranslation": "翻訳をオンにする",

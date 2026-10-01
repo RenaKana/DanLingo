@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ModelCatalogStore, modelCatalogScope, MODEL_CATALOG_KEY, MODEL_CAPABILITIES_TTL_MS, selectModelEffort } from '../../src/core/model-catalog.ts';
+import { ModelCatalogStore, modelCatalogScope, MODEL_CATALOG_KEY, selectModelEffort } from '../../src/core/model-catalog.ts';
 import { onlineSettings } from '../fixtures/online-settings.mjs';
 test('catalog isolates canonical service/protocol/credential and persists without raw credentials', async () => {
   const data = {}, storage = { get: async () => structuredClone(data), set: async value => Object.assign(data, value) };
@@ -15,7 +15,7 @@ test('catalog isolates canonical service/protocol/credential and persists withou
   assert.ok(!JSON.stringify(data[MODEL_CATALOG_KEY]).includes('secret-'));
 });
 
-test('optional metadata is scoped, sanitized, and expires independently of cached model names', async () => {
+test('optional metadata is scoped, sanitized, and retained until the next successful discovery', async () => {
   const data = {}, storage = { get: async () => structuredClone(data), set: async value => Object.assign(data, value) };
   const store = new ModelCatalogStore(storage), settings = onlineSettings({endpoint:'https://example.com/v1'});
   const scope = await modelCatalogScope(settings,'secret-A');
@@ -33,12 +33,17 @@ test('optional metadata is scoped, sanitized, and expires independently of cache
   assert.equal(Object.hasOwn(catalog.capabilities,'unlisted'), false);
   assert.equal(JSON.stringify(data).includes('secret'), false);
   assert.equal(await store.read(otherScope), undefined);
-  assert.equal(selectModelEffort(catalog,'new/model',timestamp + MODEL_CAPABILITIES_TTL_MS)?.defaultLevel,'ultra');
-  assert.equal(selectModelEffort(catalog,'new/model',timestamp + MODEL_CAPABILITIES_TTL_MS + 1),undefined);
+  assert.equal(selectModelEffort(catalog,'new/model',timestamp + 2 * 24 * 60 * 60 * 1000)?.defaultLevel,'ultra');
   assert.equal(selectModelEffort(catalog,'new/model',timestamp - 1),undefined);
   assert.equal(selectModelEffort(catalog,'other',timestamp),undefined);
   assert.equal(selectModelEffort(catalog,'new/model',NaN),undefined);
   assert.deepEqual(catalog.models,['new/model','__proto__']);
+  await store.write(scope, ['new/model'], timestamp + 100, { 'new/model': { supportedLevels: ['low'] } });
+  assert.deepEqual(selectModelEffort(await new ModelCatalogStore(storage).read(scope), 'new/model', timestamp + 100),
+    { supportedLevels: ['low'] }, 'a successful refresh replaces, rather than merges, old capabilities');
+  await store.write(scope, ['new/model'], timestamp + 200);
+  assert.equal(selectModelEffort(await store.read(scope), 'new/model', timestamp + 200), undefined,
+    'a new names-only discovery cannot retain obsolete capability claims');
 });
 
 test('legacy and corrupt metadata caches remain names-only with safe own reads', async () => {

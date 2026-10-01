@@ -302,6 +302,9 @@ export default defineContentScript({
     });
     const scheduler = new VideoScheduler({
       settings: { ...settings, enabled: settings.enabled && hasKey },
+      // MAIN emits owned deadlines with Date.now(); remaining budgets must use
+      // that same clock, including after the system clock differs from timeOrigin.
+      nowEpochMs: () => Date.now(),
       async request(resourceId, items, signal, priority, onResult) {
         if (nativeSupply?.active && !plannedMode()) return nativeSupply.request(items, signal, onResult);
         if (plannedMode() && (!plannedDisplay() || plannedRetiredFor !== plannedRetireKey()))

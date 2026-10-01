@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Затраченное время: {seconds} с",
   "modelTest.scenario": "Сценарий",
   "modelTest.timingHelp": "Длительность теста одного элемента не отражает своевременность перевода в прямом эфире.",
+  "modelTest.output": "Вывод модели",
+  "modelTest.noOutput": "Вывод модели не получен",
   "settings.requestQuotaTitle": "Лимит запросов",
   "settings.requestQuotaHint": "Количество запросов в день.",
   "watch.enableTranslation": "Включить перевод",

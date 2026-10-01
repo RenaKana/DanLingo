@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Czas trwania: {seconds} s",
   "modelTest.scenario": "Scenariusz",
   "modelTest.timingHelp": "Czas testu pojedynczego elementu nie odzwierciedla terminowości tłumaczenia na żywo.",
+  "modelTest.output": "Wyjście modelu",
+  "modelTest.noOutput": "Nie otrzymano żadnego wyjścia modelu",
   "settings.requestQuotaTitle": "Limit żądań",
   "settings.requestQuotaHint": "Dzienna liczba żądań.",
   "watch.enableTranslation": "Włącz tłumaczenie",

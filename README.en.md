@@ -4,7 +4,7 @@
 
 Translate danmaku and live chat directly on Niconico, YouTube and Bilibili. Connect your own Chat Completions service or load a local GGUF model in the extension.
 
-**Release version: 0.5.16, available for manual installation from [GitHub Releases](https://github.com/RenaKana/DanLingo/releases).** This release updates Bilibili player compatibility, translation scheduling, model capability discovery and settings controls. Edge Add-ons version 0.5.1 remains in review and is not publicly available; store review is separate from GitHub publication. Chrome Web Store submission is postponed.
+**Current version: 0.5.20. Download from [Releases](https://github.com/RenaKana/DanLingo/releases).** This release fixes reasoning capabilities becoming unavailable after 24 hours and Bilibili planned requests being rejected by clock differences. It also explains mismatched hybrid capacity and unsupported reasoning settings, and includes automatic Index-Translate prompts and visible output from failed model tests. Edge Add-ons is not publicly available yet; store review is separate from GitHub publication, and an in-review submission is not an approval. Chrome Web Store submission is postponed.
 
 The interface supports 20 languages, follows the browser by default, and can be set independently of the translation source and target languages. The popup and Settings page share nine target-language presets and both accept a custom target language.
 
@@ -38,9 +38,20 @@ These are Tencent's official GGUF repositories. Choose according to your device'
 - [Hy-MT2-7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF): 7B parameters, for devices with more resources.
 - [Hy-MT2-30B-A3B](https://huggingface.co/tencent/Hy-MT2-30B-A3B-GGUF): 30B total parameters, with about 3B activated during inference; do not budget memory as if it were a 3B model.
 
+For danmaku with frequent internet slang, try Index-Translate first. In user-reported hands-on testing, Index-Translate-2B.Q8_0 adapted better to internet slang and nonstandard spellings:
+
+| Model (user-reported test) | Translation of “666这个入是挂” |
+| --- | --- |
+| Index-Translate-2B.Q8_0 | `666このユーザーはチートです` |
+| Hy-MT2-1.8B-Q8_0 | `666という数字は、単に掛けられているだけです。` |
+
+This example is user-reported feedback, not a system benchmark, and does not show that Index-Translate is better for every task.
+
 Actual resource use depends on quantization, context and runtime environment. The project has not validated every file in these repositories. Browser compatibility and translation quality of each GGUF file still need testing on your device and workloads.
 
 Choose the local backend in Settings, use **Add folder** or **Add file** to select a source directly, then click **Load model** on its row in **Manage models**. File selection supports multiple files; include every shard of a split model. Loading saves the model choice and uses the current performance settings for that load only; other settings drafts remain unsaved.
+
+You can also explore the open-source [Index-Translate text model family](https://github.com/bilibili/Index-Translate), which offers [2B](https://huggingface.co/IndexTeam/Index-Translate-2B), [9B](https://huggingface.co/IndexTeam/Index-Translate-9B), and [35B-A3B (preview)](https://huggingface.co/IndexTeam/Index-Translate-35B-A3B-preview) checkpoints. The 35B-A3B checkpoint is still a preview; consider serving resources when choosing a model. Version 0.5.18 detects model names containing `Index-Translate` and automatically applies the official single-user translation prompt, keeping prompts consistent for ordinary videos and live streams. For compatible GGUFs, keep prompt mode set to **Automatic**. Official Hugging Face checkpoints are not GGUF and cannot be loaded by the built-in local model loader; connect them through a compatible Chat Completions service using the online-model settings. The comparison above covers only the user-tested Index-Translate-2B.Q8_0 and Hy-MT2-1.8B-Q8_0; other model sizes, quantizations and hardware combinations still need separate validation.
 
 Online translation sends text to the selected provider and may incur fees. The daily request cap defaults to **0 (unlimited)**. A positive value enables a cap shared across tabs and online services and counted by local calendar day. Retries, repairs, model tests and performance tests count; cache hits, merged work, local inference and model-list queries do not. A previously saved positive cap is preserved when updating. This limits request count, not spending; set a separate spending limit with your provider.
 

@@ -981,6 +981,8 @@
   "modelTest.elapsed": "耗時 {seconds} 秒",
   "modelTest.scenario": "情境",
   "modelTest.timingHelp": "單條測試耗時不代表直播即時性。",
+  "modelTest.output": "模型輸出",
+  "modelTest.noOutput": "未收到模型輸出",
   "settings.requestQuotaTitle": "請求額度",
   "settings.requestQuotaHint": "每日請求數量。",
   "watch.enableTranslation": "開啟翻譯",

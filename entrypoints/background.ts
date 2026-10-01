@@ -17,7 +17,7 @@ import { prepareEmoteText } from '../src/platforms/bilibili-live/emotes';
 import { adapterDiagnostic, diagnosticCandidate, parseAdapterDiagnostic } from '../src/core/adapter-diagnostic';
 import { TranslationEngine, IndexedDbTranslationCache } from '../src/translation';
 import { discoverModels, ProviderError } from '../src/translation/provider';
-import { testModel } from '../src/translation/model-test';
+import { ModelTestError, testModel } from '../src/translation/model-test';
 import { PerformanceTest, validatePerformanceConfig } from '../src/translation/performance-test';
 import { PerformanceHistory } from '../src/translation/performance-history';
 import { hybridCapacityIdentity, recommendHybridCapacity } from '../src/translation/hybrid-capacity';
@@ -232,10 +232,10 @@ export default defineBackground(() => {
     catch (error) { throw new ProviderError(error instanceof Error ? error.message : 'LOCAL_LOAD_FAILED'); }
   }
   const hybridEnabled = (settings: Settings) => settings.bilibiliOwnedRelease === true && settings.bilibiliHybrid?.enabled === true;
-  async function hybridRoute(settings: Settings, apiKey: string, capturedVersion: number): Promise<NonNullable<TranslationRequest['hybrid']>> {
+  async function hybridRoute(settings: Settings, apiKey: string, capturedVersion: number): Promise<NonNullable<TranslationRequest['hybrid']> | { error: string }> {
     const capacityKey = await hybridCapacityIdentity(settings);
     const capacity = settings.bilibiliHybrid?.profiles.find(profile => profile.identity === capacityKey);
-    if (!capacity || !settings.localModelId) throw new Error('请为当前本地模型和参数设置混合容量');
+    if (!capacity || !settings.localModelId) return { error: '请为当前本地模型和参数设置混合容量' };
     let local: Settings = { ...settings, backend: 'local', concurrency: settings.localConcurrency, batchSize: 1 };
     const online: Settings = { ...settings, backend: 'online', concurrency: settings.onlineConcurrency, batchSize: settings.videoBatchSize,
       translationStream: settings.bilibiliHybrid?.onlineStreaming === true };
@@ -789,7 +789,7 @@ export default defineBackground(() => {
   });
 
   async function handle(message: any, sender: Sender): Promise<unknown> {
-    const receivedAt = clockStamp(), receivedNow = performance.now();
+    const receivedAt = clockStamp(), receivedWallAt = Date.now(), receivedNow = performance.now();
     if (!message || typeof message.type !== 'string') return { ok: false, error: '无效消息' };
     if (message.type === 'local-idle-policy-get') {
       if (sender.id !== browser.runtime.id || sender.tab || sender.url !== browser.runtime.getURL('/offscreen.html')) return { ok: false };
@@ -1583,7 +1583,9 @@ export default defineBackground(() => {
       if (repairPurpose === 'timeout' && (message.forceTranslate !== false || message.force !== false)) return { ok: false, error: '无效补翻请求' };
       if (typeof message.requestId !== 'string' || !/^[a-zA-Z0-9-]{1,80}$/.test(message.requestId) || !Array.isArray(message.items) || !message.items.length || message.items.length > 200) return { ok: false, error: '无效批次' };
       const planned = message.planning !== undefined;
-      const plannedDue = planned ? plannedDueItems(message, liveSession, receivedAt, receivedNow, requestVersion) : null;
+      // Owned MAIN deadlines and watch sentAt use wall time. Convert them once
+      // to the engine's monotonic clock without mixing in performance.timeOrigin.
+      const plannedDue = planned ? plannedDueItems(message, liveSession, receivedWallAt, receivedNow, requestVersion) : null;
       if (planned && (!videoRequest || live || !plannedDue)) return { ok: false, error: '无效计划批次' };
         const configured = await config();
         const settings = live ? { ...configured.settings, sourceLanguage: configured.settings.liveSourceLanguage }
@@ -1601,6 +1603,7 @@ export default defineBackground(() => {
         if (repairPurpose === 'timeout' && !timeoutPolicy) return { ok: false, error: '超时自动补翻已关闭' };
         const hybrid = planned && resource.platform === 'bilibili' && hybridEnabled(settings)
           ? await hybridRoute(configured.settings, apiKey, requestVersion) : undefined;
+        if (hybrid && 'error' in hybrid) return { ok: false, error: hybrid.error };
         const setupError = hybrid || settings.backend === 'local' ? undefined : onlineSetupError(settings);
         if (setupError) return { ok: false, error: setupError };
         if (!hybrid && !apiKey && settings.backend !== 'local') return { ok: false, error: '请先配置 API Key' };
@@ -2144,11 +2147,20 @@ export default defineBackground(() => {
           'response-too-large': '模型响应过大，测试未通过', 'redirect-blocked': '服务发生重定向，请填写最终翻译接口地址',
           cancelled: '测试已取消，请重新测试模型', 'invalid-config': '请检查服务地址、请求配置和思考强度',
         };
-        return { ok: false, error: errors[code] ?? '模型测试失败，请检查服务状态' };
+        return { ok: false, error: errors[code] ?? '模型测试失败，请检查服务状态',
+          ...(error instanceof ModelTestError ? { result: error.result } : {}) };
       } finally { if (modelTest === controller) modelTest = undefined; }
     }
     if (message.type === 'save') {
-      const settings = await normalizeSubmittedSettings(message.settings, message.apiKey);
+      let settings: Settings;
+      try { settings = await normalizeSubmittedSettings(message.settings, message.apiKey); }
+      catch (error) {
+        // Local drafts preserve online effort choices; hybrid validates that lane
+        // here as well, before any settings or credentials have been written.
+        if (error instanceof Error && error.message === 'unsupported-thinking-effort')
+          return { ok: false, error: '当前请求配置不支持所选思考强度，请重新选择' };
+        throw error;
+      }
       const useHybrid = hybridEnabled(settings);
       if (useHybrid) {
         const identity = await hybridCapacityIdentity(settings);

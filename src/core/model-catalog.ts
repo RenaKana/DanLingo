@@ -3,7 +3,6 @@ import type { ProviderSettings } from './types.ts';
 import { sanitizeModelEffortMetadata } from './model-capabilities.ts';
 import type { ModelEffortMetadata } from './model-capabilities.ts';
 export const MODEL_CATALOG_KEY = 'modelCatalog.v1';
-export const MODEL_CAPABILITIES_TTL_MS = 24 * 60 * 60 * 1000;
 export interface ModelCatalog { models: string[]; fetchedAt: number; capabilities?: Record<string, ModelEffortMetadata> }
 type Storage = { get(key: string): Promise<Record<string, any>>; set(value: Record<string, unknown>): Promise<void> };
 function safeCapabilities(models: string[], value: unknown): Record<string, ModelEffortMetadata> | undefined {
@@ -18,10 +17,12 @@ function safeCapabilities(models: string[], value: unknown): Record<string, Mode
   return Object.keys(capabilities).length ? capabilities : undefined;
 }
 
-/** Names remain usable when old or stale metadata must no longer grant effort choices. */
+/** Keep the last successful discovery until it is replaced for this destination/key.
+ * Elapsed time alone is not evidence that a saved model stopped supporting an effort.
+ */
 export function selectModelEffort(catalog: ModelCatalog | undefined, model: string, now = Date.now()): ModelEffortMetadata | undefined {
   if (!catalog || !Number.isFinite(now) || !Number.isFinite(catalog.fetchedAt)
-      || now < catalog.fetchedAt || now - catalog.fetchedAt > MODEL_CAPABILITIES_TTL_MS
+      || now < catalog.fetchedAt
       || !Array.isArray(catalog.models) || !catalog.models.includes(model)
       || !catalog.capabilities || typeof catalog.capabilities !== 'object' || !Object.hasOwn(catalog.capabilities, model)) return;
   return sanitizeModelEffortMetadata(catalog.capabilities[model]);

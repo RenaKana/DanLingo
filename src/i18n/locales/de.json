@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Dauer: {seconds} s",
   "modelTest.scenario": "Szenario",
   "modelTest.timingHelp": "Die Dauer eines Tests mit einem einzelnen Element sagt nichts über die Aktualität der Live-Übersetzung aus.",
+  "modelTest.output": "Modellausgabe",
+  "modelTest.noOutput": "Es wurde keine Modellausgabe empfangen",
   "settings.requestQuotaTitle": "Anfragekontingent",
   "settings.requestQuotaHint": "Tägliche Anzahl der Anfragen.",
   "watch.enableTranslation": "Übersetzung einschalten",

@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Verstreken tijd: {seconds} s",
   "modelTest.scenario": "Scenario",
   "modelTest.timingHelp": "De testduur van één item geeft niet aan hoe tijdig de livevertaling is.",
+  "modelTest.output": "Modeluitvoer",
+  "modelTest.noOutput": "Er is geen modeluitvoer ontvangen",
   "settings.requestQuotaTitle": "Aanvraagquotum",
   "settings.requestQuotaHint": "Dagelijks aantal aanvragen.",
   "watch.enableTranslation": "Vertaling inschakelen",

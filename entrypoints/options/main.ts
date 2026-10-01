@@ -24,6 +24,8 @@ import { mountLocalPerformanceUI } from './local-performance-ui';
 import { mountSettingsLayout } from './layout';
 import { mountSettingsHelp } from './help-ui';
 import { renderModelTestOutput } from './model-test-ui';
+import { mountModelTestInput } from './model-test-input';
+import { modelTestSource } from '../../src/translation/model-test';
 import { mountHybridUI } from './hybrid-ui';
 import { initTheme } from '../../src/ui/theme';
 import { mountCombobox } from '../../src/ui/combobox';
@@ -115,6 +117,17 @@ const endpointCombo = mountCombobox(input('endpoint'), [], { displayValue: 'valu
 } });
 const modelCombo = mountCombobox(input('model'));
 const languageSelect = mountTargetLanguageSelect(select('target-language'));
+const modelTestInputs = (['online', 'local'] as const).map(backend => {
+  const key = `ui.modelTestText.${backend}.v1`;
+  const text = document.getElementById(backend === 'online' ? 'model-test-text' : 'local-model-test-text') as HTMLTextAreaElement;
+  return mountModelTestInput(text, {
+    sample: () => modelTestSource(select(backend === 'local' && select('model-test-context').value !== 'video'
+      ? 'live-source-language' : 'source-language').value, languageSelect.value()),
+    load: async () => (await browser.storage.local.get(key))[key],
+    save: value => browser.storage.local.set({ [key]: value }),
+    error: error => message(() => errorMessage(error, t('m_608e2da1bf2d')), true),
+  });
+});
 let catalogRevision = 0;
 let selectionSaving = false;
 let loadingModelId = '';
@@ -677,6 +690,7 @@ function fill(response: any) {
   if (!dirty.has('bilibili-hybrid')) hybridUI?.fill(settings.bilibiliHybrid);
   showScope(); showLocalIdleUnload(); showBilibiliTimeoutRetry(); showBackend(); renderLocalModels(); renderLocalState(localState);
   if (!dirty.has('remember')) input('remember').checked = response.remembered === true;
+  modelTestInputs.forEach(control => control.sync());
   if (previousDestination !== snapshot(destinationFields)) { clearModels(); providerRevision++; void readCatalog(); }
   if (previousTest !== snapshot(testFields)) { invalidateTest(); providerRevision++; }
   localRuntime = response.localRuntime ?? localRuntime;
@@ -743,6 +757,7 @@ for (const event of ['input', 'change']) document.getElementById('settings-form'
   const target = e.target as HTMLInputElement | HTMLSelectElement;
   if (target.id in fields || target.id === 'remember' || target.id === 'api-key' || ['profile', 'thinking-effort', 'superchat-thinking'].includes(target.id)) markDirty(target.id);
   if (testFields.includes(target.id)) invalidateTest();
+  if (['source-language', 'live-source-language', 'target-language', 'model-test-context'].includes(target.id)) modelTestInputs.forEach(control => control.sync());
   if (target.id === 'local-idle-unload-enabled') showLocalIdleUnload();
   if (destinationFields.includes(target.id)) { clearModels(); void readCatalog(); }
   if ([...destinationFields, 'model'].includes(target.id)) providerRevision++;
@@ -816,6 +831,7 @@ async function runModelTest(backend: 'online' | 'local') {
       text: (document.getElementById(textId) as HTMLTextAreaElement).value,
       ...(backend === 'local' ? { context: select('model-test-context').value } : {}) });
     if (revision !== testRevision) return;
+    if (!result?.ok && result?.result) renderModelTestOutput(output, result.result);
     if (!result?.ok) throw new Error(result?.error || t('m_d3b1da3088dd'));
     if (backend === 'online') void readServiceHistory();
     const verification = () => result.verification === 'basic-language-check' ? t('m_20d0aaef5c92') : t('m_a3e6a2003aba');

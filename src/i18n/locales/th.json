@@ -981,6 +981,8 @@
   "modelTest.elapsed": "เวลาที่ใช้: {seconds} วินาที",
   "modelTest.scenario": "สถานการณ์",
   "modelTest.timingHelp": "เวลาทดสอบเพียงรายการเดียวไม่ได้สะท้อนความทันเวลาของการแปลสด",
+  "modelTest.output": "ผลลัพธ์จากโมเดล",
+  "modelTest.noOutput": "ไม่ได้รับผลลัพธ์จากโมเดล",
   "settings.requestQuotaTitle": "โควตาคำขอ",
   "settings.requestQuotaHint": "จำนวนคำขอต่อวัน",
   "watch.enableTranslation": "เปิดการแปล",

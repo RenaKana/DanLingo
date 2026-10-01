@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Elapsed time: {seconds} s",
   "modelTest.scenario": "Scenario",
   "modelTest.timingHelp": "The duration of a single-item test does not reflect live translation timeliness.",
+  "modelTest.output": "Model output",
+  "modelTest.noOutput": "No model output was received",
   "settings.requestQuotaTitle": "Request quota",
   "settings.requestQuotaHint": "Daily request count.",
   "watch.enableTranslation": "Enable translation",

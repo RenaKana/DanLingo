@@ -39,8 +39,14 @@ test('default enabled effort is optional and dialect controls the wire format', 
   assert.equal(strategySettings(settings({ backend: 'local', thinkingEffort: 'economy' })).thinkingEffort, 'off');
 });
 
-test('missing, expired, different endpoint/model metadata cannot grant capabilities', () => {
-  for (const modelReasoning of [undefined, observed({ fetchedAt: Date.now() - 86400001 }), observed({ fetchedAt: Date.now() + 60000 }),
+test('previously discovered capabilities remain usable without silently changing saved thinking choices', () => {
+  const input = settings({ modelReasoning: observed({ fetchedAt: Date.now() - 2 * 24 * 60 * 60 * 1000 }), thinkingEffort: 'off' });
+  assert.equal(reasoningCapabilities(input).source, 'service');
+  assert.deepEqual(reasoningRequestFields(input), { thinking: { type: 'disabled' } });
+});
+
+test('missing, future, different endpoint/model metadata cannot grant capabilities', () => {
+  for (const modelReasoning of [undefined, observed({ fetchedAt: Date.now() + 60000 }),
     observed({ model: 'other' }), observed({ endpoint: 'https://other.example/v1/chat/completions' })]) {
     const input = settings({ modelReasoning, thinkingEffort: 'off' });
     assert.equal(reasoningCapabilities(input).verified, false);

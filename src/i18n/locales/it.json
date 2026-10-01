@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Tempo trascorso: {seconds} s",
   "modelTest.scenario": "Scenario",
   "modelTest.timingHelp": "Il tempo di test di un singolo elemento non riflette la tempestività della traduzione in diretta.",
+  "modelTest.output": "Output del modello",
+  "modelTest.noOutput": "Non è stato ricevuto alcun output del modello",
   "settings.requestQuotaTitle": "Quota di richieste",
   "settings.requestQuotaHint": "Numero di richieste al giorno.",
   "watch.enableTranslation": "Attiva traduzione",

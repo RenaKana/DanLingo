@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Waktu berlalu: {seconds} detik",
   "modelTest.scenario": "Skenario",
   "modelTest.timingHelp": "Durasi pengujian satu item tidak mencerminkan ketepatan waktu terjemahan langsung.",
+  "modelTest.output": "Keluaran model",
+  "modelTest.noOutput": "Tidak ada keluaran model yang diterima",
   "settings.requestQuotaTitle": "Kuota permintaan",
   "settings.requestQuotaHint": "Jumlah permintaan harian.",
   "watch.enableTranslation": "Aktifkan terjemahan",
