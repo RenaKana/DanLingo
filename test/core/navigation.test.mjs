@@ -490,9 +490,13 @@ test('native stop during start IPC cancels the benchmark after ownership is ackn
 });
 
 test('a save cancels an ordinary performance replay still waiting to drain', async () => {
-  const h = testPriorityHarness({ hooks: { stats: { pendingItems: 1 } } });
+  let signalPause;
+  const paused = new Promise(resolve => { signalPause = resolve; });
+  const h = testPriorityHarness({ hooks: { stats: { pendingItems: 1 }, writeHook: (area, patch) => {
+    if (area === 'session' && patch['performancePause.v1']) signalPause();
+  } } });
   const pending = h.startTest();
-  for (let i = 0; i < 8; i++) await flush();
+  await Promise.race([paused, pending.then(reply => { throw new Error(`Replay ended before pausing: ${JSON.stringify(reply)}`); })]);
   assert.equal(await h.isPaused(), true);
   const saved = (await h.send({ type: 'settings' }, testUi)).settings;
   assert.equal((await h.send({ type: 'save', settings: { ...saved, targetLanguage: 'ko' } }, testUi)).ok, true);
