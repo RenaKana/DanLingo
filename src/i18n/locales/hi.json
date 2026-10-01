@@ -981,6 +981,8 @@
   "modelTest.elapsed": "बीता समय: {seconds} सेकंड",
   "modelTest.scenario": "परिदृश्य",
   "modelTest.timingHelp": "एक आइटम के परीक्षण का समय लाइव अनुवाद की समयबद्धता नहीं दर्शाता।",
+  "modelTest.output": "मॉडल का आउटपुट",
+  "modelTest.noOutput": "मॉडल का आउटपुट प्राप्त नहीं हुआ",
   "settings.requestQuotaTitle": "अनुरोध सीमा",
   "settings.requestQuotaHint": "दैनिक अनुरोधों की संख्या।",
   "watch.enableTranslation": "अनुवाद चालू करें",

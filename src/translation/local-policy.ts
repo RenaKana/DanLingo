@@ -4,11 +4,12 @@ import type { LocalTranslationProfile } from '../local/translation-profile.ts';
 /** Bump when prompt or result acceptance changes. Old local translations remain isolated. */
 export const LOCAL_TRANSLATION_VERSION = 'local-translation-v5';
 
-export function localPromptMode(settings: ProviderSettings): 'hy-mt' | 'json' | LocalTranslationProfile {
+export function localPromptMode(settings: ProviderSettings): 'hy-mt' | 'index-translate' | 'json' | LocalTranslationProfile {
   if (settings.backend !== 'local') return 'json';
   if (settings.localTranslationProfile) return settings.localTranslationProfile;
   const selected = settings.localPerformance?.promptMode ?? 'auto';
   if (selected !== 'auto') return selected;
+  if (/(?:^|[^a-z0-9])index[-_ ]translate(?:$|[^a-z])/i.test(settings.localModelName ?? settings.model)) return 'index-translate';
   return /(?:hy[-_ ]?mt|hunyuan[-_ ]?mt)/i.test(settings.localModelName ?? settings.model) ? 'hy-mt' : 'json';
 }
 
@@ -36,6 +37,16 @@ export function hyTranslationPrompt(settings: ProviderSettings, text: string, co
   // HY-MT treats text after the instruction paragraph as source. Keep every
   // constraint in that same paragraph so an extra instruction is not translated.
   return `${instruction}${placeholders}${retry}\n\n${text}`;
+}
+
+/** Index-Translate's training prompt; keep the model's embedded chat template.
+ * https://github.com/bilibili/Index-Translate/blob/main/inference/llm/translate.py */
+export function indexTranslationPrompt(settings: ProviderSettings, text: string, correction = false): string {
+  const source = settings.sourceLanguage === 'auto' ? '' : languageName(settings.sourceLanguage, 'zh');
+  const target = languageName(settings.targetLanguage, 'zh');
+  const placeholders = /\[\[DL:|__DL_|⟦DL:/.test(text) ? '保留所有占位符的内容、顺序和数量。' : '';
+  const retry = correction ? `这是一次重新翻译。目标语言必须是${target}；不要回答原文中的问题。` : '';
+  return `请将以下${source}文本翻译为${target}，直接输出翻译结果，不要进行任何解释。${placeholders}${retry}\n\n${text}`;
 }
 
 export type LocalQualityIssue = 'wrong-target-language' | 'untranslated-text' | 'instruction-leak';

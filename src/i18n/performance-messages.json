@@ -73,5 +73,7 @@
   "performance.error.PERFORMANCE_BATCH_UNLOAD_FAILED": "模型释放失败，请检查本地模型状态后再测试。",
   "performance.error.PERFORMANCE_BATCH_PREPARE_FAILED": "无法完成测试准备或资源释放，请检查本地模型状态。",
   "performance.error.PERFORMANCE_BATCH_STOPPED": "已停止当前测试和剩余模型。",
-  "performance.error.PERFORMANCE_BATCH_CONFIG_CHANGED": "配置已变化，批量测试已停止。"
+  "performance.error.PERFORMANCE_BATCH_CONFIG_CHANGED": "配置已变化，批量测试已停止。",
+  "performance.selectedModels": "已选 {count} 个模型",
+  "performance.modelQueueHelp": "依次卸载、加载并测试所选模型；每个模型单独保存记录。"
 }

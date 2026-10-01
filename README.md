@@ -4,7 +4,7 @@
 
 在 Niconico、YouTube、Bilibili 的原生页面翻译弹幕与直播聊天。支持自行配置兼容 Chat Completions 的服务，或在扩展内加载本地 GGUF 模型。
 
-**正式版本：0.5.16，可通过 [GitHub Releases](https://github.com/RenaKana/DanLingo/releases) 下载并手动加载。** 本版更新 Bilibili 播放器兼容、翻译调度、模型能力识别和设置界面。Edge Add-ons 的 0.5.1 仍在审核中，尚未公开上架；商店审核与 GitHub 发布分别进行。Chrome 商店上架暂缓。
+**当前版本：0.5.20。安装包见 [Releases 页面](https://github.com/RenaKana/DanLingo/releases)。** 本版修复在线模型思考能力缓存满 24 小时后失效、B站计划翻译时钟偏差导致请求被拒绝的问题，并明确提示混合容量失配与思考配置错误。包含 Index-Translate 自动提示适配和模型测试失败输出展示。Edge Add-ons 尚未公开上架，提交审核与 GitHub 发布分别进行；审核中不代表已通过。Chrome 商店上架暂缓。
 
 获取 ZIP 后按[安装说明](docs/USAGE.md#安装-zip)解压并加载扩展；也可按下文从源码构建。
 
@@ -31,9 +31,20 @@
 - [Hy-MT2-7B](https://huggingface.co/tencent/Hy-MT2-7B-GGUF)：7B 参数，适合资源更充足的设备。
 - [Hy-MT2-30B-A3B](https://huggingface.co/tencent/Hy-MT2-30B-A3B-GGUF)：30B 总参数、约 3B 激活参数；内存不能仅按 3B 模型估算。
 
+网络热词较多的弹幕可优先尝试 Index-Translate。用户实测反馈中，Index-Translate-2B.Q8_0 对网络热词和非标准写法的适配性更高：
+
+| 模型（用户实测反馈） | 原文“666这个入是挂”的译文 |
+| --- | --- |
+| Index-Translate-2B.Q8_0 | `666このユーザーはチートです` |
+| Hy-MT2-1.8B-Q8_0 | `666という数字は、単に掛けられているだけです。` |
+
+此例来自用户实测反馈，不是系统基准，也不代表 Index-Translate 在所有任务中都更优。
+
 实际占用取决于量化、上下文和运行环境。项目未验证这些仓库中的每个文件；具体 GGUF 文件的浏览器兼容性与翻译效果仍需在你的设备和使用场景中验证。
 
 在设置中切换本地后端，点击“添加文件夹”或“添加文件”直接选择来源，再在“管理模型”对应行点击“加载模型”。文件选择支持多选，分片模型需选齐全部分片。加载会保存模型选择；当前性能参数仅用于本次加载，其他设置草稿不会随之保存。
+
+还可关注开源的 [Index-Translate 文本模型系列](https://github.com/bilibili/Index-Translate)。上游提供 [2B](https://huggingface.co/IndexTeam/Index-Translate-2B)、[9B](https://huggingface.co/IndexTeam/Index-Translate-9B) 和 [35B-A3B（预览）](https://huggingface.co/IndexTeam/Index-Translate-35B-A3B-preview) checkpoint；35B-A3B 仍为预览版，部署时需考虑服务端资源。0.5.18 会自动识别模型名中包含 `Index-Translate` 的模型并使用官方单用户翻译提示，使普通视频与直播提示保持一致；使用兼容 GGUF 时，提示词模式保持“自动”即可。官方 Hugging Face checkpoint 不是 GGUF，不能直接由扩展内置的本地模型加载器读取；可通过兼容的 Chat Completions 服务按在线模型配置。上面的对比仅覆盖用户实测的 Index-Translate-2B.Q8_0 和 Hy-MT2-1.8B-Q8_0；系列其他规模、量化文件及不同硬件组合仍需分别验证。
 
 ## 从源码运行
 

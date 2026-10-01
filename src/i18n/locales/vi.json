@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Thời gian đã trôi qua: {seconds} giây",
   "modelTest.scenario": "Kịch bản",
   "modelTest.timingHelp": "Thời gian kiểm tra một mục không phản ánh mức độ kịp thời của bản dịch trực tiếp.",
+  "modelTest.output": "Đầu ra của mô hình",
+  "modelTest.noOutput": "Không nhận được đầu ra từ mô hình",
   "settings.requestQuotaTitle": "Hạn mức yêu cầu",
   "settings.requestQuotaHint": "Số lượng yêu cầu mỗi ngày.",
   "watch.enableTranslation": "Bật dịch",

@@ -177,7 +177,7 @@ test('explicit online model actions preserve a saved local translation route and
   assert.equal(testRequests.length, 1, 'another origin cannot borrow the saved key');
 });
 
-test('discovered effort metadata reaches save, translation and model test without persisting runtime claims', async () => {
+for (const ageMs of [0, 2 * 24 * 60 * 60 * 1000]) test(`discovered effort metadata aged ${ageMs}ms reaches save, translation and model test without persisting runtime claims`, async () => {
   let discoveries = 0, modelTests = 0;
   const h = background({ settings: { model: 'deepseek-flash', profile: 'deepseek', thinkingEffort: 'default' },
     connectionDiscovery: { discoverConnectionModels: async () => {
@@ -192,6 +192,7 @@ test('discovered effort metadata reaches save, translation and model test withou
   });
   const initial = (await h.send({ type: 'settings' }, testUi)).settings;
   assert.equal((await h.send({ type: 'models', settings: initial }, testUi)).ok, true);
+  for (const entry of Object.values(h.localStorage[modelCatalog.MODEL_CATALOG_KEY])) entry.fetchedAt -= ageMs;
   const catalog = (await h.send({ type: 'model-catalog', settings: initial }, testUi)).catalog;
   assert.deepEqual(catalog.capabilities['deepseek-flash'].supportedLevels, ['low', 'high', 'max']);
   const saved = await h.send({ type: 'save', settings: { ...initial, thinkingEffort: 'off' } }, testUi);

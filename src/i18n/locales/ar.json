@@ -981,6 +981,8 @@
   "modelTest.elapsed": "الوقت المنقضي: {seconds} ث",
   "modelTest.scenario": "السيناريو",
   "modelTest.timingHelp": "مدة اختبار عنصر واحد لا تعكس مدى آنية الترجمة المباشرة.",
+  "modelTest.output": "مخرجات النموذج",
+  "modelTest.noOutput": "لم يتم استلام أي مخرجات من النموذج",
   "settings.requestQuotaTitle": "حصة الطلبات",
   "settings.requestQuotaHint": "عدد الطلبات اليومية.",
   "watch.enableTranslation": "تفعيل الترجمة",

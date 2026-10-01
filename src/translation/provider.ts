@@ -4,7 +4,7 @@ import { createClock } from './clock.ts';
 import type { TranslationClock } from './clock.ts';
 import { protectText, restoreText } from './text.ts';
 import type { ProtectedText } from './text.ts';
-import { hyTranslationPrompt, localPromptMode, localQualityIssue, localSingleItem } from './local-policy.ts';
+import { hyTranslationPrompt, indexTranslationPrompt, localPromptMode, localQualityIssue, localSingleItem } from './local-policy.ts';
 import { translationPrompt } from '../local/translation-profile.ts';
 import type { LocalInferenceMetrics } from '../local/types.ts';
 import { parseModelEffortMetadata } from '../core/model-capabilities.ts';
@@ -53,6 +53,8 @@ export interface ProviderRequest {
   force?: boolean;
   /** Opt-in streaming delivers only complete, validated items; final usage still requires draining the response. */
   onItem?: (id: string, output: ProviderOutput) => void;
+  /** Explicit model-test diagnostics only: assistant content before validation, never an accepted item. */
+  onResponseText?: (content: string) => void;
 }
 export interface ProviderOptions {
   fetch?: typeof fetch; clock?: Partial<TranslationClock> | (() => number);
@@ -195,6 +197,7 @@ function payload(settings: ProviderSettings, safe: PreparedItem[], mode?: 'vod' 
     const profile = localPromptMode(settings);
     try {
       body.messages = [{ role: 'user', content: profile === 'hy-mt' ? hyTranslationPrompt(settings, safe[0]!.protected.text, force)
+        : profile === 'index-translate' ? indexTranslationPrompt(settings, safe[0]!.protected.text, force)
         : translationPrompt(profile as 'seed-x' | 'translategemma', settings.sourceLanguage, settings.targetLanguage, safe[0]!.protected.text) }];
     } catch (error) {
       if (error instanceof Error && /^LOCAL_TRANSLATION_[A-Z_]+$/.test(error.message)) throw new ProviderError(error.message);
@@ -614,6 +617,10 @@ export class ChatCompletionsProvider {
     return new Promise<ProviderResult>((resolve, reject) => {
       let finished = false;
       let releaseKeepAlive = () => {};
+      const captureResponseText = (content: string) => {
+        if (finished) return;
+        try { request.onResponseText?.(content); } catch { /* Diagnostics cannot affect acceptance. */ }
+      };
       const finish = (result?: ProviderResult, error?: ProviderError) => {
         if (finished) return;
         finished = true;
@@ -692,7 +699,8 @@ export class ChatCompletionsProvider {
           if (body.stream === true && (!hybridProtocol || mediaType !== 'application/json')) {
             result = await readCompactStream(response, controller.signal, safe, progress, (id, output) => {
               if (!finished && !controller.signal.aborted) request.onItem?.(id, output);
-            }, observation ? content => {
+            }, observation || request.onResponseText ? content => {
+              captureResponseText(content);
               if (!observation || finished) return;
               const now = this.clock.now();
               observation.firstContentAt ??= now;
@@ -710,6 +718,9 @@ export class ChatCompletionsProvider {
           } else {
             if (hybridProtocol && observation) { observation.streaming = false; observe(); }
             const raw = await readJson(response, controller.signal);
+            const envelope = object(raw), choice = Array.isArray(envelope?.choices) ? object(envelope.choices[0]) : undefined;
+            const content = object(choice?.message)?.content;
+            if (typeof content === 'string') captureResponseText(content);
             result = request.settings.backend === 'local'
               ? parseLocalResult(raw, safe, request.settings, request.mode === 'deadline')
               : parseResult(raw, safe, request.mode === 'deadline' || hybridProtocol);

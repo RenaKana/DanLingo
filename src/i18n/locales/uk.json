@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Витрачений час: {seconds} с",
   "modelTest.scenario": "Сценарій",
   "modelTest.timingHelp": "Тривалість тесту одного елемента не відображає своєчасність перекладу наживо.",
+  "modelTest.output": "Вихід моделі",
+  "modelTest.noOutput": "Вихід моделі не отримано",
   "settings.requestQuotaTitle": "Квота запитів",
   "settings.requestQuotaHint": "Кількість запитів на день.",
   "watch.enableTranslation": "Увімкнути переклад",

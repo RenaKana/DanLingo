@@ -123,6 +123,7 @@ function background(options = {}) {
   };
   const exports = {};
   runInNewContext(compiled, { exports, Error, URL, AbortController, performance, crypto, TextEncoder,
+    ...(options.wallNow ? { Date: class extends Date { static now() { return options.wallNow(); } } } : {}),
     structuredClone, setTimeout, clearTimeout, setInterval, clearInterval,
     require: key => { if (!(key in dependencies)) throw new Error(`Unexpected import ${key}`); return dependencies[key]; } });
   h.send = (message, sender = h.sender) => new Promise(resolve => listener(message, sender, resolve));
@@ -158,6 +159,35 @@ test('planned owned video uses ordinary settings, shared engine/cache and indivi
   assert.equal(call.quotaScope, 'tab:7');
   assert.ok(call.items[0].deadlineAt - performance.now() <= 420);
   assert.ok(call.items[1].deadlineAt - performance.now() > 3000);
+});
+
+for (const offsetMs of [-5000, 5000]) test(`planned wall-clock budgets survive a ${offsetMs}ms difference from performance time`, async () => {
+  const wallNow = () => Date.now() + offsetMs;
+  const h = background({ wallNow });
+  await h.open();
+  for (const budget of [5000, 60_000]) {
+    const message = planned({ sentAt: wallNow() });
+    for (const item of message.items) {
+      item.remainingMs = budget;
+      item.deadlineAtEpochMs = message.sentAt + budget;
+    }
+    const response = await h.send(message);
+    assert.equal(response.ok, true, JSON.stringify(response));
+    assert.equal(response.items[0].status, 'translated');
+    const remaining = h.calls.at(-1).items[0].deadlineAt - performance.now();
+    assert.ok(remaining > budget - 1000 && remaining <= budget,
+      'wall time converts once to a background monotonic deadline without adding or losing the clock offset');
+  }
+  const calls = h.calls.length;
+  for (const invalid of ['future', 'over-budget', 'inconsistent-deadline']) {
+    const message = planned({ sentAt: wallNow() });
+    for (const item of message.items) item.deadlineAtEpochMs = message.sentAt + item.remainingMs;
+    if (invalid === 'future') message.sentAt += 2000;
+    if (invalid === 'over-budget') message.items[0].remainingMs = 60_001;
+    if (invalid === 'inconsistent-deadline') message.items[0].deadlineAtEpochMs += 2000;
+    assert.equal((await h.send(message)).ok, false, invalid);
+  }
+  assert.equal(h.calls.length, calls, 'invalid packets still stop before the translation engine');
 });
 
 test('invalid planning identity, stale session and malformed due rows are rejected before the shared engine', async () => {
@@ -292,6 +322,22 @@ test('retirement accepts only the current Bilibili content document and its same
 
 const testUi = { id: 'test-extension', url: 'chrome-extension://test-extension/options.html' };
 
+for (const stale of [false, true]) test(`planned hybrid ${stale ? 'stale' : 'missing'} capacity reports the actionable setup error before dispatch`, async () => {
+  const h = background();
+  const settings = h.local[config.SETTINGS_KEY];
+  Object.assign(settings, { backend: 'local', localModelId: 'index-translate-2b' });
+  const identity = await hybridCapacity.hybridCapacityIdentity(config.normalizeSettings(settings));
+  settings.bilibiliHybrid = { enabled: true, profiles: stale
+    ? [{ identity, maxItems: 8, maxChars: 400, manual: true }] : [] };
+  if (stale) settings.targetLanguage = settings.targetLanguage === 'ja' ? 'en' : 'ja';
+  await h.open();
+  const reply = await h.send(planned());
+  assert.equal(reply.ok, false);
+  assert.equal(reply.error, '请为当前本地模型和参数设置混合容量');
+  assert.equal(reply.errorMessage?.id, 'm_110c7749641a');
+  assert.equal(h.calls.length, 0, 'an unmatched capacity must not start local work or online overflow');
+});
+
 for (const backend of ['local', 'online']) test(`hybrid background preserves saved ${backend} configuration and defers loading until cache misses`, async () => {
   const controls = [];
   const h = background({ localControl: async control => {
@@ -369,6 +415,25 @@ test('hybrid capacity lookup is settings-only, zero-load, and stale capacities c
   assert.equal(reply.profile, undefined); assert.equal(reply.recommendation, undefined);
   const result = await h.send({ type: 'save', settings: { ...draft, bilibiliHybrid: { enabled: true, profiles: [] } } }, testUi);
   assert.equal(result.ok, false); assert.match(result.error, /容量/);
+  assert.equal(h.calls.length, 0);
+});
+
+for (const field of ['thinkingEffort', 'superChatThinkingEffort']) test(`saving local-backed hybrid reports unsupported online ${field} and accepts a corrected choice`, async () => {
+  const h = background({ localControl: async () => ({ ok: true, state: { phase: 'idle' } }) });
+  Object.assign(h.local[config.SETTINGS_KEY], { enabled: false, backend: 'local', localModelId: 'local-model',
+    model: 'fixture-online-model', reasoningProfileOverride: 'auto', thinkingEffort: 'default', superChatThinkingEffort: 'inherit' });
+  const draft = config.normalizeSettings(h.local[config.SETTINGS_KEY]);
+  const identity = await hybridCapacity.hybridCapacityIdentity(draft);
+  draft.bilibiliHybrid = { enabled: true, profiles: [{ identity, maxItems: 8, maxChars: 400, manual: true }] };
+  const before = structuredClone(h.local[config.SETTINGS_KEY]);
+  const invalid = await h.send({ type: 'save', settings: { ...draft, [field]: 'off' } }, testUi);
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.error, '当前请求配置不支持所选思考强度，请重新选择');
+  assert.equal(invalid.errorMessage?.id, 'm_35f6bd1f62ce');
+  assert.deepEqual(h.local[config.SETTINGS_KEY], before, 'rejected validation must not partially save settings');
+  const corrected = await h.send({ type: 'save', settings: draft }, testUi);
+  assert.equal(corrected.ok, true, JSON.stringify(corrected));
+  assert.equal(corrected.hasHybridConfig, true);
   assert.equal(h.calls.length, 0);
 });
 const replayConfig = { mode: 'latency', count: 1, concurrency: 1, batchSize: 1, arrivalIntervalMs: 0, strategy: 'normal' };

@@ -981,6 +981,8 @@
   "modelTest.elapsed": "Geçen süre: {seconds} sn",
   "modelTest.scenario": "Senaryo",
   "modelTest.timingHelp": "Tek bir öğenin test süresi, canlı çevirinin ne kadar zamanında olduğunu göstermez.",
+  "modelTest.output": "Model çıktısı",
+  "modelTest.noOutput": "Model çıktısı alınmadı",
   "settings.requestQuotaTitle": "İstek kotası",
   "settings.requestQuotaHint": "Günlük istek sayısı.",
   "watch.enableTranslation": "Çeviriyi aç",

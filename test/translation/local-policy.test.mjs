@@ -18,6 +18,46 @@ const translated = '今日の配信はとても面白かったです。またお
 const raw = (content, finish_reason = 'stop', metrics) => Response.json({ choices: [{ message: { content }, finish_reason }], danlingo_local: metrics });
 const flush = async () => { for (let n = 0; n < 80; n++) await Promise.resolve(); };
 
+test('Index-Translate auto uses its official single-user prompt identically for video and live', () => {
+  const text = '666这个入是挂';
+  for (const name of ['Index-Translate-2B.Q8_0', 'Index-Translate-9B', 'Index-Translate-35B-A3B-preview']) {
+    const index = { ...settings, localModelName: name };
+    assert.equal(localPromptMode(index), 'index-translate');
+    const live = buildProviderPayload(index, [{ id: 'a', text }], 'deadline');
+    const video = buildProviderPayload(index, [{ id: 'a', text }], 'vod');
+    assert.deepEqual(live, video);
+    assert.deepEqual(live.messages, [{ role: 'user', content: '请将以下文本翻译为日语，直接输出翻译结果，不要进行任何解释。\n\n' + text }]);
+    assert.equal(live.stream, false);
+    const explicit = { ...index, localPerformance: { ...index.localPerformance, promptMode: 'json' } };
+    assert.equal(localPromptMode(explicit), 'json');
+    assert.equal(localPromptMode({ ...index, localPerformance: { promptMode: 'hy-mt' } }), 'hy-mt');
+    assert.equal(localPromptMode({ ...index, backend: 'online' }), 'json');
+    assert.notEqual(translationCacheKey('room', text, index), translationCacheKey('room', text, explicit));
+    assert.match(buildProviderPayload({ ...index, sourceLanguage: 'zh-Hans' }, [{ id: 'a', text }], 'deadline').messages[0].content,
+      /^请将以下简体中文文本翻译为日语/);
+  }
+});
+
+test('Index-Translate accepts plain translations in both modes but production still rejects echoes and truncation', async () => {
+  const index = { ...settings, localModelName: 'Index-Translate-2B.Q8_0' };
+  const text = '666这个入是挂', translated = '666このユーザーはチートです';
+  for (const mode of ['vod', 'deadline']) {
+    for (const [content, finish, reason] of [[translated, 'stop', undefined], [text, 'stop', 'untranslated-text'], [translated, 'length', 'output-truncated']]) {
+      const result = await new ChatCompletionsProvider({ fetch: async () => raw(content, finish) }).complete({
+        settings: index, apiKey: 'local-inference', items: [{ id: 'a', text }], mode, budgetMs: 2000,
+      });
+      assert.equal(result.items.get('a').reason, reason);
+      assert.equal(result.items.get('a').text, reason ? undefined : translated);
+      assert.equal('rawText' in result, false, 'raw diagnostic content is not returned to the engine');
+    }
+  }
+  const emoji = await new ChatCompletionsProvider({ fetch: async (_url, init) => {
+    assert.match(JSON.parse(init.body).messages[0].content, /保留所有占位符/);
+    return raw(translated + ' [[DL:auto0_0]]');
+  } }).complete({ settings: index, apiKey: 'local-inference', items: [{ id: 'a', text: text + ' 😂' }], budgetMs: 2000 });
+  assert.equal(emoji.items.get('a').text, translated + ' 😂');
+});
+
 test('HY-MT automatic mode uses trusted model name, one official-style target-language user prompt, no JSON contract', () => {
   assert.equal(localPromptMode(settings), 'hy-mt');
   assert.equal(localPromptMode({ ...settings, backend: 'online' }), 'json');

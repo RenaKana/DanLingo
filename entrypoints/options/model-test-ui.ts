@@ -9,15 +9,18 @@ export function renderModelTestOutput(target: HTMLElement, result: Awaited<Retur
   bindLocalizedText(elapsed, () => t('modelTest.elapsed', { seconds: Number((result.elapsedMs / 1000).toFixed(2)) }));
   header.append(name, elapsed);
   const comparison = document.createElement('div'); comparison.className = 'model-test-comparison';
-  for (const [key, value] of [['m_354b28c85333', result.sourceText], ['modelTest.translation', result.text]] as const) {
+  for (const [key, value] of [['m_354b28c85333', result.sourceText], [result.passed === false ? 'modelTest.output' : 'modelTest.translation', result.text]] as const) {
     const column = document.createElement('div'), label = document.createElement('div'), text = document.createElement('p');
     label.className = 'model-test-label'; bindLocalizedText(label, () => t(key));
-    text.textContent = value; text.dir = 'auto'; column.append(label, text); comparison.append(column);
+    if (value.trim()) text.textContent = value;
+    else bindLocalizedText(text, () => t('modelTest.noOutput'));
+    text.dir = 'auto'; column.append(label, text); comparison.append(column);
   }
   const metadata = document.createElement('div'); metadata.className = 'model-test-metadata';
   bindLocalizedText(metadata, () => [
+    ...(result.sourceLanguage ? [`${t('performance.sourceLanguage')}: ${result.sourceLanguage}`] : []),
     `${t('performance.targetLanguage')}: ${result.targetLanguage}`,
-    t(result.promptMode === 'hy-mt' ? 'm_f9042fe0fe55' : 'm_8e1dfd9d2eff'),
+    result.promptMode === 'index-translate' ? 'Index-Translate' : t(result.promptMode === 'hy-mt' ? 'm_f9042fe0fe55' : 'm_8e1dfd9d2eff'),
     ...(result.local ? [t('m_03ac907910fc', { p0: Math.round(result.local.queueMs), p1: Math.round(result.local.inferenceMs) })] : []),
   ].join(' · '));
   target.replaceChildren(header, comparison, metadata); target.hidden = false;

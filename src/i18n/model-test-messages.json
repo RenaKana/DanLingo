@@ -1,0 +1,8 @@
+{
+  "modelTest.output": "模型输出",
+  "modelTest.noOutput": "未收到模型输出",
+  "modelTest.translation": "译文",
+  "modelTest.elapsed": "耗时 {seconds} 秒",
+  "modelTest.scenario": "场景",
+  "modelTest.timingHelp": "单条测试耗时不代表直播及时率。"
+}
