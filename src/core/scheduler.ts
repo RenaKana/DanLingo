@@ -336,7 +336,11 @@ export class VideoScheduler {
           selection.deadlineAtEpochMs! <= this.nowEpochMs() || this.closedNative.has(m.id)) return false;
     }
     const state = this.eligibilityState(m);
-    return this.inRange(m, c) && state !== 'filtered' && this.userFilterState(m) !== 'exclude' &&
+    // Restoring a held speed shrinks the lookahead, but an already issued owned
+    // subscription keeps its original finite lease while MAIN still selects it.
+    const retained = m.platform === 'bilibili' && this.settings.bilibiliOwnedRelease &&
+      (this.pending.has(m.id) || this.ready.has(m.id));
+    return (retained || this.inRange(m, c)) && state !== 'filtered' && this.userFilterState(m) !== 'exclude' &&
       (this.settings.translationScope !== 'auto' || this.effectiveScope() !== 'all' || state === 'eligible');
   }
   getStats(): SchedulerStats {

@@ -771,6 +771,12 @@ export function attachBilibiliNative(binding: BilibiliNativeBinding, options: Bi
   const onSeeking = () => nextEpoch();
   const onPlaying = () => { everPlayed = true; if (nativeSupply.planned) tick(); };
   const onPlaybackHold = () => { if (nativeSupply.planned) tick(); };
+  const onRateChange = () => {
+    // The new rate starts now; it did not apply to the preceding polling interval.
+    lastTime = Number(read(binding.video, 'currentTime')) * 1000 || 0; timeSample = now();
+    lastAdvancing = playbackAdvancing();
+    tick();
+  };
   const addEvent = (type: string, callback: () => void) => {
     const add = read(binding.video, 'addEventListener');
     if (typeof add === 'function') {
@@ -782,6 +788,7 @@ export function attachBilibiliNative(binding: BilibiliNativeBinding, options: Bi
   };
   addEvent('seeking', onSeeking); addEvent('playing', onPlaying);
   addEvent('pause', onPlaybackHold); addEvent('waiting', onPlaybackHold);
+  addEvent('ratechange', onRateChange);
 
   function restoreDisplayPlanPlayback() {
     const previous = displayPlanPlayback;

@@ -94,7 +94,8 @@ interface Options {
   pause: () => void;
 }
 
-interface Prediction { id: string; originalText: string; epoch: number; predictionEpoch: number; ruleRevision: number }
+interface Prediction { id: string; originalText: string; epoch: number; predictionEpoch: number; ruleRevision: number;
+  deadlineAtEpochMs?: number }
 
 /** This deliberately never inserts or renames a native event. Its output only
  * describes whether a future, independently reviewed native entry could qualify. */
@@ -270,6 +271,7 @@ export class BilibiliNativeSupply {
       row.originalText.length > 0 && row.originalText.length <= 1000) next.set(row.id, {
         id: row.id, originalText: row.originalText, epoch: v.epoch,
         predictionEpoch: v.predictionEpoch, ruleRevision: v.ruleRevision,
+        ...(Number.isFinite(row.deadlineAtEpochMs) ? { deadlineAtEpochMs: row.deadlineAtEpochMs } : {}),
       });
     this.predictions = next;
     // A native batch can advance manager.lastTime before insert/initRender. Its
@@ -295,7 +297,8 @@ export class BilibiliNativeSupply {
       v.deadlineAtEpochMs < this.options.epochNow() || this.closed.has(`${epoch}\u0000${v.id}\u0000${v.originalText}`)) return false;
     const predicted = this.predictions.get(v.id);
     if (!predicted || predicted.originalText !== v.originalText || predicted.epoch !== epoch ||
-      predicted.predictionEpoch !== v.predictionEpoch || predicted.ruleRevision !== v.ruleRevision) return false;
+      predicted.predictionEpoch !== v.predictionEpoch || predicted.ruleRevision !== v.ruleRevision ||
+      predicted.deadlineAtEpochMs !== undefined && predicted.deadlineAtEpochMs <= this.options.epochNow()) return false;
     if (!needsTranslation(v.originalText, c.targetLanguage, c.sourceLanguage) || protectText(v.originalText).reason) return false;
     this.ready.set(v.id, v);
     return true;

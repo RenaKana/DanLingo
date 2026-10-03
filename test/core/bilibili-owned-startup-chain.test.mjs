@@ -59,10 +59,10 @@ const compiledWatch = ts.transpileModule(readFileSync(new URL('../../entrypoints
 const clone = value => value === undefined ? undefined : structuredClone(value);
 const nativeFunction = source => new Function(`return (${source})`)();
 
-function fixture({ planned = false, backend = 'local', url = VIDEO_URL } = {}) {
+function fixture({ planned = false, backend = 'local', url = VIDEO_URL, sharedWallClock = false } = {}) {
   const h = { messages: [], responses: [], pageMessages: [], controls: [], fetches: [], fetchSignals: [], prepared: [], earlyPrepared: [],
     videoUrl: url, openTabs: new Map([[41, url]]), currentTab: 41, currentDocument: 'document-41',
-    session: clone(SESSION), local: new Map(), ephemeral: new Map(), epoch: 3 };
+    session: clone(SESSION), local: new Map(), ephemeral: new Map(), epoch: 3, sharedWallClock };
   h.settings = { ...config.DEFAULT_SETTINGS, enabled: planned, bilibiliOwnedRelease: true,
     backend, localModelId: MODEL.id, model: MODEL.id, sourceLanguage: 'ja', targetLanguage: 'zh',
     localPerformance: { ...config.DEFAULT_SETTINGS.localPerformance, mode: 'custom', parallel: 3,
@@ -171,7 +171,7 @@ function fixture({ planned = false, backend = 'local', url = VIDEO_URL } = {}) {
     '../src/core/translation-shortcut': shortcuts, '../src/core/settings-frame': settingsFrame,
     '../src/translation/connection-discovery': connectionDiscovery,
   };
-  runInNewContext(compiled, { exports: {}, URL, Response, Error, AbortController, performance,
+  runInNewContext(compiled, { exports: {}, ...(sharedWallClock ? { Date } : {}), URL, Response, Error, AbortController, performance,
     crypto, TextEncoder, structuredClone, setTimeout, clearTimeout, setInterval, clearInterval,
     require: key => { assert.ok(key in imports, `Unexpected import ${key}`); return imports[key]; } });
   h.context = { ready: true, epoch: h.epoch, configVersion: 0, visible: true, session: h.session,
@@ -456,7 +456,7 @@ function installNativePipeline(h) {
     '../src/diagnostics/display-plan-session': displayPlanSession,
   };
   const exports = {};
-  runInNewContext(compiledWatch, { exports, Error, URL, AbortController, crypto, TextEncoder,
+  runInNewContext(compiledWatch, { exports, ...(h.sharedWallClock ? { Date } : {}), Error, URL, AbortController, crypto, TextEncoder,
     structuredClone, setTimeout, clearTimeout, setInterval, clearInterval,
     performance: { now: () => h.mono }, location, window, document,
     require: key => { assert.ok(key in dependencies, `Unexpected content import ${key}`); return dependencies[key]; } });
@@ -482,8 +482,8 @@ function installNativePipeline(h) {
   return h.native;
 }
 
-async function openPlannedPipeline(t, settingsPatch = {}, setup = () => {}, url = VIDEO_URL) {
-  const h = fixture({ planned: true, url });
+async function openPlannedPipeline(t, settingsPatch = {}, setup = () => {}, url = VIDEO_URL, sharedWallClock = false) {
+  const h = fixture({ planned: true, url, sharedWallClock });
   h.settings = { ...h.settings, ...settingsPatch };
   h.local.set(config.SETTINGS_KEY, clone(h.settings));
   h.context.settings = h.settings;
@@ -531,6 +531,118 @@ function fixedEpochClock(t) {
 
 const ownedUpdates = native => native.nativeMessages.filter(row =>
   row.type === 'bilibili-shadow' && row.policy === 'owned');
+
+// Long accelerated replays advance one wall clock across all three VM worlds.
+const openRatePipeline = (t, settings, setup) => openPlannedPipeline(t, settings, setup, VIDEO_URL, true);
+
+for (const rate of [1.25, 2, 3]) test(`planned translation continues across rolling windows after switching to ${rate}x`, async t => {
+  const clock = fixedEpochClock(t);
+  const { h, native, externalFetches } = await openRatePipeline(t, { videoBatchSize: 1, concurrency: 4 });
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared'));
+  const epoch = h.attachment.epoch;
+  native.video.playbackRate = rate;
+  native.videoHandlers.get('ratechange')?.();
+  for (let step = 0; step < 480; step++) {
+    h.mono += 250; clock.advance(250);
+    native.video.currentTime += .25 * rate;
+    h.attachment.tick(); h.contentTick();
+    // Let the in-memory transport and content messages settle before native fetch.
+    for (let turn = 0; turn < 4; turn++) await new Promise(resolve => setImmediate(resolve));
+    if (step % 4 === 3) native.manager.fetchAndInitDm(native.video.currentTime);
+  }
+  assert.equal(h.attachment.epoch, epoch, 'natural accelerated playback must not be treated as seeking');
+  const future = native.pool.filter(row => row.stime >= 210 && row.stime < Math.min(400, native.video.currentTime - 5));
+  assert.ok(future.length > 20);
+  const adopted = new Set(native.models.filter(model => model.text === '你好世界').map(model => model.textData.dmid));
+  assert.equal(future.filter(row => !adopted.has(row.dmid)).length, 0,
+    JSON.stringify({ rate, currentTime: native.video.currentTime, requests: h.fetches.length,
+      supply: h.attachment.nativeSupply.summary(), stats: h.scheduler.getStats() }));
+  assert.equal(externalFetches(), 0);
+});
+
+test('a ratechange after delayed sampling preserves the playback epoch and publishes the new clock', async t => {
+  const clock = fixedEpochClock(t);
+  const { h, native } = await openRatePipeline(t);
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared'));
+  const epoch = h.attachment.epoch;
+  // The player ran at 1x while a polling callback was delayed. The new 2x rate
+  // applies only from this event, not retroactively to those four seconds.
+  h.mono += 4000; clock.advance(4000);
+  native.video.currentTime += 4;
+  native.video.playbackRate = 2;
+  native.videoHandlers.get('ratechange')?.();
+  h.attachment.tick(); h.contentTick();
+  assert.equal(h.attachment.epoch, epoch, 'changing rate is not a seek');
+  assert.equal(native.nativeMessages.findLast(row => row.type === 'snapshot')?.clock.playbackRate, 2);
+  h.mono += 250; clock.advance(250); native.video.currentTime += .5;
+  h.attachment.tick();
+  assert.equal(h.attachment.epoch, epoch, 'subsequent accelerated progress uses the rebased sample');
+  native.video.currentTime += 30;
+  native.videoHandlers.get('seeking')?.();
+  assert.equal(h.attachment.epoch, epoch + 1, 'a real seek still retires the playback epoch');
+});
+
+for (const hybrid of [false, true]) test(`${hybrid ? 'hybrid' : 'ordinary'} prepared translation survives releasing a held playback speed`, async t => {
+  const clock = fixedEpochClock(t);
+  const { h, native, externalFetches } = await openRatePipeline(t, { videoBatchSize: 1 }, async h => {
+    h.nearRows = [[1, 127], [2, 127.5]];
+    if (hybrid) await configureHybridFixture(h);
+  });
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared'));
+  native.video.playbackRate = 2;
+  native.videoHandlers.get('ratechange')?.();
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared' &&
+    row.items.some(item => item.sourceId === '2')));
+  assert.ok(native.contentMessages.some(row => row.type === 'prepared' && row.items.some(item => item.sourceId === '2')));
+  const sent = h.fetches.length + (h.onlineFetches?.length ?? 0);
+  // Releasing the hold restores 1x; the result prepared at 2x is now beyond
+  // the smaller horizon, but it is still the same future display event.
+  native.video.playbackRate = 1;
+  native.videoHandlers.get('ratechange')?.();
+  h.attachment.tick(); h.contentTick();
+  for (let step = 0; step < 25; step++) {
+    h.mono += 250; clock.advance(250); native.video.currentTime += .25;
+    h.attachment.tick(); h.contentTick();
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  native.manager.fetchAndInitDm(native.video.currentTime);
+  assert.equal(native.models.find(model => model.textData.dmid === '2')?.text, '你好世界',
+    'releasing a held rate must not discard an already prepared future translation');
+  assert.equal(h.fetches.length + (h.onlineFetches?.length ?? 0), sent, 'releasing rate cannot resend the same translation');
+  assert.equal(externalFetches(), 0);
+});
+
+for (const lane of ['ordinary', 'hybrid-local', 'hybrid-online']) test(`${lane} in-flight translation survives releasing a held playback speed without resending`, async t => {
+  const clock = fixedEpochClock(t);
+  const { h, native, externalFetches } = await openRatePipeline(t, { videoBatchSize: 1 }, async h => {
+    h.nearRows = [[1, 127]];
+    if (lane !== 'ordinary') await configureHybridFixture(h, lane === 'hybrid-online' ? 1 : 1000);
+  });
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared'));
+  let finish;
+  const reply = new Promise(resolve => { finish = resolve; });
+  t.after(() => finish());
+  if (lane === 'hybrid-online') {
+    const transport = h.onlineTransport;
+    h.onlineTransport = async (...args) => { await reply; return transport(...args); };
+  } else h.localReplyGate = reply;
+  native.video.playbackRate = 2; native.videoHandlers.get('ratechange')?.();
+  await tickPlanned(h, () => h.messages.some(row => row.message.type === 'translate' &&
+    row.message.items.some(item => item.sourceId === '2')));
+  const subscriptions = () => h.messages.filter(row => row.message.type === 'translate' &&
+    row.message.items.some(item => item.sourceId === '2'));
+  assert.equal(subscriptions().length, 1);
+  native.video.playbackRate = 1; native.videoHandlers.get('ratechange')?.();
+  h.mono += 250; clock.advance(250); native.video.currentTime += .25;
+  h.attachment.tick(); h.contentTick();
+  finish();
+  await tickPlanned(h, () => native.contentMessages.some(row => row.type === 'prepared' &&
+    row.items.some(item => item.sourceId === '2')));
+  assert.ok(native.contentMessages.some(row => row.type === 'prepared' && row.items.some(item => item.sourceId === '2')),
+    'the original request can deliver after the new lookahead becomes smaller');
+  assert.equal(subscriptions().length, 1);
+  assert.equal(externalFetches(), 0);
+});
 
 async function configureHybridFixture(h, maxChars = 1000) {
   h.settings = { ...h.settings, endpoint: 'https://hybrid.invalid/v1/chat/completions', model: 'fixture-online',
