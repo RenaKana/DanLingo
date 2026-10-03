@@ -7,7 +7,7 @@ type Native = Record<string, any>;
 type Rules = Pick<ReturnType<typeof createBilibiliShadowRules>, 'read'>;
 type Selection = { item: Native; id: string; sourceId: string; originalText: string;
   stimeMs: number; deadlineAtEpochMs: number; reasons: string[]; metadata: readonly unknown[];
-  admissionMetadata: readonly unknown[]; pauseEligible: boolean };
+  admissionMetadata: readonly unknown[]; displayMode: number; pauseEligible: boolean };
 export type OwnedReleaseUpdate = BilibiliShadowUpdate & { policy: 'owned' };
 
 interface Options {
@@ -71,6 +71,7 @@ export class BilibiliOwnedRelease {
   private totalMissed = 0;
   private totalSuppressed = 0;
   private signature = '';
+  private playbackRate: number | null = null;
   private timeline: Native[] | null = null;
   private predictionEpoch = 0;
   private revision = 0;
@@ -97,7 +98,7 @@ export class BilibiliOwnedRelease {
     this.selected.clear(); this.sealed.clear(); this.supplied.clear(); this.missed.clear();
     this.suppressed.clear(); this.seenIds.clear();
     this.membershipFailures.clear();
-    this.suspendedAt = null;
+    this.suspendedAt = null; this.playbackRate = null;
     this.predictionEpoch++; this.reason = reason;
   }
 
@@ -125,7 +126,7 @@ export class BilibiliOwnedRelease {
     const doc = manager.container?.ownerDocument ?? (globalThis as any).document;
     // A resize changes capacity for new buckets, not the already sealed work.
     // Invalid dimensions still revoke the native contract below.
-    const signature = JSON.stringify([epoch, snapshot.fingerprint, rate, setting?.visible,
+    const signature = JSON.stringify([epoch, snapshot.fingerprint, setting?.visible,
       setting?.area, setting?.fontSize, setting?.limit, preTime, doc?.hidden === true]);
     if (this.signature && (signature !== this.signature || list !== this.timeline)) this.reset('configuration-or-epoch-changed');
     this.signature = signature; this.timeline = Array.isArray(list) ? list : null;
@@ -140,6 +141,7 @@ export class BilibiliOwnedRelease {
       typeof setting?.visible === 'boolean' && snapshot.nativeSettings?.visible === setting.visible;
     const sampledAtEpochMs = epochNow();
     const suspended = video.paused === true || video.readyState < 3;
+    const resumed = !suspended && this.suspendedAt !== null;
     const available = !video.seeking && doc?.hidden !== true && setting?.visible === true &&
       (suspended || danmaku.isRunning !== false);
     const previousKnown = this.known;
@@ -165,6 +167,15 @@ export class BilibiliOwnedRelease {
       for (const row of this.selected.values()) row.pauseEligible = false;
     if (this.known) {
       const width = preTime * rate, horizon = currentTime + 5 * rate;
+      const rateChanged = this.playbackRate !== null && this.playbackRate !== rate;
+      this.playbackRate = rate;
+      // A held-speed round trip keeps the same display events and translations.
+      // Rebuild the bucket grid without revoking their in-flight subscriptions.
+      if (rateChanged) this.sealed.clear();
+      if (!suspended && (rateChanged || resumed)) for (const row of this.selected.values()) {
+        row.deadlineAtEpochMs = Math.min(row.deadlineAtEpochMs,
+          sampledAtEpochMs + Math.max(0, (row.item.stime - width - currentTime) / rate * 1000));
+      }
       const first = Math.floor(currentTime / width);
       const timelineSources = uniqueSources(list), poolSources = uniqueSources(pool);
       for (let bucket = first; (bucket + 1) * width <= horizon + 1e-9 && bucket < first + 100; bucket++) {
@@ -177,6 +188,7 @@ export class BilibiliOwnedRelease {
           const item = list[index];
           if (!item || !ordinary(item) || item.stime < lower || item.stime >= upper) continue;
           const sourceId = sourceIdOf(item)!;
+          if (this.seenIds.has(bilibiliSourceEventId(binding.identity.resourceId, sourceId))) continue;
           if (timelineSources.get(sourceId) !== item || !samePoolIdentity(item, poolSources.get(sourceId))) {
             this.rejectMembership(bilibiliSourceEventId(binding.identity.resourceId, sourceId)); continue;
           }
@@ -194,13 +206,17 @@ export class BilibiliOwnedRelease {
           a.item.stime - b.item.stime || a.index - b.index);
         const scrollCap = setting.area ? Math.ceil(setting.area / 100 * height / (28.125 * setting.fontSize)) : Infinity;
         const limitCap = setting.limit < 0 ? Infinity : Math.max(1, Math.floor(setting.limit * .5 * 1.2 / 3));
+        // Previously selected rows still consume density in the rebuilt grid.
+        // Repeated speed changes must not refill a bucket's entire allowance.
         let scroll = 0, count = 0;
+        for (const row of this.selected.values()) if (row.item.stime >= lower && row.item.stime < upper) {
+          count++; if (row.displayMode === 1 && !row.item.likes) scroll++;
+        }
         for (const { item, reasons, projection } of candidates) {
           const displayMode = projection?.mode ?? item.mode;
           if (count >= limitCap || displayMode === 1 && !item.likes && scroll >= scrollCap) { this.reject('density-cap'); continue; }
           const sourceId = sourceIdOf(item)!;
           const id = bilibiliSourceEventId(binding.identity.resourceId, sourceId);
-          if (this.seenIds.has(id)) { this.reject('duplicate-id'); continue; }
           if (this.selected.size >= 2000) { this.known = false; this.reason = 'owned-capacity-exceeded'; break; }
           const stimeMs = item.stime * 1000;
           // A row's first native preparation opportunity is stime - preTime * rate.
@@ -210,7 +226,7 @@ export class BilibiliOwnedRelease {
           const admissionMetadata = identityFields.map((key, index) => projection && nativePresentationFields.has(key)
             ? (projection as Native)[key] : metadata[index]);
           this.selected.set(id, { item, id, sourceId, originalText: item.text,
-            stimeMs, deadlineAtEpochMs, reasons, metadata, admissionMetadata,
+            stimeMs, deadlineAtEpochMs, reasons, metadata, admissionMetadata, displayMode,
             pauseEligible: suspended });
           this.seenIds.add(id); this.totalSelected++;
           count++; if (displayMode === 1 && !item.likes) scroll++;

@@ -22,6 +22,17 @@ function gateFixture() {
     setTime(m, w) { mono = m; wall = w; } };
 }
 
+test('a tightened prediction deadline rejects late delivery while preserving already prepared output', () => {
+  const f = gateFixture(); f.gate.configure(control);
+  f.gate.updatePrediction({ ...f.predicted, items: [{ ...f.predicted.items[0], deadlineAtEpochMs: 1500 }] });
+  f.setTime(700, 1600);
+  assert.equal(f.gate.acceptPrepared(f.ready, f.source, 0), false, 'the original later deadline cannot bypass a speed-up cutoff');
+  const ready = gateFixture(); ready.gate.configure(control); ready.gate.updatePrediction(ready.predicted);
+  assert.equal(ready.gate.acceptPrepared(ready.ready, ready.source, 0), true);
+  ready.gate.updatePrediction({ ...ready.predicted, items: [] });
+  assert.equal(ready.gate.summary().ready, 1, 'qualified output survives forecast expiry until native admission');
+});
+
 test('strict result binding, deadline and event terminal are separate from shared translation work', () => {
   const f = gateFixture(); f.gate.configure(control); f.gate.updatePrediction(f.predicted);
   assert.equal(f.gate.acceptPrepared({ ...f.ready, status: 'original' }, f.source, 0), false);

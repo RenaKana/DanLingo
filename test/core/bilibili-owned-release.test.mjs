@@ -560,7 +560,7 @@ test('five-second buckets seal once, preserve exact identity, and use density an
   assert.equal(owned.matches(list[1]), false, 'elapsed selected row is terminally missed');
 });
 
-test('rate, rule and playback epoch cancel owned generations; unknown keeps its reason', t => {
+test('rate preserves owned generations while rule and playback epoch still invalidate them', t => {
   const f = fixture([item(1, 3), item(2, 3.5)]); t.after(() => f.attachment.stop());
   const updates = [], owned = f.owned(updates);
   f.setRule(source => source.dmid === '1' ? { state: 'unknown', reason: 'sender-contract-unknown' }
@@ -570,7 +570,7 @@ test('rate, rule and playback epoch cancel owned generations; unknown keeps its 
   assert.equal(owned.report().rejected['sender-contract-unknown'], 1);
   const generation = updates.at(-1).predictionEpoch;
   f.video.playbackRate = 2; owned.tick(0);
-  assert.ok(updates.at(-1).predictionEpoch > generation);
+  assert.equal(updates.at(-1).predictionEpoch, generation);
   f.setRule(() => ({ state: 'retain', reason: 'allowed' }), 6); owned.tick(0);
   assert.deepEqual(updates.at(-1).items.map(x => x.sourceId), ['1', '2']);
   const ruleGeneration = updates.at(-1).predictionEpoch;
@@ -579,6 +579,38 @@ test('rate, rule and playback epoch cancel owned generations; unknown keeps its 
   f.setRuleKnown(false); owned.tick(1);
   assert.equal(updates.at(-1).known, false);
   assert.equal(owned.report().reason, 'rules-unavailable');
+});
+
+test('held speed round trips never extend a deadline or refill a sealed density allowance', t => {
+  const rows = [item(1, 4.5), item(2, 4.6), item(3, 4.7)];
+  const f = fixture(rows); t.after(() => f.attachment.stop());
+  f.setting.limit = 5;
+  const updates = [], owned = f.owned(updates);
+  owned.tick(0);
+  const before = updates.at(-1);
+  assert.deepEqual(before.items.map(row => row.sourceId), ['1']);
+  f.video.playbackRate = 2; owned.tick(0);
+  const fastDeadline = updates.at(-1).items[0].deadlineAtEpochMs;
+  assert.ok(fastDeadline < before.items[0].deadlineAtEpochMs);
+  for (const rate of [1, 2, 1, 3, 1]) { f.video.playbackRate = rate; owned.tick(0); }
+  const after = updates.at(-1);
+  assert.equal(after.predictionEpoch, before.predictionEpoch);
+  assert.deepEqual(after.items.map(row => row.sourceId), ['1']);
+  assert.ok(after.items[0].deadlineAtEpochMs <= fastDeadline);
+  assert.equal(owned.report().totals.selected, 1);
+});
+
+test('a speed changed while paused tightens the existing lease on resume', t => {
+  const f = fixture([item(1, 4.5)]); t.after(() => f.attachment.stop());
+  const updates = [], owned = f.owned(updates);
+  owned.tick(0);
+  const generation = updates.at(-1).predictionEpoch;
+  f.video.paused = true; owned.tick(0);
+  f.video.playbackRate = 2; owned.tick(0);
+  f.advanceWall(1000); owned.tick(0);
+  f.video.paused = false; owned.tick(0);
+  assert.equal(updates.at(-1).predictionEpoch, generation);
+  assert.equal(updates.at(-1).items[0].deadlineAtEpochMs, 3250);
 });
 
 test('formal fetch supplies selected pool object despite changing native candidates, once, with original filter metadata', t => {

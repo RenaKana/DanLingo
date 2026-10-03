@@ -9,7 +9,7 @@ import { FIRST_URL, videoHtml } from '../test/fixtures/bilibili-video-native.mjs
 import { USER_FILTER_NATIVE_CALLBACK, USER_FILTER_NATIVE_FUNCTIONS } from '../src/platforms/bilibili/user-filter-contract.ts';
 import { LOCAL_CHANNEL } from '../src/local/types.ts';
 
-const scenarioNames = ['default', 'wall-offset-5000', 'wall-offset--5000', 'hybrid-stale-capacity'];
+const scenarioNames = ['default', 'wall-offset-5000', 'wall-offset--5000', 'hybrid-stale-capacity', 'held-speed'];
 const usage = 'Usage: node --experimental-strip-types scripts/verify-planned-translation.mjs <built-extension> [--scenario hybrid-stale-capacity]';
 if (!process.argv[2]) throw new Error(usage);
 const args = process.argv.slice(3);
@@ -202,8 +202,8 @@ function installClock(offset) {
     realDateNow: globalThis.__PLANNED_REAL_DATE_NOW__(), timeOrigin: performance.timeOrigin };
 }
 
-async function runScenario(offset, hybridStale = false) {
-  const scenario = { name: hybridStale ? 'hybrid-stale-capacity' : offset === 0 ? 'default' : `wall-offset-${offset}`, offset,
+async function runScenario(offset, hybridStale = false, heldSpeed = false) {
+  const scenario = { name: heldSpeed ? 'held-speed' : hybridStale ? 'hybrid-stale-capacity' : offset === 0 ? 'default' : `wall-offset-${offset}`, offset,
     checks: [], requests: [], errors: [], blockedHttp: [], screenshots: [], status: 'RUNNING' };
   activeScenario = scenario;
   report.scenarios.push(scenario);
@@ -503,6 +503,24 @@ async function runScenario(offset, hybridStale = false) {
 
     await page.evaluate(() => window.__BILI_FIXTURE__.play());
     await waitStatus(value => value.state === 'running', 'resume');
+    if (heldSpeed) {
+      const preparedInputs = () => scenario.requests.flatMap(request => request.input)
+        .filter(item => item.fixtureSourceId === rows[0].sourceId).length;
+      const sendsBeforeHold = preparedInputs();
+      const generationBefore = await page.evaluate(() => window.__PLANNED_LISTS__.at(-1)?.predictionEpoch);
+      await page.evaluate(() => window.__BILI_FIXTURE__.setRate(2));
+      await page.waitForFunction(() => window.__PLANNED_LISTS__.at(-1)?.playbackRate === 2);
+      await page.evaluate(() => window.__BILI_FIXTURE__.setRate(1));
+      await page.waitForFunction(() => window.__PLANNED_LISTS__.at(-1)?.playbackRate === 1);
+      const afterRelease = await pageStatus();
+      assert.equal(await page.evaluate(() => window.__PLANNED_LISTS__.at(-1)?.predictionEpoch), generationBefore,
+        'releasing the held speed cannot retire the prepared generation');
+      assert.ok(afterRelease.report?.ready >= 2, 'prepared translations survive restoring the original speed');
+      assert.equal(preparedInputs(), sendsBeforeHold, 'the held-speed round trip cannot resend prepared text');
+      scenario.heldSpeed = { rates: [1, 2, 1], readyAfterRelease: afterRelease.report.ready, sendsBeforeHold,
+        sendsAfterRelease: preparedInputs() };
+      scenario.checks.push('held-speed-release-preserves-prepared-without-resend');
+    }
     const beforeAdopt = await media();
     // Advance the synthetic media clock as playback, without a seek event.
     for (const time of [0.75, 1.5, 2.25, 3]) await page.evaluate(value => { window.__BILI_FIXTURE__.state.time = value; }, time);
@@ -564,6 +582,7 @@ try {
     if (!selectedScenario || selectedScenario === name) await runScenario(offset);
   }
   if (!selectedScenario || selectedScenario === 'hybrid-stale-capacity') await runScenario(0, true);
+  if (!selectedScenario || selectedScenario === 'held-speed') await runScenario(0, false, true);
   report.passed = report.scenarios.every(scenario => scenario.status === 'PASS');
   if (!report.passed) process.exitCode = 1;
 } finally {
